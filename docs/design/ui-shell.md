@@ -1,7 +1,7 @@
 # 界面外壳：布局与交互要点
 
 > 状态：设计稿 · 2026-10-22
-> 相关：[晶体学模块：数据模型与编辑语义](crystallography-model.md) · [3D 视口：技术选型与 GPUI 集成](viewport-rendering.md)
+> 相关：[晶体学模块：数据模型与编辑语义](crystallography-model.md) · [3D 视口：技术选型与 GPUI 集成](viewport-rendering.md) · [AI 集成](ai-integration.md)（助手面板与工具调用卡片）
 > 视觉稿：[Materials Workbench 界面设计](https://claude.ai/artifact/AuH4DPyrjWUtBToPnx6d5Z)（Claude Design 画布，私有，需要所有者分享后他人才能打开）
 > 规范依据：GPUI Kit Design Guides。本文只记录本产品的决定，通用规则以该规范为准。
 

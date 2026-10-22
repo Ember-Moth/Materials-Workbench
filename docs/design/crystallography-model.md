@@ -3,7 +3,7 @@
 > 状态：设计稿 · 2026-10-22
 > 范围：`mw-crystal`（模型、派生数据、编辑命令），以及它与 `mw-project`、`mw-crystal-render` 的边界。
 > 文中的类型定义只是结构示意，不是实现。
-> 相关：[3D 视口：技术选型与 GPUI 集成](viewport-rendering.md)（渲染器边界、拾取、标注绘制）
+> 相关：[3D 视口：技术选型与 GPUI 集成](viewport-rendering.md)（渲染器边界、拾取、标注绘制）· [AI 集成](ai-integration.md)（MCP 和内置助手调用 7.12 节的命令）
 
 ## 0. 范围
 
