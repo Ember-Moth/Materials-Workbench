@@ -26,6 +26,7 @@ materials-workbench/
 │   ├── mw-viewport/          3D 视口组件（GPUI + 渲染器）
 │   ├── mw-project/           项目：项目目录与左侧边栏
 │   ├── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
+│   ├── mw-automation/        能力注册表：GUI、脚本、MCP、助手共用的能力（纯 Rust，无界面）
 │   └── mw-llm/               内置助手的模型服务客户端（纯 Rust，无界面）
 └── docs/
     ├── architecture.md       本文
@@ -50,11 +51,12 @@ apps/workbench ─────────┬───────────�
                     mw-crystal          mw-crystal-render
 ```
 
-`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-automation`（能力注册表）只依赖 `mw-crystal`；`mw-project` 依赖它，只为重新导出 `StructureEntryId`，以后 MCP Server 和内置助手也从它取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
-| `mw-crystal` | 晶体结构的数据类型（晶胞、对称操作集、位点、容差）、原子展开与派生数据（含 `AtomRef` 和成键）、测量的几何、对称性分析（空间群识别、位点对称性、Wyckoff 位置、晶胞约束；符号表和对称性搜索来自 moyo，只在 `tables.rs` 里调用）、元素表，以及内置示例 | 否 |
+| `mw-crystal` | 晶体结构的数据类型（晶胞、对称操作集、位点、容差）、原子展开与派生数据（含 `AtomRef`、成键、化学式和近邻）、测量的几何、对称性分析（空间群识别、位点对称性、Wyckoff 位置、晶胞约束；符号表和对称性搜索来自 moyo，只在 `tables.rs` 里调用）、编辑命令与带撤销栈的文档（`CrystalDocument`）、元素表，以及内置示例 | 否 |
+| `mw-automation` | 能力注册表（[AI 集成设计稿](design/ai-integration.md)第 4 节）：每个能力有名称、英文说明、由 Rust 类型生成的输入输出 JSON Schema、副作用等级、可用性和处理函数；结构的查询与编辑、撤销与重做已注册。处理函数通过 `Host` 拿到文档，调用 `mw-crystal` 的领域命令 | 否 |
 | `mw-crystal-io` | 解析结构文件（CIF 1.1 子集），整理位点（吸附到特殊位置、合并混合占位、去掉重复行），产出结构和带源文件行号的导入诊断；诊断是数据，文字由界面翻译 | 否 |
 | `mw-crystal-render` | 离屏渲染球、键、线段和高亮圈并回读像素；按需渲染 ID 纹理回答"鼠标下是什么"；只依赖 wgpu | 否 |
 | `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧与拾取、悬停高亮、3D 坐标投影到屏幕 | 是 |

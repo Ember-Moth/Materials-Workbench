@@ -139,12 +139,13 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 | 层次 | 例子 | 位置 |
 |---|---|---|
-| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、530 个表列设定、空间群识别、位点对称性与坐标形式、晶胞约束、成键、测量、选区、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、530 个表列设定、空间群识别、位点对称性与坐标形式、晶胞约束、成键、测量、化学式、近邻、编辑命令（每条命令和它的逆命令精确往返）、撤销与重做、选区、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
 | 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号）、空间群号与 Wyckoff 位置、吸附与合并、P1 结构的对称性检测 | `crates/mw-crystal-io/tests/fixtures.rs` |
 | 语料统计 | COD 批量导入，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs` |
 | 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡），以及拾取结果 | `mw-crystal-render` |
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
+| 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部能力放进一个严格请求也合规（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导 | `crates/mw-automation/tests/capabilities.rs` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 驱动真实组件 | 尚未添加，加入第一批编辑功能时开始写 |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |

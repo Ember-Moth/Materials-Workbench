@@ -7,6 +7,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+mw-automation = { path = "crates/mw-automation" }
 mw-crystal = { path = "crates/mw-crystal" }
 mw-crystal-io = { path = "crates/mw-crystal-io" }
 mw-crystal-render = { path = "crates/mw-crystal-render" }

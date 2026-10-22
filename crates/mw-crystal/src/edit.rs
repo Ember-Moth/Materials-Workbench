@@ -151,6 +151,38 @@ pub enum EditWarning {
     },
 }
 
+impl EditWarning {
+    /// A stable identifier for programs and logs.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::OccupancySum { .. } => "occupancy_sum",
+            Self::ShortContact { .. } => "short_contact",
+        }
+    }
+}
+
+/// English, for programs, logs and AI callers.
+impl fmt::Display for EditWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OccupancySum { site, sum } => write!(
+                f,
+                "the occupancies of site {} add up to {sum:.4}, more than 1",
+                site.0
+            ),
+            Self::ShortContact {
+                site,
+                other,
+                distance,
+            } => write!(
+                f,
+                "an atom of site {} is {distance:.3} Å from an atom of site {}",
+                site.0, other.0
+            ),
+        }
+    }
+}
+
 /// A way forward from a refused edit (design §7.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

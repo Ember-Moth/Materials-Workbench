@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
+/// Capabilities name structures by this id, so it lives with them.
+pub use mw_automation::StructureEntryId;
 use mw_crystal::sample::SampleKey;
 use mw_crystal_io::ImportedBlock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct StructureEntryId(pub u32);
 
 /// Where a structure in a project came from.
 #[derive(Clone, Debug, PartialEq)]

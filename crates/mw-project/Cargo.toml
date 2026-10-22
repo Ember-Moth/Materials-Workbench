@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+mw-automation.workspace = true
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
 gpui-kit.workspace = true

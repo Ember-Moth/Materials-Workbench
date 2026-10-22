@@ -1,0 +1,15 @@
+[package]
+name = "mw-automation"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+mw-crystal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Only to check that every schema is in the strict subset tools use
+# (docs/design/ai-integration.md §6.2.6).
+mw-llm.workspace = true

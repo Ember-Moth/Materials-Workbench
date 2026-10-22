@@ -21,10 +21,12 @@ mod document;
 mod edit;
 pub mod element;
 mod expand;
+mod formula;
 mod id_map;
 mod lattice;
 mod linalg;
 mod measured;
+mod neighbors;
 pub mod sample;
 mod site;
 mod space_group;
@@ -46,9 +48,11 @@ pub use edit::{
 };
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
+pub use formula::Formula;
 pub use id_map::{AtomFate, IdMap, SiteFate};
 pub use lattice::{CellParams, Lattice};
 pub use measured::Measured;
+pub use neighbors::Neighbor;
 pub use site::{CoordinateForm, SiteSymmetry, SpecialPosition, special_position};
 pub use space_group::{
     DetectedSymmetry, Setting, SpaceGroupType, Wyckoff, detect_symmetry, it_number_of,
