@@ -1,0 +1,127 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。当前处于 v0.1，正按里程碑把模拟（mock）逐个换成真实功能。
+
+## 文档是设计的依据
+
+动手前先读对应的文档，设计需要改时先改设计稿：
+
+- `docs/architecture.md`：crate 划分、依赖方向、运行时结构；**第 9 节是模拟清单，第 10 节是 v0.1 里程碑 M1–M6 及状态**。
+- `docs/development.md`：命令、代码约定（图标、文字、命令、模拟）、测试分层、交付流程、提交规范。
+- `docs/roadmap.md`：各版本的功能、算法与验收标准。
+- `docs/design/`：
+  - `crystallography-model.md`：数据模型与编辑语义；
+  - `viewport-rendering.md`：视口技术选型与 GPUI 源码核查结论；
+  - `ui-shell.md`：界面布局与术语表；
+  - `ai-integration.md`：MCP、内置助手与模型服务层。
+
+文档用中文写，API 名、crate 名、文件名保留原文。实现与设计不一致时，要修订设计稿，不让两者分叉。
+
+## 常用命令
+
+```bash
+cargo run --bin materials-workbench          # 运行应用
+cargo test --workspace                       # 全部测试
+cargo test -p mw-crystal-io --test fixtures  # 单个集成测试文件
+cargo test -p mw-structure rutile_apical_bond_length   # 单个测试（按名称过滤）
+cargo clippy --workspace --all-targets
+cargo fmt --all
+```
+
+- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里。
+
+  ```bash
+  MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
+  ```
+
+  窗口被遮挡时系统会降低刷新，偶尔会截到旧画面，重跑一次即可。
+- **无窗口渲染一帧**：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000`
+- **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 40 秒后自动退出。
+- **COD 语料统计**：测试默认忽略，需要本地语料，不随仓库提交。
+
+  ```bash
+  MW_COD_DIR=~/cod/cif cargo test -p mw-crystal-io --release --test cod_corpus -- --ignored --nocapture
+  ```
+
+工具链：Rust 1.92 或更新（本仓库在 1.97 上开发），edition 2024；macOS 需要 Xcode。debug 构建里 GPUI 和 wgpu 以 `opt-level = 3` 编译（见根 `Cargo.toml`）。
+
+## 架构要点
+
+### crate 分层
+
+工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。依赖只能从上往下：
+
+- **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源。
+- **能力 crate（依赖 GPUI）**：
+  - `mw-project`：项目目录和左侧边栏；
+  - `mw-structure`：打开的结构，包括文档、视口浮层、右侧面板、对话框和命令。
+
+  两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
+- **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧和投影。它不知道晶体是什么。
+- **纯 Rust、不依赖 GPUI 的 crate**：
+  - `mw-crystal`：模型、对称操作、原子展开、派生数据、元素表、内置示例；
+  - `mw-crystal-io`：CIF 1.1 子集解析，产出带行号的诊断；
+  - `mw-crystal-render`：wgpu 离屏渲染器。
+
+  这些 crate 都要能在命令行和测试里单独使用。纯计算一律放在这一层并在这里写单元测试。
+- **按能力分 crate**：一个能力的模型、视图、命令和对话框放在一起，不按"视图 / 模型"分目录。只有一个使用者的东西不提前抽成共享 crate。
+
+### 晶体学模型
+
+- **真源**是不对称单元加对称操作：整数矩阵加有理平移，并做群封闭检查。
+- **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性。
+- 能力、选区和测量都引用稳定 ID（`StructureEntryId`、`SiteId`、`AtomRef`），不用列表下标。
+- 编辑分对称模式和 P1 模式，都是可序列化的命令，进入同一个撤销栈。这一部分从 M4 开始实现。
+
+### 视口
+
+- 视口在 wgpu 里离屏渲染（impostor 球体，正交投影，MSAA 4×），回读后用 `Window::paint_image` 画进 GPUI。
+- stock GPUI 在任何平台上都没有零拷贝的表面，理由见 `viewport-rendering.md` 第 3 节。
+- `mw-structure` 决定画什么和叠什么：原子颜色与半径在 `src/scene.rs`，测量标注等浮层的位置用 `Viewport::project` 计算。
+
+### 命令与快捷键
+
+- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。
+- 按键上下文有两个：`Workbench`（外壳）和 `StructureWorkspace`（只在结构工作区内有效的快捷键）。
+- 处理器写在拥有该命令的视图上。按钮、快捷键和命令面板都派发同一个动作。
+- 结构相关的命令加进 `mw_structure::palette_commands()`，外壳命令加进 `apps/workbench/src/palette.rs`；关键词写英文名和拼音。
+- 命令面板确认后，先关闭面板，把焦点还给原来的位置，再用 `window.defer` 派发动作。
+
+### 打开文件
+
+- 对话框、⌘O 和拖放都走 `OpenFile`。
+- 在后台任务里用 `mw_structure::import::OpenedFile::read` 读取文件，再交给 `mw_crystal_io::cif::read` 解析。
+- 成功的数据块加入"导入的文件"项目（`ProjectCatalog::add_imported`）。
+- 诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字由 `mw-structure/src/diagnostics.rs` 按当前语言翻译。
+
+## 必须遵守的约定
+
+- **不要凭印象写 GPUI 或 GPUI Kit 的 API。** 先到 `~/.cargo/registry/src/*/` 下的 `gpui-pre-*`、`gpui-component-*`、`gpui-base-*`、`wgpu-*` 里查真实签名，版本以 `Cargo.lock` 为准（GPUI Kit 0.8.0、`gpui-pre` 0.3.9、wgpu 29）。
+  - 代码里统一用 `use gpui_kit::*`，组件从 `gpui_kit::component` 取；
+  - 写界面前先加载 `gpui-kit` 和 `gpui-kit-design-guides` 两个技能。
+- **文字**：
+  - 每个有界面的 crate 都有自己的 `locales/ui.yml`，同时写 `zh-CN`（默认）和 `en`（回退）；代码里用 `tr!`；
+  - 完整的句子放在一个键里，参数用 `%{name}`，不拼接翻译片段；
+  - 领域 crate 不放界面文字。
+- **图标**：
+  - 组件的 `IconName` 只是 Lucide 的子集；
+  - 需要子集之外的图标时，用 `gpui_kit::assets::IconName as Lucide` 并包成 `Icon::new(...)`；
+  - 同时必须把它登记进 `apps/workbench/src/assets.rs` 的列表，否则运行时找不到资源，图标显示为空白。
+- **样式**：
+  - 颜色只用 `cx.theme()` 的语义色，唯一例外是元素颜色等数据颜色（`mw-structure/src/scene.rs`）；
+  - 尺寸用 rem 辅助函数；写像素值时必须加注释说明原因。
+- **模拟**：
+  - 模拟代码用 `Mock:` 开头的注释标出，`rg "Mock:"` 可以列出全部；
+  - 用户能触发的未实现操作要调用 `not_implemented` 给出提示；
+  - 替换掉模拟后，同步更新 `docs/architecture.md` 第 9 节的模拟表和第 10 节的里程碑状态。
+- **`screenshot` feature** 直接开启 `gpui-pre` 和 `gpui-pre-macos` 的 `test-support`。不要改成 GPUI Kit 自己的 `test-support`：它会引入一个依赖冲突的 GPUI 后端。
+- **测试数据**放在使用它的 crate 的 `tests/fixtures/` 里，每个文件开头写明内容和来源；取自数据库的文件要注明条目号和许可。
+
+## 交付与提交
+
+- **交付顺序**：读设计稿 → 在不依赖界面的 crate 里实现并写测试 → 接到界面上、删掉模拟 → 更新文档 → 运行 `cargo fmt --all`、clippy、`cargo test --workspace` 和截图巡览。
+- **提交信息**用 Conventional Commits（`feat:`、`fix:`、`docs:`、`refactor:`、`test:`、`chore:`）。标题和正文都用英文，标题用祈使语气；文档跟随它描述的代码一起提交。
+- **只在用户要求时提交，不要推送。** 仓库里经常有多个会话并行，各自在主检出或 worktree 里工作：提交时只暂存自己改的文件，不要带上别的会话未提交的改动。
+- 用户用中文交流。
