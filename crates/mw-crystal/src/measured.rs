@@ -1,6 +1,6 @@
 /// A measured value with its optional standard uncertainty, as CIF writes
 /// `3.905(2)`. A value typed by the user has no uncertainty.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Measured {
     value: f64,
     su: Option<f64>,

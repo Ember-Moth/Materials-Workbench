@@ -6,15 +6,22 @@
 //! atom of the crystal named by an [`AtomRef`], and analyzes its symmetry:
 //! the space group type, cell constraints, and each site's site symmetry,
 //! coordinate constraints and Wyckoff position ([`SymmetryAnalysis`]). The
-//! space group tables and the symmetry search come from moyo. Editing
-//! commands come later.
+//! space group tables and the symmetry search come from moyo.
+//!
+//! Editing (design §7): an [`Edit`] is a serializable command on whole
+//! sites with an exact inverse; [`target_sites`] refuses edits of single
+//! atoms that would break the symmetry. A [`CrystalDocument`] keeps a
+//! structure with its derived data, measurements and undo history.
 
 mod atom_ref;
 mod bonds;
 mod constraints;
 mod derived;
+mod document;
+mod edit;
 pub mod element;
 mod expand;
+mod id_map;
 mod lattice;
 mod linalg;
 mod measured;
@@ -32,8 +39,14 @@ pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
     DETECTION_LIMIT, Derived, DisplayAtom, SymmetryAnalysis,
 };
+pub use document::{Annotation, Command, CrystalDocument, Outcome};
+pub use edit::{
+    Applied, CellValues, Edit, EditError, EditWarning, Guidance, OCCUPANCY_TOLERANCE, Target,
+    target_sites,
+};
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
+pub use id_map::{AtomFate, IdMap, SiteFate};
 pub use lattice::{CellParams, Lattice};
 pub use measured::Measured;
 pub use site::{CoordinateForm, SiteSymmetry, SpecialPosition, special_position};

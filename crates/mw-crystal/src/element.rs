@@ -128,6 +128,11 @@ const ELEMENTS: [(&str, f64); 118] = [
 /// (`Q1`) in a CIF (design §4.5).
 pub const UNKNOWN_ELEMENT: &str = "X";
 
+/// Element symbols in order of atomic number.
+pub fn symbols() -> impl Iterator<Item = &'static str> {
+    ELEMENTS.iter().map(|(symbol, _)| *symbol)
+}
+
 /// Whether `symbol` is an element symbol, spelled with its usual case.
 pub fn is_element(symbol: &str) -> bool {
     atomic_number(symbol).is_some()

@@ -1,6 +1,8 @@
 //! References to single atoms of the crystal (design §5.1), and the
 //! measurements made between them.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{Derived, Lattice, SiteId};
 
 /// One atom of the infinite crystal: member `member` of a site's orbit,
@@ -9,7 +11,7 @@ use crate::{Derived, Lattice, SiteId};
 ///
 /// Member numbers stay valid as long as the operation set and the site's
 /// site symmetry do not change (design §5.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AtomRef {
     pub site: SiteId,
     pub member: u16,
@@ -45,7 +47,8 @@ impl Derived {
 }
 
 /// A distance or angle between atoms (design §6, document annotations).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Measurement {
     Distance([AtomRef; 2]),
     /// The angle at the middle atom.
@@ -54,6 +57,13 @@ pub enum Measurement {
 
 impl Measurement {
     pub fn atoms(&self) -> &[AtomRef] {
+        match self {
+            Self::Distance(atoms) => atoms,
+            Self::Angle(atoms) => atoms,
+        }
+    }
+
+    pub(crate) fn atoms_mut(&mut self) -> &mut [AtomRef] {
         match self {
             Self::Distance(atoms) => atoms,
             Self::Angle(atoms) => atoms,

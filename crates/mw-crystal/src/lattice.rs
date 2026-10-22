@@ -1,8 +1,10 @@
-use crate::Measured;
+use serde::{Deserialize, Serialize};
+
+use crate::{CellParam, Measured};
 
 /// Cell lengths in Å and angles in degrees, kept as entered or imported so
 /// that 90° stays exactly 90°.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CellParams {
     pub a: Measured,
     pub b: Measured,
@@ -22,6 +24,29 @@ impl CellParams {
             beta: beta.into(),
             gamma: gamma.into(),
         }
+    }
+
+    pub fn get(&self, param: CellParam) -> Measured {
+        match param {
+            CellParam::A => self.a,
+            CellParam::B => self.b,
+            CellParam::C => self.c,
+            CellParam::Alpha => self.alpha,
+            CellParam::Beta => self.beta,
+            CellParam::Gamma => self.gamma,
+        }
+    }
+
+    pub fn set(&mut self, param: CellParam, value: Measured) {
+        let field = match param {
+            CellParam::A => &mut self.a,
+            CellParam::B => &mut self.b,
+            CellParam::C => &mut self.c,
+            CellParam::Alpha => &mut self.alpha,
+            CellParam::Beta => &mut self.beta,
+            CellParam::Gamma => &mut self.gamma,
+        };
+        *field = value;
     }
 
     fn cosines(&self) -> (f64, f64, f64) {
@@ -120,6 +145,11 @@ impl Lattice {
 
     pub fn params(&self) -> &CellParams {
         &self.params
+    }
+
+    /// Replaces the cell parameters, keeping the orientation.
+    pub fn set_params(&mut self, params: CellParams) {
+        self.params = params;
     }
 
     /// Converts fractional coordinates to Cartesian Å.

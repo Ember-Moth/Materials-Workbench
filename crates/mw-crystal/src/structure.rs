@@ -1,12 +1,15 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{Lattice, Measured, Symmetry};
 
 /// Stable identity of a site within one structure; never reused and
 /// independent of the site's label.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SiteId(pub u32);
 
 /// A chemical species: element symbol plus optional oxidation state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Species {
     /// An element symbol, or [`crate::UNKNOWN_ELEMENT`] when the source names
@@ -33,7 +36,8 @@ impl Species {
 
 /// Atomic displacement parameters in Å² (design §4.5). Kept as imported; not
 /// edited in v0.x.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Adp {
     Isotropic(Measured),
     /// U11, U22, U33, U12, U13, U23.
@@ -41,7 +45,7 @@ pub enum Adp {
 }
 
 /// One species on a site. Mixed occupancy is several occupants on one site.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Occupant {
     /// Unique within the structure, as CIF `_atom_site_label`.
@@ -69,7 +73,7 @@ impl Occupant {
 
 /// Membership of a split site in a disorder model, as CIF
 /// `_atom_site_disorder_assembly` and `_atom_site_disorder_group`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Disorder {
     pub assembly: Option<String>,
@@ -84,7 +88,7 @@ impl Disorder {
 
 /// A position of the asymmetric unit, in fractional coordinates. The
 /// coordinates are stored as given, not wrapped into the cell (design §3).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Site {
     pub id: SiteId,

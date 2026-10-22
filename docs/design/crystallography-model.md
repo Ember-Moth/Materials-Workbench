@@ -1,6 +1,6 @@
 # 晶体学模块：数据模型与编辑语义
 
-> 状态：设计稿 · 2026-10-22
+> 状态：设计稿；M1–M3 已实现，M4（7.2、7.11、7.12 节的编辑命令与撤销）实现中 · 2026-10-22
 > 范围：`mw-crystal`（模型、派生数据、编辑命令），以及它与 `mw-project`、`mw-crystal-render` 的边界。
 > 文中的类型定义只是结构示意，不是实现。
 > 相关：[3D 视口：技术选型与 GPUI 集成](viewport-rendering.md)（渲染器边界、拾取、标注绘制）· [AI 集成](ai-integration.md)（MCP 和内置助手调用 7.12 节的命令）
@@ -34,7 +34,7 @@
 | 视图状态 | 显示范围、原子半径与配色、多面体、相机 | `mw-crystal-render` | 是 | 否 |
 | 会话状态 | 选区、拖拽预览、悬停 | UI | 否 | 否 |
 
-编辑命令的定义和 apply 逻辑放在 `mw-crystal`，可以脱离 GUI 做单元测试。撤销栈和历史面板放在 `mw-command`，与具体领域无关。
+编辑命令的定义和 apply 逻辑放在 `mw-crystal`，可以脱离 GUI 做单元测试。撤销栈目前也在 `mw-crystal`（`CrystalDocument`，见 7.12 节），它不依赖命令的具体内容；等 XRD 等第二种文档也需要撤销时，再抽成与领域无关的 `mw-command`。历史面板属于界面。
 
 ## 3. 约定
 
@@ -199,6 +199,8 @@ CrystalDocument
 └── annotations: Vec<Measurement>   // 距离、键角、二面角，引用 AtomRef
 ```
 
+**M4 的实现**（`mw-crystal/src/document.rs`）：`CrystalDocument` 持有结构（`Arc<Structure>`）、始终与之一致的派生数据、测量（`Annotation`，带"已失效"标记）、revision 和撤销历史。元数据、来源记录和成键规则的设置随 M5、M6 加入；会话里的文档名、所属项目和导入诊断仍由界面的 `StructureDocument` 持有。
+
 **CIF 往返策略。** 导入时把字段分成三类：
 
 | 类别 | 例子 | 结构被修改后 |
@@ -236,6 +238,15 @@ CrystalDocument
 | `ExpandToP1` | 展开为 P1 | — |
 | `Symmetrize(target)` | 按检测结果对称化 | 预览里显示最大位移 |
 | `MakeSupercell(M)` | **生成新文档**，结果为 P1 | M 为整数矩阵，det > 0 |
+
+**M4 的实现**（`mw-crystal/src/edit.rs`）：
+
+- `Edit` 是可序列化的枚举（serde，`{"command": "remove_site", "site": 2}` 这样的带标签 JSON），已实现 `SetCell`、`SetSpecies`、`SetOccupancy`、`AddOccupant`、`RemoveOccupant`、`RenameLabel`、`RemoveSite`，以及 P1 下的 `SetPosition`，和把几条编辑当作一步的 `Batch`。Occupant 用标签指明（结构内唯一）。
+- `Edit::apply` 在结构的副本上执行，返回新结构、逆命令、ID 映射（7.11 节）和警告；出错时什么都不改，`Batch` 里后面的命令出错也一样。
+- 逆命令要原样恢复被改掉的东西（s.u.、ADP、位置顺序），所以另有只作逆命令用的 `RestoreCell`、`RestoreOccupant`、`RestoreSite`：它们不做约束联动，按原样放回。逆命令的逆命令就是重做。
+- 命令只指向整个位点。请求指向单个原子时（视口里点选的原子、AI 调用），先由 `target_sites` 换算：位点的轨道只有一个原子（P1 下总是如此），或请求覆盖了全部等效原子时，等同于整个位点；否则在对称模式下拒绝（`EditError::BreaksSymmetry`），引导（`Guidance`）为"改全部 N 个"或"转为 P1"，界面和 AI 按它给出 7.1 节的选项。
+- 拒绝是带数据的错误 `EditError`：稳定的 `code()`、英文的 `Display`（给 AI 和日志），以及可选的引导；界面按变体自己翻译。
+- 对称模式下移动位点（7.4、7.5 节）仍属 v0.2：`SetPosition` 在对称模式下拒绝，引导是转为 P1。
 
 ### 7.3 修改晶胞参数
 
@@ -286,13 +297,13 @@ CrystalDocument
 
 ### 7.7 元素替换与占位
 
-- **`SetSpecies`** 作用于 Occupant，整个轨道一起替换。
-- **部分替换**（如 Fe → Fe₀.₉Ni₀.₁）：在同一个 Site 上 `AddOccupant`，再调整占位率。结构保持对称，表示的是无序的平均结构。
+- **`SetSpecies`** 作用于 Occupant，整个轨道一起替换。标签保持不变（例如 `Ti1` 换成 Zr 后仍叫 `Ti1`），需要时用 `RenameLabel` 改名；改元素不连带改名，与"不静默修改数据"一致。
+- **部分替换**（如 Fe → Fe₀.₉Ni₀.₁）：在同一个 Site 上 `AddOccupant`，再调整占位率。结构保持对称，表示的是无序的平均结构。没有给标签时，新 Occupant 的标签按 7.6 节的规则生成（`Ni1`、`Ni2`……）；位点的最后一个 Occupant 不能删除，引导是删除整个位点。
 - **有序替换**（只换其中某几个原子）：只能在 P1 下做，通常先建超胞。
 - **占位率校验**：
   - 每一项必须在 (0, 1] 之间。
   - 同一 Site 的占位率之和超过 1 + tol 时只警告、不报错，因为精修结果常常略超 1。
-  - 同一 disorder assembly 内相邻 split site 的占位率之和做同样的检查。
+  - 同一 disorder assembly 内相邻 split site 的占位率之和做同样的检查（M4 还没有做，只检查同一 Site）。
 
 ### 7.8 晶胞变换
 
@@ -332,12 +343,23 @@ CrystalDocument
 
 测量的引用失效时，标记为"已失效"并保留，不静默删除。
 
+**M4 的实现**：ID 映射是 `IdMap`，只记录被删除（`Removed`）和轨道大小变了（`Reshaped`）的位点；`IdMap::atom` 给出 `AtomFate`：不变、收缩为位点、或已删除。M4 的命令里，只有 `RemoveSite` 删除位点；改晶胞后，比较前后的轨道大小（位置容差以 Å 计，晶胞变化可能让等效原子合并或分开），变了的记为 `Reshaped`。界面的选区据此更新；文档里的测量引用到删除或收缩的原子时标为已失效。
+
 ### 7.12 撤销 / 重做
 
 - 命令是可序列化的数据。`apply` 返回四样东西：新结构、逆命令、ID 映射、诊断信息。
 - 批量命令（`ExpandToP1`、`Symmetrize`）的逆命令直接是"恢复快照 `Arc<Structure>`"。结构规模不大，快照比手写的精确逆操作更可靠。
 - 撤销覆盖结构、标注和成键规则；不覆盖相机、配色、可见性和显示范围。
 - 已提交的命令序列同时写入 `provenance.history`，可以导出成操作记录用于复现，以后也能用 Python 回放。
+
+**M4 的实现**（`CrystalDocument::execute` / `undo` / `redo`）：
+
+- 每条 `Command` 是一步：结构编辑（`Edit`），或添加、删除测量。新命令清空重做栈。
+- 结构编辑的一步保存"撤销用的命令"和"重做用的命令"，两者互为逆命令：撤销时执行前者，得到的逆命令替换后者，反之亦然，所以撤销和重做都精确还原，不重新校验。
+- 测量随每一步保存执行前后的列表（数据很小），撤销和重做直接换回，已失效的标记也随之恢复：删除位点再撤销，引用它的测量重新有效。
+- 结果与当前结构完全相同的命令（例如再次输入原值）不产生一步；被拒绝的命令什么都不改。
+- `history()` 给出已提交的命令，供来源记录（M6）使用；`undo_command()` / `redo_command()` 供界面显示"撤销 删除 O1"之类的说明。
+- 撤销栈不限长度。
 
 ## 8. 校验与诊断
 
@@ -352,6 +374,8 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 | Info | 程序替用户做过的修改 | 吸附到特殊位置（附最大位移）、合并共占的行、对重复原子去重、左手系晶格 |
 
 导入时产生的诊断带源文件行号，UI 可以直接跳到对应行。
+
+编辑（M4）不产生 Error 级诊断：违反硬约束的编辑直接被拒绝（`EditError`，见 7.2 节），结构不变。Warning 级的是 `EditWarning`：占位率之和 > 1 + 0.01、P1 下移动后原子过近，随这一步的结果返回，由界面提示。
 
 ## 9. 导入与导出
 
@@ -381,7 +405,7 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
   - 吸附到特殊位置、合并混合占位、冗余原子去重也要等 M2 的位点对称性。M1 只报告疑似情况：满占位位点的等效原子距离小于 `short_contact`、文件给出的多重度与展开结果不一致、两个位点位置重合。
 - 文件没有列出对称操作时，4.4 节的 Hall > H-M > IT 号回退需要符号表（M2）。M1 只认 P1，其余报错。
 - 第 4 步：有多个 data block 时，全部加入当前项目并打开第一个，由用户在边栏里选择，不另弹对话框；没有晶胞和原子位点的 block（如出版信息）跳过并给出 Info。
-- 诊断是 `mw-crystal-io` 的 `DiagnosticKind`，带稳定的 `code()` 供语料统计；文字由界面翻译。编辑命令产生诊断时（M4），再把这个类型移到 `mw-crystal`。
+- 诊断是 `mw-crystal-io` 的 `DiagnosticKind`，带稳定的 `code()` 供语料统计；文字由界面翻译。编辑命令（M4）用自己的 `EditError` 和 `EditWarning`（第 8 节），导入诊断没有移到 `mw-crystal`；两者需要放进同一个列表（例如项目文件里的诊断记录）时再合并。
 
 **M2 的实现范围**：
 

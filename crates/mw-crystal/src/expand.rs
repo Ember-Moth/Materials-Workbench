@@ -167,6 +167,37 @@ pub fn close_contacts(structure: &Structure, orbits: &[Orbit], max_distance: f64
     contacts
 }
 
+/// Other sites with an atom closer than `max_distance` Å to an atom of
+/// `site`, in site order.
+pub(crate) fn contacts_with(
+    structure: &Structure,
+    orbits: &[Orbit],
+    site: SiteId,
+    max_distance: f64,
+) -> Vec<Contact> {
+    let metric = Metric::new(structure);
+    let Some(own) = orbits.iter().find(|orbit| orbit.site == site) else {
+        return Vec::new();
+    };
+    orbits
+        .iter()
+        .filter(|other| other.site != site)
+        .filter_map(|other| {
+            // As in `close_contacts`, the other site's own position suffices.
+            let distance = own
+                .positions
+                .iter()
+                .map(|p| metric.distance(*p, other.positions[0]))
+                .fold(f64::INFINITY, f64::min);
+            (distance < max_distance).then_some(Contact {
+                a: site,
+                b: other.site,
+                distance,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
