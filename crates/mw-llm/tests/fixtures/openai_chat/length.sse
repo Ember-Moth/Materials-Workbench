@@ -1,0 +1,3 @@
+data: {"id":"chatcmpl-917","object":"chat.completion.chunk","created":1761100000,"model":"llama","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"role":"assistant","content":"The lattice"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-917","object":"chat.completion.chunk","created":1761100000,"model":"llama","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"length"}]}
