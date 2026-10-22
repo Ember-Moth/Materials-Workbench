@@ -8,7 +8,6 @@ use gpui_kit::component::{WindowExt, h_flex};
 use gpui_kit::*;
 use mw_crystal::EditMode;
 
-use crate::format;
 use crate::workspace::StructureWorkspace;
 
 /// Mock: tells the user a command exists but does nothing yet.
@@ -30,8 +29,8 @@ pub(crate) fn open_delete(workspace: &StructureWorkspace, window: &mut Window, c
         .derived
         .multiplicity(site.id)
         .unwrap_or(1);
-    let symbol: SharedString = match &structure.space_group.hm_symbol {
-        Some(symbol) => format::space_group(symbol).into(),
+    let symbol: SharedString = match workspace.document.space_group_symbol() {
+        Some(symbol) => symbol.into(),
         None => tr!(
             "dialog.delete_atom.operations",
             count = structure.symmetry.operations().len()

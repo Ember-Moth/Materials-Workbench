@@ -297,11 +297,8 @@ impl StructureWorkspace {
 
     pub(crate) fn mode_label(&self) -> SharedString {
         let structure = &self.document.structure;
-        match (structure.edit_mode(), &structure.space_group.hm_symbol) {
-            (EditMode::Symmetric, Some(symbol)) => tr!(
-                "header.mode.symmetric",
-                symbol = format::space_group(symbol)
-            ),
+        match (structure.edit_mode(), self.document.space_group_symbol()) {
+            (EditMode::Symmetric, Some(symbol)) => tr!("header.mode.symmetric", symbol = symbol),
             (EditMode::Symmetric, None) => tr!("header.mode.symmetric_unnamed"),
             (EditMode::P1, _) => tr!("header.mode.p1"),
         }

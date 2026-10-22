@@ -49,13 +49,38 @@ cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000
 VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 ```
 
-界面截图巡览：依次切换主界面、位点面板、在视口里点选原子（先拖动旋转，再单击、⇧ 单击、悬停，用的是真实的鼠标事件和拾取）、测量距离和键角、命令面板、删除对话框、深色模式、英文界面、其他示例结构，再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
+界面截图巡览：依次切换主界面、位点面板、在视口里点选原子（先拖动旋转，再单击、⇧ 单击、悬停，用的是真实的鼠标事件和拾取）、测量距离和键角、命令面板、删除对话框、深色模式、英文界面、其他示例结构，再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、吸附到特殊位置的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
 
 ```bash
 MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
 ```
 
 运行期间让窗口保持在前台：窗口被遮挡时系统会降低刷新，可能截到还没重绘完的画面（偶尔会看到旧的边栏或空白视口），重跑一次即可。
+
+内置助手的模型服务客户端（`mw-llm`）可以单独试：示例程序发一轮对话，把流式事件打印出来，文本到标准输出，推理摘要、工具调用的校验结果和用量到标准错误。它会向模型服务发真实请求并按用量计费（本地模型除外）。配置全部来自环境变量，密钥不要写进命令行参数，也不会出现在日志里：
+
+| 变量 | 含义 |
+|---|---|
+| `MW_LLM_PROVIDER` | 厂商档案的 id：`anthropic`（默认）、`openai`（Responses）、`openai-chat`、`deepseek`、`dashscope`、`moonshot`、`zhipu`、`siliconflow`、`openrouter`、`ollama`、`vllm`、`lm-studio`、`azure-openai`；自定义端点写 `custom:openai_chat`、`custom:openai_responses` 或 `custom:anthropic`，按最保守的能力处理 |
+| `MW_LLM_BASE_URL` | 覆盖档案里的 base URL；自定义端点和 Azure 必填 |
+| `MW_LLM_MODEL` | 模型名；`anthropic` 默认 `claude-opus-5-5`，其他必填 |
+| `MW_LLM_API_KEY` | 密钥；本地模型不用设 |
+| `MW_LLM_EFFORT` | `low`、`medium`、`high`、`xhigh`、`max` |
+| `MW_LLM_TOOLS` | 设为 `1` 时提供一个演示工具，用来看工具调用的流式参数和本地校验 |
+
+在当前 shell 里设好 `MW_LLM_API_KEY` 后，问 Claude 一个问题（参数是提问内容）：
+
+```bash
+cargo run -p mw-llm --example chat -- "什么是 Wyckoff 位置？"
+```
+
+用本机的 Ollama 试 Chat Completions 后端，不花钱（模型名换成本机已拉取的模型）：
+
+```bash
+MW_LLM_PROVIDER=ollama MW_LLM_MODEL=qwen3 MW_LLM_TOOLS=1 cargo run -p mw-llm --example chat
+```
+
+加上 `RUST_LOG=mw_llm=debug` 可以看到请求地址和重试；日志里没有请求内容和密钥。
 
 debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
 
@@ -114,10 +139,12 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 | 层次 | 例子 | 位置 |
 |---|---|---|
-| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、成键、测量、选区、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
-| 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号） | `crates/mw-crystal-io/tests/fixtures.rs` |
+| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、530 个表列设定、空间群识别、位点对称性与坐标形式、晶胞约束、成键、测量、选区、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号）、空间群号与 Wyckoff 位置、吸附与合并、P1 结构的对称性检测 | `crates/mw-crystal-io/tests/fixtures.rs` |
 | 语料统计 | COD 批量导入，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs` |
 | 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡），以及拾取结果 | `mw-crystal-render` |
+| 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
+| 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 驱动真实组件 | 尚未添加，加入第一批编辑功能时开始写 |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |
@@ -129,6 +156,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 - 测试用的结构文件放在使用它的 crate 的 `tests/fixtures/` 里，每个文件开头注释写明内容和来源；目录里的 `README.md` 列出所有文件的来源。
 - 优先手写小文件。取自 COD 等数据库的文件，先核实许可，并在文件开头注明条目号和许可。
 - 完整的数据库语料不提交，用环境变量指向本地目录。
+- 模型服务的测试不发真实请求：真实 API 需要密钥，而且收费。流式数据按官方文档手写，来源记在 `crates/mw-llm/tests/fixtures/README.md`；要对真实服务验证，用上面第 2 节的示例程序手动跑。
 
 ## 5. 交付一个功能
 

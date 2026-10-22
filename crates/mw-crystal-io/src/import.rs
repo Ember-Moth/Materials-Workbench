@@ -6,20 +6,23 @@
 //! error and the block yields no structure; everything the importer decides
 //! on the user's behalf is reported.
 //!
-//! Mock: design §9.1 also normalizes — snaps atoms onto special positions
-//! and merges rows into mixed occupancy — which needs site symmetry (M2);
-//! until then `check_geometry` only reports the likely cases. Unrecognized
-//! fields are not kept for export yet (M5).
+//! A structure is then normalized (see `normalize`): atoms snap onto
+//! special positions, rows at one position merge into mixed occupancy.
+//! Finally the space group type is identified from the operations and
+//! checked against the name the file gives and against the cell.
+//!
+//! Mock: unrecognized fields are not kept for export yet (M5).
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 
 use mw_crystal::{
-    Adp, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId, SpaceGroup, Species,
-    Structure, SymOp, Symmetry, SymmetryError, UNKNOWN_ELEMENT, element,
+    Adp, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId, SpaceGroup,
+    SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, UNKNOWN_ELEMENT, element,
 };
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, Severity};
+use crate::normalize::{self, OCCUPANCY_TOLERANCE};
 use crate::number;
 use crate::syntax::{Block, Item, Value};
 
@@ -32,6 +35,7 @@ const HM_TAGS: [&str; 2] = [
     "_symmetry_space_group_name_h-m",
 ];
 const IT_NUMBER_TAGS: [&str; 2] = ["_space_group_it_number", "_symmetry_int_tables_number"];
+const HALL_TAGS: [&str; 2] = ["_space_group_name_hall", "_symmetry_space_group_name_hall"];
 const LENGTH_TAGS: [&str; 3] = ["_cell_length_a", "_cell_length_b", "_cell_length_c"];
 const ANGLE_TAGS: [&str; 3] = ["_cell_angle_alpha", "_cell_angle_beta", "_cell_angle_gamma"];
 const ADP_U_TAGS: [&str; 6] = [
@@ -51,9 +55,9 @@ const ADP_B_TAGS: [&str; 6] = [
     "_atom_site_aniso_b_23",
 ];
 
-/// How far an occupancy may exceed 1 before it is reported; refinements
-/// often end slightly above.
-const OCCUPANCY_TOLERANCE: f64 = 0.01;
+/// Differences between the cell and the nearest cell the operations
+/// preserve below this (Å or degrees) are rounding, not inconsistency.
+const CELL_DEVIATION: f64 = 1e-6;
 
 /// U = B / 8π².
 fn b_to_u(b: Measured) -> Measured {
@@ -219,7 +223,7 @@ pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
     }
 
     let lattice = read_cell(&fields, block.line, &mut diagnostics);
-    let space_group = read_space_group(&fields, &mut diagnostics);
+    let (space_group, name_line) = read_space_group(&fields, &mut diagnostics);
     let symmetry = read_symmetry(&fields, &space_group, block.line, &mut diagnostics);
     let sites = read_sites(&fields, block.line, &mut diagnostics);
 
@@ -227,9 +231,18 @@ pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
         (Some(lattice), Some(symmetry), Some(sites))
             if !diagnostics.iter().any(|d| d.severity() == Severity::Error) =>
         {
-            let structure =
+            let mut structure =
                 Structure::new(lattice, symmetry, sites.sites).with_space_group(space_group);
+            let lines: HashMap<SiteId, u32> = sites
+                .rows
+                .iter()
+                .map(|(id, (line, _))| (*id, *line))
+                .collect();
+            normalize::snap_sites(&mut structure, &lines, &mut diagnostics);
+            normalize::merge_sites(&mut structure, &lines, &mut diagnostics);
             check_geometry(&structure, &sites.rows, &mut diagnostics);
+            let cell_line = fields.value(LENGTH_TAGS[0]).map(|v| v.line);
+            check_symmetry(&structure, name_line, cell_line, &mut diagnostics);
             Some(structure)
         }
         _ => None,
@@ -298,41 +311,60 @@ fn read_cell(
     Some(Lattice::new(params))
 }
 
-fn read_space_group(fields: &Fields, diagnostics: &mut Vec<Diagnostic>) -> SpaceGroup {
-    let hm_symbol = fields
+/// The space group as the file names it, and the line of the name.
+fn read_space_group(
+    fields: &Fields,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (SpaceGroup, Option<u32>) {
+    let hm_value = fields
         .alias(&HM_TAGS, diagnostics)
         .and_then(|tag| fields.value(tag))
-        .filter(|v| !v.is_missing())
-        .map(|v| v.text.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let it_number = fields
+        .filter(|v| !v.is_missing() && !v.text.trim().is_empty());
+    let hm_symbol = hm_value.map(|v| v.text.trim().to_string());
+    let it_value = fields
         .alias(&IT_NUMBER_TAGS, diagnostics)
         .and_then(|tag| fields.value(tag))
-        .filter(|v| !v.is_missing())
-        .and_then(|v| match v.text.parse::<u16>() {
-            Ok(n) if (1..=230).contains(&n) => Some(n),
-            _ => {
-                diagnostics.push(Diagnostic::at(
-                    DiagnosticKind::InvalidItNumber {
-                        text: v.text.clone(),
-                    },
-                    v.line,
-                ));
-                None
-            }
-        });
-    SpaceGroup::new(hm_symbol, it_number)
+        .filter(|v| !v.is_missing());
+    let line = hm_value.or(it_value).map(|v| v.line);
+    let it_number = it_value.and_then(|v| match v.text.parse::<u16>() {
+        Ok(n) if (1..=230).contains(&n) => Some(n),
+        _ => {
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::InvalidItNumber {
+                    text: v.text.clone(),
+                },
+                v.line,
+            ));
+            None
+        }
+    });
+    (SpaceGroup::new(hm_symbol, it_number), line)
 }
 
-fn is_p1(space_group: &SpaceGroup) -> bool {
-    space_group.it_number == Some(1)
-        || space_group.hm_symbol.as_deref().is_some_and(|symbol| {
-            symbol
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect::<String>()
-                .eq_ignore_ascii_case("P1")
-        })
+/// Operations from the space group name when the file lists none, in the
+/// order of design §4.4: Hall symbol, Hermann–Mauguin symbol, IT number.
+fn symmetry_from_name(
+    fields: &Fields,
+    space_group: &SpaceGroup,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<(Symmetry, String)> {
+    let hall = fields
+        .alias(&HALL_TAGS, diagnostics)
+        .and_then(|tag| fields.value(tag))
+        .filter(|v| !v.is_missing())
+        .map(|v| v.text.trim().to_string());
+    if let Some(hall) = hall
+        && let Some(symmetry) = Symmetry::from_hall_symbol(&hall)
+    {
+        return Some((symmetry, hall));
+    }
+    if let Some(symbol) = &space_group.hm_symbol
+        && let Some(symmetry) = Symmetry::from_hm_symbol(symbol)
+    {
+        return Some((symmetry, symbol.clone()));
+    }
+    let number = space_group.it_number?;
+    Some((Symmetry::from_it_number(number)?, number.to_string()))
 }
 
 fn read_symmetry(
@@ -342,10 +374,15 @@ fn read_symmetry(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Symmetry> {
     let Some(tag) = fields.alias(&SYMOP_TAGS, diagnostics) else {
-        // Mock: design §4.4 falls back to the Hall symbol, the H-M symbol
-        // and the IT number, which needs their tables (M2). Only P1 is known.
-        if is_p1(space_group) {
-            return Some(Symmetry::p1());
+        if let Some((symmetry, name)) = symmetry_from_name(fields, space_group, diagnostics) {
+            // P1 needs no operations, so naming it is no fallback.
+            if !symmetry.is_p1() {
+                diagnostics.push(Diagnostic::at(
+                    DiagnosticKind::SymopsFromName { name },
+                    block_line,
+                ));
+            }
+            return Some(symmetry);
         }
         let name = space_group
             .hm_symbol
@@ -750,9 +787,10 @@ fn read_sites(
     valid.then_some(SiteRows { sites, rows })
 }
 
-/// Reports what the expansion reveals: atoms that likely belong on a
-/// special position, multiplicities that disagree with the file, and sites
-/// that overlap or come too close.
+/// Reports what the expansion of the normalized structure reveals: atoms
+/// that likely belong on a special position but are too far from it to
+/// snap, multiplicities that disagree with the file, and sites that come
+/// too close. Sites at one position were dealt with by `merge_sites`.
 fn check_geometry(
     structure: &Structure,
     rows: &HashMap<SiteId, (u32, Option<u32>)>,
@@ -808,24 +846,61 @@ fn check_geometry(
     }
 
     for contact in mw_crystal::close_contacts(structure, &orbits, tolerances.short_contact) {
-        let both_full = is_full(contact.a) && is_full(contact.b);
-        let (a, b) = (label(contact.a), label(contact.b));
-        let kind = if contact.distance < tolerances.position {
-            if both_full {
-                DiagnosticKind::OverlappingSites { a, b }
-            } else {
-                DiagnosticKind::SharedPosition { a, b }
-            }
-        } else if both_full {
-            DiagnosticKind::ShortContact {
-                a,
-                b,
-                distance: contact.distance,
-            }
-        } else {
+        if contact.distance < tolerances.position || !(is_full(contact.a) && is_full(contact.b)) {
             continue;
-        };
-        diagnostics.push(Diagnostic::new(kind, line(contact.b)));
+        }
+        diagnostics.push(Diagnostic::new(
+            DiagnosticKind::ShortContact {
+                a: label(contact.a),
+                b: label(contact.b),
+                distance: contact.distance,
+            },
+            line(contact.b),
+        ));
+    }
+}
+
+/// Identifies the space group type of the operations and reports a name in
+/// the file that disagrees with it (the operations win, design §4.4) and
+/// cell parameters the operations do not preserve (design §7.3).
+fn check_symmetry(
+    structure: &Structure,
+    name_line: Option<u32>,
+    cell_line: Option<u32>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let params = structure.lattice.params();
+    let (length, angle) = mw_crystal::cell_deviation(&structure.symmetry, params);
+    if length > CELL_DEVIATION || angle > CELL_DEVIATION {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticKind::CellInconsistent { length, angle },
+            cell_line,
+        ));
+    }
+    let Some(identified) = SpaceGroupType::identify(&structure.symmetry, params) else {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticKind::UnidentifiedSpaceGroup,
+            name_line,
+        ));
+        return;
+    };
+    let named = &structure.space_group;
+    let named_number = named.it_number.or_else(|| {
+        named
+            .hm_symbol
+            .as_deref()
+            .and_then(mw_crystal::it_number_of)
+    });
+    if named_number.is_some_and(|n| n != identified.number) {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticKind::SpaceGroupMismatch {
+                file_symbol: named.hm_symbol.clone(),
+                file_number: named.it_number,
+                number: identified.number,
+                symbol: identified.hm_symbol.to_string(),
+            },
+            name_line,
+        ));
     }
 }
 
@@ -862,6 +937,108 @@ mod tests {
         assert_eq!(from("ZN1").as_deref(), Some("Zn"));
         assert_eq!(from("O1A").as_deref(), Some("O"));
         assert_eq!(from("Q1"), None);
+    }
+
+    /// A block with the given space group lines, cell and atom rows
+    /// (label, symbol, x, y, z, occupancy and optional disorder group).
+    fn block(header: &str, cell: [f64; 6], atoms: &[&str]) -> (Option<Structure>, Vec<String>) {
+        let mut text = format!("data_test\n{header}\n");
+        for (tag, value) in [
+            "_cell_length_a",
+            "_cell_length_b",
+            "_cell_length_c",
+            "_cell_angle_alpha",
+            "_cell_angle_beta",
+            "_cell_angle_gamma",
+        ]
+        .iter()
+        .zip(cell)
+        {
+            text.push_str(&format!("{tag} {value}\n"));
+        }
+        text.push_str(
+            "loop_\n_atom_site_label\n_atom_site_type_symbol\n_atom_site_fract_x\n\
+             _atom_site_fract_y\n_atom_site_fract_z\n_atom_site_occupancy\n\
+             _atom_site_disorder_group\n",
+        );
+        for atom in atoms {
+            text.push_str(atom);
+            text.push('\n');
+        }
+        let report = crate::cif::read_str(&text);
+        let block = &report.blocks[0];
+        let codes = block
+            .diagnostics
+            .iter()
+            .map(|d| d.code().to_string())
+            .collect();
+        (block.structure.clone(), codes)
+    }
+
+    const CUBIC: [f64; 6] = [4.0, 4.0, 4.0, 90.0, 90.0, 90.0];
+
+    #[test]
+    fn operations_from_the_space_group_number() {
+        let (structure, codes) = block("_space_group_IT_number 221", CUBIC, &["Sr1 Sr 0 0 0 1 ."]);
+        assert_eq!(codes, ["symmetry.operations_from_name"]);
+        assert_eq!(structure.unwrap().symmetry.operations().len(), 48);
+    }
+
+    #[test]
+    fn unknown_names_without_operations_fail() {
+        let (structure, codes) = block(
+            "_space_group_name_H-M_alt 'Q 9'",
+            CUBIC,
+            &["Sr1 Sr 0 0 0 1 ."],
+        );
+        assert!(structure.is_none());
+        assert_eq!(codes, ["symmetry.missing_operations"]);
+    }
+
+    #[test]
+    fn a_name_that_contradicts_the_operations_is_reported() {
+        let header =
+            "_space_group_name_H-M_alt 'P 4/m m m'\n_space_group_symop_operation_xyz 'x,y,z'";
+        let (structure, codes) = block(header, CUBIC, &["Sr1 Sr 0 0 0 1 ."]);
+        assert!(structure.is_some());
+        assert_eq!(codes, ["symmetry.name_mismatch"]);
+    }
+
+    #[test]
+    fn a_cell_the_operations_do_not_preserve_is_reported() {
+        let cell = [3.905, 3.9051, 3.905, 90.0, 90.0, 90.0];
+        let (_, codes) = block("_space_group_IT_number 221", cell, &["Sr1 Sr 0 0 0 1 ."]);
+        // Sorted by line: the block header comes first.
+        assert_eq!(
+            codes,
+            [
+                "symmetry.operations_from_name",
+                "cell.inconsistent_with_symmetry"
+            ]
+        );
+    }
+
+    #[test]
+    fn rows_at_one_position() {
+        let header = "_space_group_IT_number 221";
+        // Different species, both full: a conflict, kept.
+        let (structure, codes) = block(header, CUBIC, &["Sr1 Sr 0 0 0 1 .", "Ba1 Ba 0 0 0 1 ."]);
+        assert_eq!(structure.unwrap().sites.len(), 2);
+        assert_eq!(codes[1], "atom.overlapping_sites");
+        // Alternative positions in different disorder groups: kept apart.
+        let (structure, codes) =
+            block(header, CUBIC, &["Sr1 Sr 0 0 0 0.5 1", "Ba1 Ba 0 0 0 0.5 2"]);
+        assert_eq!(structure.unwrap().sites.len(), 2);
+        assert_eq!(codes[1], "atom.shared_position");
+        // Merged, but the occupancies add up to 1.4: reported on Sr1's row,
+        // the merge on Ba1's.
+        let (structure, codes) =
+            block(header, CUBIC, &["Sr1 Sr 0 0 0 0.7 .", "Ba1 Ba 0 0 0 0.7 ."]);
+        assert_eq!(structure.unwrap().sites.len(), 1);
+        assert_eq!(
+            codes[1..],
+            ["atom.occupancy_sum_above_one", "atom.merged_occupancy"]
+        );
     }
 
     #[test]

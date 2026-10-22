@@ -86,12 +86,9 @@ panel:
     volume:
       en: "Volume %{volume} Å³ · density unknown, an element has no atomic weight"
       zh-CN: "体积 %{volume} Å³ · 有元素没有原子量，无法计算密度"
-    system_not_computed:
-      en: Crystal system not computed yet
-      zh-CN: 晶系尚未计算
-    constraints_not_computed:
-      en: Which parameters symmetry links or fixes is not computed yet, so all are shown as free.
-      zh-CN: 对称性对晶胞参数的约束尚未计算，所有字段暂按自由参数显示。
+    system_unknown:
+      en: Crystal system unknown
+      zh-CN: 晶系未知
   symmetry:
     title:
       en: Symmetry
@@ -105,18 +102,33 @@ panel:
     space_group_number:
       en: "No. %{number}"
       zh-CN: "%{number} 号"
-    space_group_unnamed:
-      en: Not named in the file
-      zh-CN: 文件未给出
+    space_group_unknown:
+      en: Not identified
+      zh-CN: 无法识别
+    setting:
+      en: Setting
+      zh-CN: 设定
+    setting_value:
+      en: "%{symbol} (%{code})"
+      zh-CN: "%{symbol}（%{code}）"
+    setting_transformed:
+      en: Not tabulated
+      zh-CN: 非表列设定
+    transformed_hint:
+      en: The operations use a cell or origin the International Tables do not list. Wyckoff positions refer to the standard setting.
+      zh-CN: 对称操作所用的晶胞或原点不在《国际晶体学表》所列的设定中，Wyckoff 位置按标准设定给出。
+    detected:
+      en: Atom symmetry
+      zh-CN: 原子对称性
+    detected_hint:
+      en: The atoms have higher symmetry than P1. Symmetrize to edit in symmetry mode.
+      zh-CN: 原子排布的对称性高于 P1，对称化后可以在对称模式下编辑。
     operations:
       en: Operations
       zh-CN: 对称操作
     operation_count:
       en: "%{count}"
       zh-CN: "%{count} 个"
-    name_from_file:
-      en: The space group name is taken from the file and not yet checked against the operations.
-      zh-CN: 空间群名称取自文件，尚未与对称操作核对。
     mode:
       en: Editing
       zh-CN: 编辑模式
@@ -129,9 +141,9 @@ panel:
     convert_to_p1:
       en: Convert to P1…
       zh-CN: 转为 P1…
-    detect:
-      en: Detect symmetry…
-      zh-CN: 检测对称性…
+    symmetrize:
+      en: Symmetrize…
+      zh-CN: 对称化…
   site:
     none:
       en: Select a site in the 3D view or the Sites tab.
@@ -143,11 +155,11 @@ panel:
       en: "%{count} atoms per cell"
       zh-CN: "晶胞内 %{count} 个原子"
     wyckoff:
-      en: "Wyckoff %{wyckoff} · coordinates %{form}"
-      zh-CN: "Wyckoff %{wyckoff} · 坐标形式 %{form}"
-    wyckoff_not_computed:
-      en: Wyckoff position and coordinate constraints not computed yet
-      zh-CN: Wyckoff 位置和坐标约束尚未计算
+      en: "Wyckoff %{wyckoff} · site symmetry %{symmetry} · %{form}"
+      zh-CN: "Wyckoff %{wyckoff} · 位点对称性 %{symmetry} · %{form}"
+    form:
+      en: "Coordinates %{form}"
+      zh-CN: "坐标形式 %{form}"
     element:
       en: Element
       zh-CN: 元素
@@ -309,9 +321,9 @@ feature:
   export:
     en: Export
     zh-CN: 导出
-  detect_symmetry:
-    en: Symmetry detection
-    zh-CN: 对称性检测
+  symmetrize:
+    en: Symmetrizing
+    zh-CN: 对称化
   change_element:
     en: Changing the element
     zh-CN: 更换元素
@@ -336,8 +348,8 @@ mock:
     zh-CN: "「%{feature}」尚未实现。"
   diagnostic:
     supercell:
-      en: This supercell is in P1. Symmetry detection is not implemented yet, so editing applies to single atoms.
-      zh-CN: 这个超胞处于 P1 模式。对称性检测尚未实现，编辑只作用于单个原子。
+      en: This supercell was made from rutile and is in P1, so editing applies to single atoms.
+      zh-CN: 这个超胞由金红石生成，处于 P1 模式，编辑只作用于单个原子。
 diagnostic:
   line:
     en: "Line %{line}"
@@ -406,6 +418,9 @@ diagnostic:
     invalid:
       en: The cell parameters form no cell; lengths must be positive and the angles must close a parallelepiped.
       zh-CN: 晶胞参数无法构成晶胞：边长须为正数，三个夹角须能围成平行六面体。
+    inconsistent:
+      en: "The cell parameters do not match the symmetry: lengths differ by up to %{length} Å and angles by up to %{angle}° from a cell the operations keep."
+      zh-CN: "晶胞参数与对称性不一致：与对称操作所要求的晶胞相比，边长最多相差 %{length} Å，夹角最多相差 %{angle}°。"
   symmetry:
     invalid_operation:
       component_count:
@@ -433,8 +448,17 @@ diagnostic:
       en: "The symmetry operations do not form a group: the product of %{a} and %{b} is not listed."
       zh-CN: "对称操作不构成群：%{a} 与 %{b} 的乘积不在列表中。"
     missing_operations:
-      en: "The file lists no symmetry operations. Generating them from the space group %{name} is not implemented yet."
-      zh-CN: "文件没有列出对称操作。由空间群 %{name} 生成对称操作尚未实现。"
+      en: "The file lists no symmetry operations, and the space group %{name} is not recognized."
+      zh-CN: "文件没有列出对称操作，空间群 %{name} 也无法识别。"
+    operations_from_name:
+      en: "The file lists no symmetry operations; they were generated from the space group %{name}."
+      zh-CN: "文件没有列出对称操作，已由空间群 %{name} 生成。"
+    name_mismatch:
+      en: "The file names the space group %{file}, but its symmetry operations are %{identified}. The operations are used."
+      zh-CN: "文件给出的空间群是 %{file}，但对称操作属于 %{identified}，以对称操作为准。"
+    unidentified:
+      en: The space group of the symmetry operations could not be identified.
+      zh-CN: 无法识别对称操作所属的空间群。
     missing_operations_and_group:
       en: The file lists neither symmetry operations nor a space group.
       zh-CN: 文件既没有列出对称操作，也没有给出空间群。
@@ -487,12 +511,24 @@ diagnostic:
     multiplicity_mismatch:
       en: "The file gives %{label} a multiplicity of %{file}, but its symmetry operations generate %{expanded} atoms."
       zh-CN: "文件给出 %{label} 的多重度为 %{file}，按对称操作展开得到 %{expanded} 个原子。"
+    snapped:
+      en: "%{label} was moved %{distance} Å onto the special position %{form}."
+      zh-CN: "%{label} 已吸附到特殊位置 %{form}，移动了 %{distance} Å。"
+    merged_occupancy:
+      en: "%{label} is at the same position as %{into} and was merged into it as mixed occupancy."
+      zh-CN: "%{label} 与 %{into} 位置相同，已合并为同一位点的混合占位。"
+    redundant_site:
+      en: "%{label} repeats %{other} at an equivalent position and was dropped."
+      zh-CN: "%{label} 与 %{other} 处于等效位置且原子相同，属于重复列出，已去掉。"
+    occupancy_sum_above_one:
+      en: "The occupancies of %{label} add up to %{sum}, above 1."
+      zh-CN: "%{label} 的占位率之和为 %{sum}，大于 1。"
     overlapping_sites:
-      en: "%{a} and %{b} are at the same position, and both are fully occupied."
-      zh-CN: "%{a} 与 %{b} 位置重合，而且都是满占位。"
+      en: "%{a} and %{b} are at the same position with different elements, and both are fully occupied."
+      zh-CN: "%{a} 与 %{b} 位置重合、元素不同，而且都是满占位。"
     shared_position:
-      en: "%{a} and %{b} share a position (mixed occupancy). They are still shown as two sites."
-      zh-CN: "%{a} 与 %{b} 位置相同（混合占位），目前仍作为两个位点显示。"
+      en: "%{a} and %{b} share a position but belong to different disorder groups; they stay two sites."
+      zh-CN: "%{a} 与 %{b} 位置相同，但属于不同的无序组，保留为两个位点。"
     short_contact:
       en: "Atoms of %{a} and %{b} are only %{distance} Å apart."
       zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance} Å。"

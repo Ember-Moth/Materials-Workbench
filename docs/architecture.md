@@ -1,14 +1,14 @@
 # 架构
 
-> 状态：v0.1 框架已搭好，M1 CIF 导入、M3 渲染（键、晶胞边框、拾取、测量）已实现，其余功能以模拟（mock）为主 · 2026-10-22
-> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md)
+> 状态：v0.1 框架已搭好，M1 CIF 导入、M2 对称性、M3 渲染（键、晶胞边框、拾取、测量）已实现，其余功能以模拟（mock）为主 · 2026-10-22
+> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md) · [AI 集成](design/ai-integration.md)
 > 开发流程与约定见 [开发指南](development.md)；版本规划见 [产品路线图](roadmap.md)。
 
 ## 1. 目标
 
 Materials Workbench 是一个用 Rust 编写的现代化、开源、跨平台的材料科学桌面工作台。第一阶段做晶体学：查看、测量、编辑晶体结构，再导出给下游计算。之后逐步加入 XRD、相图和显微组织分析。
 
-当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集、原子展开和成键是真实计算的；视口画出原子、键和晶胞边框，可以点选原子、测量距离和键角（M3）。Wyckoff 位置与约束、编辑、导出和项目文件仍是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
+当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集、原子展开、成键和对称性分析（空间群识别、位点对称性与坐标约束、Wyckoff 位置、晶胞约束，导入时吸附到特殊位置并合并混合占位，M2）是真实计算的；视口画出原子、键和晶胞边框，可以点选原子、测量距离和键角（M3）。编辑、导出和项目文件仍是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
 
 架构上为后续模块预留的位置：XRD、热力学、显微组织各自是"计算 crate（无界面）+ 界面能力 crate"的组合，与晶体学模块并列，共享项目系统、命令与撤销、视口与图表、国际化。计划中的 crate 见[产品路线图](roadmap.md)第 8–10 节。
 
@@ -25,7 +25,8 @@ materials-workbench/
 │   ├── mw-crystal-render/    wgpu 离屏渲染器（不依赖 GPUI）
 │   ├── mw-viewport/          3D 视口组件（GPUI + 渲染器）
 │   ├── mw-project/           项目：项目目录与左侧边栏
-│   └── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
+│   ├── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
+│   └── mw-llm/               内置助手的模型服务客户端（纯 Rust，无界面）
 └── docs/
     ├── architecture.md       本文
     ├── roadmap.md            产品路线图
@@ -49,22 +50,23 @@ apps/workbench ─────────┬───────────�
                     mw-crystal          mw-crystal-render
 ```
 
-`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
-| `mw-crystal` | 晶体结构的数据类型（晶胞、对称操作集、位点、容差）、原子展开与派生数据（含 `AtomRef` 和成键）、测量的几何、元素表，以及内置示例 | 否 |
-| `mw-crystal-io` | 解析结构文件（CIF 1.1 子集），产出结构和带源文件行号的导入诊断；诊断是数据，文字由界面翻译 | 否 |
+| `mw-crystal` | 晶体结构的数据类型（晶胞、对称操作集、位点、容差）、原子展开与派生数据（含 `AtomRef` 和成键）、测量的几何、对称性分析（空间群识别、位点对称性、Wyckoff 位置、晶胞约束；符号表和对称性搜索来自 moyo，只在 `tables.rs` 里调用）、元素表，以及内置示例 | 否 |
+| `mw-crystal-io` | 解析结构文件（CIF 1.1 子集），整理位点（吸附到特殊位置、合并混合占位、去掉重复行），产出结构和带源文件行号的导入诊断；诊断是数据，文字由界面翻译 | 否 |
 | `mw-crystal-render` | 离屏渲染球、键、线段和高亮圈并回读像素；按需渲染 ID 纹理回答"鼠标下是什么"；只依赖 wgpu | 否 |
 | `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧与拾取、悬停高亮、3D 坐标投影到屏幕 | 是 |
 | `mw-project` | 项目目录模型和左侧边栏视图 | 是 |
 | `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令；选区与测量；打开文件后的通知与错误列表 | 是 |
 | `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言 | 是 |
+| `mw-llm` | 内置助手的模型服务客户端：`ChatProvider` 接口和项目自己的对话类型；Anthropic Messages、OpenAI Chat Completions（含兼容服务和本地模型）、OpenAI Responses 三个后端；工具 Schema 子集检查与参数校验；能力声明与厂商档案。HTTP 跑在专用线程的 tokio runtime 上，流可以由任何执行器轮询 | 否 |
 
 **规则**：
 
 - **按能力分 crate，而不是按"视图 / 模型 / 对话框"分目录**（GPUI Kit Coding Guides）。一个能力的模型、视图、命令和对话框放在同一个 crate 里。
-- **领域 crate 不依赖界面**。`mw-crystal`、`mw-crystal-io` 和以后的对称性引擎都要能在 CLI 或测试里单独使用。
+- **领域 crate 不依赖界面**。`mw-crystal`（含对称性分析）和 `mw-crystal-io` 都要能在 CLI 或测试里单独使用。
 - **渲染器不依赖 GPUI**，见视口设计稿 5.1 节。
 - **能力之间不互相依赖**。`mw-project` 和 `mw-structure` 互不引用，由外壳通过事件转接（见第 4 节）。
 - 只有一个能力在用的东西不提前抽成共享 crate；有第二个使用者时再抽。
@@ -142,11 +144,7 @@ Workbench（窗口根视图，apps/workbench）
 
 | 模拟 | 位置 | 代替的是 | 由哪一步替换 |
 |---|---|---|---|
-| 内置示例结构（金红石、2×2×2 超胞、SrTiO₃）；操作集和展开是真实的 | `mw-crystal/src/sample.rs` | 项目文件里保存的结构 | M6 项目与设置持久化 |
-| 手写的对称性分析：晶系、晶胞约束、Wyckoff 位置、坐标约束（`SymmetryAnalysis`）。导入的结构没有这部分，界面显示"尚未计算" | `mw-crystal/src/sample.rs` | 对称性引擎 | M2 对称性 |
-| 空间群名称直接取自文件，不与操作集核对 | `mw-crystal` 的 `SpaceGroup` | 由操作集识别空间群 | M2 对称性 |
-| 导入不做规范化：靠近特殊位置的原子不吸附、坐标相同的行不合并为混合占位，只给出诊断 | `mw-crystal-io/src/import.rs` | 导入流水线的规范化步骤（晶体学设计稿 9.1 节） | M2 对称性 |
-| 文件没有列出对称操作时报错，不能由空间群符号生成操作集 | `mw-crystal-io/src/import.rs` | Hall / H-M 符号表 | M2 对称性 |
+| 内置示例结构（金红石、2×2×2 超胞、SrTiO₃）；操作集、展开和对称性分析是真实的 | `mw-crystal/src/sample.rs` | 项目文件里保存的结构 | M6 项目与设置持久化 |
 | 项目目录；打开的文件只留在内存里，统一放进"导入的文件"项目 | `mw-project` 的 `ProjectCatalog` | 项目文件、新建项目 | M6 项目与设置持久化 |
 | 超胞的诊断 | `mw-structure/src/document.rs` | 派生结构的来源记录 | M5 |
 | 显示固定为一个晶胞，面、棱、角上的原子在对面补一份 | `mw-crystal/src/expand.rs` 的 `display_atoms` | 视图层的显示范围 | v0.3 |
@@ -154,6 +152,7 @@ Workbench（窗口根视图，apps/workbench）
 | 字段可以输入，但不会改变结构 | `mw-structure` 的属性面板 | 编辑命令与撤销 | M4 编辑 |
 | 删除、转为 P1、生成超胞、导出：对话框齐全，确认后只提示"尚未实现" | `mw-structure/src/dialogs.rs` | 对应的编辑命令 | M4、M5 |
 | 新建项目、显示范围、多面体、更换元素、混合占位 | 各处的 `not_implemented` | 对应功能 | 见第 10 节 |
+| P1 结构检测到更高对称性后的"对称化…"只提示尚未实现（检测本身是真实的） | `mw-structure/src/panel.rs` | `Symmetrize` 命令（晶体学设计稿 7.10 节） | v0.2 |
 | "多面体"显示模型画成球棍 | `mw-structure/src/scene.rs` 的 `DisplayModel` | 半透明多面体管线 | v0.3 |
 | 设置不保存 | `apps/workbench/src/settings.rs` | 设置持久化 | M6 |
 
@@ -166,7 +165,7 @@ Workbench（窗口根视图，apps/workbench）
 | 里程碑 | 内容 | 主要涉及 | 状态 |
 |---|---|---|---|
 | M1 CIF 导入 | CIF 1.1 子集解析、导入诊断（带行号）、"打开文件…"对话框和拖放；对称操作集（整数矩阵 + 有理平移、群封闭检查）和显示所需的最小原子展开 | 新增 `mw-crystal-io`；`mw-crystal` | 已实现。COD 语料的批量统计（`crates/mw-crystal-io/tests/cod_corpus.rs`）还没有在完整语料上跑过 |
-| M2 对称性 | 空间群识别、位点对称性与约束子空间、Wyckoff 指认，真正计算 `SymmetryAnalysis`；导入时吸附到特殊位置、合并混合占位 | `mw-crystal`（候选依赖 moyo，见晶体学设计稿 11 节）、`mw-crystal-io` | 未开始 |
+| M2 对称性 | 空间群识别、位点对称性与约束子空间、Wyckoff 指认，真正计算 `SymmetryAnalysis`；导入时吸附到特殊位置、合并混合占位 | `mw-crystal`（依赖 moyo，见晶体学设计稿 5.4、11 节）、`mw-crystal-io` | 已实现。验收：530 个表列设定（含 230 个标准设定）都能识别，其 3467 个 Wyckoff 位置的代表点都能指认回原字母；示例与原先手写的数据一致。导入时由空间群名称生成操作集、名称与操作集不符和晶胞与对称性不一致的警告也已加上；P1 结构会显示原子的对称性，对称化属于 v0.2。默认容差仍待 COD 语料统计后校准 |
 | M3 渲染 | 键（impostor 圆柱）、晶胞边框、ID 纹理拾取；点选原子与测量模式 | `mw-crystal-render`、`mw-viewport` | 已实现。成键规则固定为默认值（共价半径之和 + 0.45 Å，金属之间不成键），还没有按元素对调整的设置；10 万原子 + 30 万键在全分辨率下约 30 fps（视口设计稿 8.2 节） |
 | M4 基础编辑 | 命令与撤销栈：晶胞参数（按对称约束联动）、元素、占位率、删除位点；P1 模式下自由编辑 | `mw-crystal`、`mw-structure` | 未开始 |
 | M5 变换与导出 | 转为 P1、生成超胞、导出 CIF / POSCAR / 扩展 XYZ | `mw-crystal`、`mw-crystal-io` | 未开始 |

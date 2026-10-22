@@ -4,6 +4,7 @@ use mw_crystal::{Derived, Measurement, Structure};
 use mw_crystal_io::{Diagnostic, ImportedBlock, Severity};
 
 use crate::diagnostics::DiagnosticRow;
+use crate::format;
 
 /// A diagnostic shown in the diagnostics tab.
 #[derive(Clone, Debug)]
@@ -59,6 +60,12 @@ impl StructureDocument {
         }
     }
 
+    /// The identified space group type in display form, e.g. `P4₂/mnm`.
+    pub(crate) fn space_group_symbol(&self) -> Option<String> {
+        let space_group = self.derived.symmetry.space_group.as_ref()?;
+        Some(format::space_group(space_group.hm_symbol))
+    }
+
     /// The document for an imported data block, with the diagnostics of its
     /// import. `None` if the block yielded no structure.
     pub fn from_import(
@@ -100,6 +107,17 @@ mod tests {
         assert_eq!(document.derived.atoms.len(), 8);
         // Three defaulted angles and one element taken from its label.
         assert_eq!(document.diagnostics.len(), 4);
-        assert!(document.derived.symmetry.is_none());
+        assert_eq!(document.space_group_symbol().as_deref(), Some("P1"));
+        // A lone atom in a cubic cell: the atoms have the full cubic symmetry.
+        let detected = document.derived.symmetry.detected.as_ref().unwrap();
+        assert_eq!(detected.number, 221);
+    }
+
+    #[test]
+    fn space_group_symbols_come_from_the_operations() {
+        let rutile = StructureDocument::from_sample("p", "rutile", SampleKey::Rutile);
+        assert_eq!(rutile.space_group_symbol().as_deref(), Some("P4₂/mnm"));
+        let srtio3 = StructureDocument::from_sample("p", "SrTiO3", SampleKey::StrontiumTitanate);
+        assert_eq!(srtio3.space_group_symbol().as_deref(), Some("Pm-3m"));
     }
 }

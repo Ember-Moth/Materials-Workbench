@@ -7,6 +7,8 @@ use gpui_kit::*;
 use mw_crystal::{SymOpError, SymmetryError};
 use mw_crystal_io::{Diagnostic, DiagnosticKind, Severity};
 
+use crate::format;
+
 /// Distances in messages, in Å.
 fn distance(value: f64) -> String {
     format!("{value:.3}")
@@ -48,6 +50,11 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
             tr!("diagnostic.value.invalid_number", tag = tag, text = text)
         }
         MissingCellParameter { tag } => tr!("diagnostic.cell.missing_parameter", tag = tag),
+        CellInconsistent { length, angle } => tr!(
+            "diagnostic.cell.inconsistent",
+            length = format!("{length:.4}"),
+            angle = format!("{angle:.3}")
+        ),
         AngleDefaulted { tag } => tr!("diagnostic.cell.angle_defaulted", tag = tag),
         InvalidCell => tr!("diagnostic.cell.invalid"),
         InvalidSymop { text, error } => match error {
@@ -87,7 +94,26 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
             tr!("diagnostic.symmetry.missing_operations", name = name)
         }
         MissingSymops { name: None } => tr!("diagnostic.symmetry.missing_operations_and_group"),
+        SymopsFromName { name } => tr!("diagnostic.symmetry.operations_from_name", name = name),
         InvalidItNumber { text } => tr!("diagnostic.symmetry.invalid_it_number", text = text),
+        SpaceGroupMismatch {
+            file_symbol,
+            file_number,
+            number,
+            symbol,
+        } => {
+            let file = match (file_symbol, file_number) {
+                (Some(symbol), _) => format::space_group(symbol).into(),
+                (None, Some(number)) => tr!("panel.symmetry.space_group_number", number = number),
+                (None, None) => SharedString::default(),
+            };
+            tr!(
+                "diagnostic.symmetry.name_mismatch",
+                file = file,
+                identified = crate::panel::space_group_name(*number, symbol)
+            )
+        }
+        UnidentifiedSpaceGroup => tr!("diagnostic.symmetry.unidentified"),
         MissingAtomSites => tr!("diagnostic.atom.missing_sites"),
         MissingAtomTag { tag } => tr!("diagnostic.atom.missing_tag", tag = tag),
         CartesianOnly => tr!("diagnostic.atom.cartesian_only"),
@@ -135,6 +161,36 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
             label = label,
             file = file,
             expanded = expanded
+        ),
+        SnappedToSpecialPosition {
+            label,
+            form,
+            displacement,
+        } => tr!(
+            "diagnostic.atom.snapped",
+            label = label,
+            form = form,
+            distance = format!("{displacement:.4}")
+        ),
+        MergedOccupancy { label, into } => {
+            tr!(
+                "diagnostic.atom.merged_occupancy",
+                label = label,
+                into = into
+            )
+        }
+        RedundantSite {
+            label,
+            duplicate_of,
+        } => tr!(
+            "diagnostic.atom.redundant_site",
+            label = label,
+            other = duplicate_of
+        ),
+        OccupancySumAboveOne { label, sum } => tr!(
+            "diagnostic.atom.occupancy_sum_above_one",
+            label = label,
+            sum = format!("{sum:.3}")
         ),
         OverlappingSites { a, b } => tr!("diagnostic.atom.overlapping_sites", a = a, b = b),
         SharedPosition { a, b } => tr!("diagnostic.atom.shared_position", a = a, b = b),

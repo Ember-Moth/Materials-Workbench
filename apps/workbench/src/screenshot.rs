@@ -187,21 +187,28 @@ const TOUR: &[(&str, Step)] = &[
     ("14-import-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
-    ("15-import-failed", |workbench, window, cx| {
+    // Sites snapped onto special positions, rows merged and dropped.
+    ("15-import-snapped", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("rutile_near_special.cif")], window, cx);
+    }),
+    ("16-snapped-diagnostics", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
+    }),
+    ("17-import-failed", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("malformed.cif")], window, cx);
     }),
-    ("16-import-errors", |_, window, cx| {
+    ("18-import-errors", |_, window, cx| {
         OpenedFile::read(fixture("malformed.cif")).show_errors(window, cx);
     }),
-    ("17-settings", |_, window, cx| {
+    ("19-settings", |_, window, cx| {
         window.close_dialog(cx);
         settings::open(window, cx)
     }),
-    ("18-no-sidebar", |workbench, window, cx| {
+    ("20-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    ("19-empty", |workbench, window, cx| {
+    ("21-empty", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
         workbench.close_structure(window, cx);
     }),

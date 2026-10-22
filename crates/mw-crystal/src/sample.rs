@@ -1,16 +1,11 @@
 //! Mock: built-in sample structures. They stand in for structures saved in
-//! a project file (M6), and the hand-written [`SymmetryAnalysis`] of each
-//! stands in for the symmetry engine (M2). Their operation sets and
-//! everything expanded from them are real.
+//! a project file (M6). Everything derived from them, the symmetry analysis
+//! included, is real.
 //!
 //! Lattice parameters and coordinates are the commonly cited room-temperature
 //! values.
 
-use crate::{
-    Axis, CellConstraints, CellParam, CellParams, Constraint, CoordinateConstraint, CrystalSystem,
-    Derived, Lattice, Site, SiteId, SiteSymmetry, SpaceGroup, Structure, SymOp, Symmetry,
-    SymmetryAnalysis,
-};
+use crate::{CellParams, Derived, Lattice, Site, SpaceGroup, Structure, SymOp, Symmetry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SampleKey {
@@ -49,22 +44,6 @@ fn space_group(hm_symbol: &str, it_number: u16) -> SpaceGroup {
     SpaceGroup::new(Some(hm_symbol.into()), Some(it_number))
 }
 
-fn site_symmetry(
-    wyckoff: &str,
-    coordinate_form: &str,
-    coordinates: [CoordinateConstraint; 3],
-) -> SiteSymmetry {
-    SiteSymmetry {
-        wyckoff: wyckoff.into(),
-        coordinate_form: coordinate_form.into(),
-        coordinates,
-    }
-}
-
-fn fixed() -> [CoordinateConstraint; 3] {
-    [CoordinateConstraint::Fixed; 3]
-}
-
 fn rutile_structure() -> Structure {
     let lattice = Lattice::new(CellParams::new(
         RUTILE_A, RUTILE_A, RUTILE_C, 90.0, 90.0, 90.0,
@@ -83,26 +62,7 @@ fn rutile_structure() -> Structure {
 /// Rutile, TiO₂ in P4₂/mnm: Ti on 2a, O on 4f at x, x, 0.
 fn rutile() -> Sample {
     let structure = rutile_structure();
-    let analysis = SymmetryAnalysis {
-        crystal_system: CrystalSystem::Tetragonal,
-        cell: tetragonal_constraints(),
-        sites: vec![
-            (SiteId(1), site_symmetry("2a", "0, 0, 0", fixed())),
-            (
-                SiteId(2),
-                site_symmetry(
-                    "4f",
-                    "x, x, 0",
-                    [
-                        CoordinateConstraint::Free,
-                        CoordinateConstraint::Follows(Axis::X),
-                        CoordinateConstraint::Fixed,
-                    ],
-                ),
-            ),
-        ],
-    };
-    let derived = Derived::compute(&structure).with_symmetry(analysis);
+    let derived = Derived::compute(&structure);
     Sample { structure, derived }
 }
 
@@ -152,17 +112,7 @@ fn rutile_supercell() -> Sample {
     }
     let structure =
         Structure::new(lattice, Symmetry::p1(), sites).with_space_group(space_group("P 1", 1));
-    let general = site_symmetry("1a", "x, y, z", [CoordinateConstraint::Free; 3]);
-    let analysis = SymmetryAnalysis {
-        crystal_system: CrystalSystem::Triclinic,
-        cell: CellConstraints::free(),
-        sites: structure
-            .sites
-            .iter()
-            .map(|s| (s.id, general.clone()))
-            .collect(),
-    };
-    let derived = Derived::compute(&structure).with_symmetry(analysis);
+    let derived = Derived::compute(&structure);
     Sample { structure, derived }
 }
 
@@ -183,40 +133,14 @@ fn strontium_titanate() -> Sample {
         ],
     )
     .with_space_group(space_group("P m -3 m", 221));
-    let analysis = SymmetryAnalysis {
-        crystal_system: CrystalSystem::Cubic,
-        cell: CellConstraints::new([
-            Constraint::Free,
-            Constraint::Equals(CellParam::A),
-            Constraint::Equals(CellParam::A),
-            Constraint::Fixed,
-            Constraint::Fixed,
-            Constraint::Fixed,
-        ]),
-        sites: vec![
-            (SiteId(1), site_symmetry("1a", "0, 0, 0", fixed())),
-            (SiteId(2), site_symmetry("1b", "½, ½, ½", fixed())),
-            (SiteId(3), site_symmetry("3c", "0, ½, ½", fixed())),
-        ],
-    };
-    let derived = Derived::compute(&structure).with_symmetry(analysis);
+    let derived = Derived::compute(&structure);
     Sample { structure, derived }
-}
-
-fn tetragonal_constraints() -> CellConstraints {
-    CellConstraints::new([
-        Constraint::Free,
-        Constraint::Equals(CellParam::A),
-        Constraint::Free,
-        Constraint::Fixed,
-        Constraint::Fixed,
-        Constraint::Fixed,
-    ])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CellParam, Constraint, CrystalSystem};
 
     const ALL: [SampleKey; 3] = [
         SampleKey::Rutile,
@@ -253,19 +177,76 @@ mod tests {
         assert!((density - 4.25).abs() < 0.01, "{density}");
     }
 
+    fn wyckoffs(key: SampleKey) -> Vec<String> {
+        let sample = load(key);
+        sample
+            .structure
+            .sites
+            .iter()
+            .map(|site| {
+                let symmetry = sample.derived.site_symmetry(site.id).expect("analyzed");
+                format!(
+                    "{} {}",
+                    symmetry.wyckoff.as_ref().expect("tabulated"),
+                    symmetry.form
+                )
+            })
+            .collect()
+    }
+
     #[test]
-    fn hand_written_wyckoff_multiplicities_match_the_expansion() {
+    fn symmetry_of_the_samples() {
+        let rutile = load(SampleKey::Rutile);
+        let analysis = &rutile.derived.symmetry;
+        let space_group = analysis.space_group.as_ref().expect("identified");
+        assert_eq!(
+            (space_group.number, space_group.hm_symbol),
+            (136, "P 4_2/m n m")
+        );
+        assert_eq!(analysis.crystal_system(), Some(CrystalSystem::Tetragonal));
+        assert_eq!(
+            analysis.cell.get(CellParam::B),
+            Constraint::Equals(CellParam::A)
+        );
+        assert_eq!(analysis.cell.get(CellParam::C), Constraint::Free);
+        assert!(analysis.detected.is_none());
+        assert_eq!(wyckoffs(SampleKey::Rutile), ["2a 0, 0, 0", "4f x, x, 0"]);
+
+        assert_eq!(
+            wyckoffs(SampleKey::StrontiumTitanate),
+            ["1a 0, 0, 0", "1b 1/2, 1/2, 1/2", "3c 0, 1/2, 1/2"]
+        );
+    }
+
+    #[test]
+    fn the_supercell_in_p1_is_detected_as_rutile() {
+        let sample = load(SampleKey::RutileSupercell);
+        let analysis = &sample.derived.symmetry;
+        assert_eq!(analysis.space_group.as_ref().map(|s| s.number), Some(1));
+        assert!(
+            wyckoffs(SampleKey::RutileSupercell)
+                .iter()
+                .all(|w| w == "1a x, y, z")
+        );
+        let detected = analysis.detected.as_ref().expect("P1 is searched");
+        assert_eq!((detected.number, detected.hm_symbol), (136, "P 4_2/m n m"));
+        // The 2 × 2 × 2 cell holds 8 cells' worth of translations.
+        assert_eq!(detected.operations, 16 * 8);
+        let letters: std::collections::BTreeSet<char> =
+            detected.wyckoffs.iter().map(|(_, w)| *w).collect();
+        assert_eq!(letters, ['a', 'f'].into());
+    }
+
+    #[test]
+    fn wyckoff_multiplicities_match_the_expansion() {
         for key in ALL {
             let sample = load(key);
             for site in &sample.structure.sites {
-                let wyckoff = &sample.derived.site_symmetry(site.id).expect("mock").wyckoff;
-                let tabulated: usize = wyckoff
-                    .trim_end_matches(char::is_alphabetic)
-                    .parse()
-                    .expect("multiplicity");
+                let symmetry = sample.derived.site_symmetry(site.id).expect("analyzed");
+                let operations = sample.structure.symmetry.operations().len();
                 assert_eq!(
                     sample.derived.multiplicity(site.id),
-                    Some(tabulated),
+                    Some(operations / symmetry.order),
                     "{key:?} {}",
                     site.label()
                 );

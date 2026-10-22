@@ -1,0 +1,75 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b","object":"response","created_at":1761100000,"model":"gpt-x","store":false,"status":"in_progress","output":[]}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b","object":"response","created_at":1761100000,"model":"gpt-x","store":false,"status":"in_progress","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","sequence_number":3,"item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":4,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Need the structure"}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":5,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":" database."}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","sequence_number":6,"item_id":"rs_1","output_index":0,"summary_index":0,"text":"Need the structure database."}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","sequence_number":7,"item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"Need the structure database."}}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","sequence_number":8,"item_id":"rs_1","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":9,"item_id":"rs_1","output_index":0,"summary_index":1,"delta":"Search TiO2."}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","sequence_number":10,"item_id":"rs_1","output_index":0,"summary_index":1,"text":"Search TiO2."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":11,"output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Need the structure database."},{"type":"summary_text","text":"Search TiO2."}],"encrypted_content":"gAAAAABo-encrypted"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":12,"output_index":1,"item":{"type":"message","id":"msg_1","status":"in_progress","role":"assistant","phase":"commentary","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":13,"item_id":"msg_1","output_index":1,"content_index":0,"part":{"type":"output_text","annotations":[],"text":""}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":14,"item_id":"msg_1","output_index":1,"content_index":0,"delta":"Let me ","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":15,"item_id":"msg_1","output_index":1,"content_index":0,"delta":"search.","logprobs":[]}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":16,"item_id":"msg_1","output_index":1,"content_index":0,"text":"Let me search.","logprobs":[]}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":17,"item_id":"msg_1","output_index":1,"content_index":0,"part":{"type":"output_text","annotations":[],"text":"Let me search."}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":18,"output_index":1,"item":{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","annotations":[],"text":"Let me search."}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":19,"output_index":2,"item":{"type":"function_call","id":"fc_1","call_id":"call_k3","name":"structure_search","arguments":"","status":"in_progress"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":20,"item_id":"fc_1","output_index":2,"delta":"{\"formula\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":21,"item_id":"fc_1","output_index":2,"delta":"\"TiO2\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":22,"item_id":"fc_1","output_index":2,"name":"structure_search","arguments":"{\"formula\":\"TiO2\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":23,"output_index":2,"item":{"type":"function_call","id":"fc_1","call_id":"call_k3","name":"structure_search","arguments":"{\"formula\":\"TiO2\"}","status":"completed"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":24,"response":{"id":"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b","object":"response","created_at":1761100000,"model":"gpt-x","store":false,"status":"completed","incomplete_details":null,"error":null,"output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Need the structure database."},{"type":"summary_text","text":"Search TiO2."}],"encrypted_content":"gAAAAABo-encrypted"},{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","annotations":[],"text":"Let me search."}]},{"type":"function_call","id":"fc_1","call_id":"call_k3","name":"structure_search","arguments":"{\"formula\":\"TiO2\"}","status":"completed"}],"usage":{"input_tokens":2348,"input_tokens_details":{"cached_tokens":2048},"output_tokens":120,"output_tokens_details":{"reasoning_tokens":64},"total_tokens":2468}}}
+

@@ -142,11 +142,15 @@
 | 位点 | Site | 不对称单元中的一个位置 |
 | 等效原子 | Equivalent atoms | 一个位点经对称操作得到的全部原子 |
 | Wyckoff 位置 | Wyckoff position | 保留英文名 |
+| 特殊位置 | Special position | 位点对称性高于 1 的位置 |
+| 位点对称性 | Site symmetry | |
+| 设定 | Setting | 同一空间群的不同轴向、晶胞或原点选择 |
 | 多重度 | Multiplicity | |
 | 占位率 | Occupancy | |
 | 混合占位 | Mixed occupancy | |
 | 对称模式 / P1 模式 | Symmetry mode / P1 mode | |
 | 转为 P1 | Convert to P1 | |
+| 对称化 | Symmetrize | 按检测到的对称性重建操作集 |
 | 超胞 | Supercell | |
 | 测量 | Measurements | |
 | 诊断 | Diagnostics | |

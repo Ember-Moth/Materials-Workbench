@@ -133,11 +133,10 @@ impl Site {
     }
 }
 
-/// The space group as its source names it.
-///
-/// Mock: nothing checks the name against the operations yet; identifying the
-/// group from them comes with the symmetry engine (M2), which then takes
-/// precedence (design §4.4).
+/// The space group as its source names it, kept for provenance and export.
+/// The operations take precedence (design §4.4): the type identified from
+/// them is [`crate::SymmetryAnalysis::space_group`], and the importer
+/// reports a name that disagrees.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct SpaceGroup {
@@ -160,8 +159,12 @@ impl SpaceGroup {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Tolerances {
-    /// Å. Equivalent positions closer than this are one atom.
+    /// Å. Equivalent positions closer than this are one atom; a site this
+    /// close to a special position belongs on it.
     pub position: f64,
+    /// Å. How far an atom may be from its symmetric image when searching
+    /// the symmetry of atoms (design §7.10).
+    pub symprec: f64,
     /// Å. Atoms closer than this are reported as too close.
     pub short_contact: f64,
 }
@@ -170,6 +173,7 @@ impl Default for Tolerances {
     fn default() -> Self {
         Self {
             position: 0.01,
+            symprec: 0.01,
             short_contact: 0.5,
         }
     }
