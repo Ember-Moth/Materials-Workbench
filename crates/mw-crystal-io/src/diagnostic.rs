@@ -81,6 +81,13 @@ pub enum DiagnosticKind {
     },
     /// The cell parameters describe no valid cell.
     InvalidCell,
+    /// The cell parameters differ from the nearest cell the operations
+    /// preserve, e.g. a ≠ b in a tetragonal group: the largest difference of
+    /// a length (Å) and of an angle (degrees).
+    CellInconsistent {
+        length: f64,
+        angle: f64,
+    },
 
     // Symmetry
     InvalidSymop {
@@ -97,14 +104,32 @@ pub enum DiagnosticKind {
         /// The operations the error refers to, as written.
         operations: Vec<String>,
     },
-    /// No symmetry operations are listed. Generating them from the space
-    /// group name comes with the symmetry engine (M2).
+    /// No symmetry operations are listed, and the space group, if named,
+    /// is not recognized.
     MissingSymops {
         name: Option<String>,
+    },
+    /// No symmetry operations are listed; they were generated from the
+    /// space group name: a Hall symbol, else a Hermann–Mauguin symbol in the
+    /// setting it names (standard by default), else an IT number in the
+    /// standard setting (design §4.4).
+    SymopsFromName {
+        name: String,
     },
     InvalidItNumber {
         text: String,
     },
+    /// The space group the file names is not the type of its operations,
+    /// which take precedence. `file_symbol` and `file_number` are as
+    /// written; `symbol` is the short Hermann–Mauguin symbol of the type.
+    SpaceGroupMismatch {
+        file_symbol: Option<String>,
+        file_number: Option<u16>,
+        number: u16,
+        symbol: String,
+    },
+    /// The space group type of the operations could not be identified.
+    UnidentifiedSpaceGroup,
 
     // Atom sites
     MissingAtomSites,
@@ -166,13 +191,39 @@ pub enum DiagnosticKind {
         file: u32,
         expanded: usize,
     },
-    /// Two fully occupied sites at the same position.
+    /// The site was moved onto the special position within the position
+    /// tolerance (design §9.1). `form` is the position's coordinate form,
+    /// e.g. `x, x, 0`; `displacement` is in Å.
+    SnappedToSpecialPosition {
+        label: String,
+        form: String,
+        displacement: f64,
+    },
+    /// Two rows at one position: `label`'s occupants joined `into`'s site
+    /// as mixed occupancy.
+    MergedOccupancy {
+        label: String,
+        into: String,
+    },
+    /// A fully occupied row repeats `duplicate_of` at an equivalent position
+    /// with the same species; it was dropped.
+    RedundantSite {
+        label: String,
+        duplicate_of: String,
+    },
+    /// The occupancies of one site add up to more than 1.
+    OccupancySumAboveOne {
+        label: String,
+        sum: f64,
+    },
+    /// Two fully occupied sites with different species at the same
+    /// position.
     OverlappingSites {
         a: String,
         b: String,
     },
-    /// Two partly occupied sites at the same position, i.e. mixed
-    /// occupancy; they stay two sites until the importer merges them.
+    /// Two sites at the same position in different disorder groups; they
+    /// stay two sites.
     SharedPosition {
         a: String,
         b: String,
@@ -219,8 +270,12 @@ impl DiagnosticKind {
             | AliasConflict { .. }
             | DuplicateSymop { .. }
             | InvalidItNumber { .. }
+            | CellInconsistent { .. }
+            | SpaceGroupMismatch { .. }
+            | UnidentifiedSpaceGroup
             | UnknownElement { .. }
             | OccupancyAboveOne { .. }
+            | OccupancySumAboveOne { .. }
             | AnisoUnknownLabel { .. }
             | CloseImages { .. }
             | MultiplicityMismatch { .. }
@@ -228,10 +283,14 @@ impl DiagnosticKind {
             | ShortContact { .. } => Severity::Warning,
             NoStructure
             | AngleDefaulted { .. }
+            | SymopsFromName { .. }
             | ElementFromLabel { .. }
             | OccupancyAssumed { .. }
             | BisoConverted { .. }
             | DummyAtomSkipped { .. }
+            | SnappedToSpecialPosition { .. }
+            | MergedOccupancy { .. }
+            | RedundantSite { .. }
             | SharedPosition { .. } => Severity::Info,
         }
     }
@@ -261,11 +320,15 @@ impl DiagnosticKind {
             MissingCellParameter { .. } => "cell.missing_parameter",
             AngleDefaulted { .. } => "cell.angle_defaulted",
             InvalidCell => "cell.invalid",
+            CellInconsistent { .. } => "cell.inconsistent_with_symmetry",
             InvalidSymop { .. } => "symmetry.invalid_operation",
             DuplicateSymop { .. } => "symmetry.duplicate_operation",
             InvalidSymmetry { .. } => "symmetry.not_a_group",
             MissingSymops { .. } => "symmetry.missing_operations",
+            SymopsFromName { .. } => "symmetry.operations_from_name",
             InvalidItNumber { .. } => "symmetry.invalid_it_number",
+            SpaceGroupMismatch { .. } => "symmetry.name_mismatch",
+            UnidentifiedSpaceGroup => "symmetry.unidentified",
             MissingAtomSites => "atom.missing_sites",
             MissingAtomTag { .. } => "atom.missing_tag",
             CartesianOnly => "atom.cartesian_only",
@@ -281,6 +344,10 @@ impl DiagnosticKind {
             AnisoUnknownLabel { .. } => "atom.aniso_unknown_label",
             CloseImages { .. } => "atom.close_images",
             MultiplicityMismatch { .. } => "atom.multiplicity_mismatch",
+            SnappedToSpecialPosition { .. } => "atom.snapped",
+            MergedOccupancy { .. } => "atom.merged_occupancy",
+            RedundantSite { .. } => "atom.redundant_site",
+            OccupancySumAboveOne { .. } => "atom.occupancy_sum_above_one",
             OverlappingSites { .. } => "atom.overlapping_sites",
             SharedPosition { .. } => "atom.shared_position",
             ShortContact { .. } => "atom.short_contact",

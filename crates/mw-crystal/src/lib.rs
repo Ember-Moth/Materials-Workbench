@@ -2,28 +2,39 @@
 //!
 //! The types follow `docs/design/crystallography-model.md`. A [`Structure`]
 //! is the asymmetric unit plus its [`Symmetry`] operation set; [`Derived`]
-//! expands it into the atoms of the unit cell. What the symmetry engine (M2)
-//! will derive — Wyckoff positions, coordinate and cell constraints — is only
-//! available for the built-in [`sample`]s, written by hand; see
-//! [`SymmetryAnalysis`]. Editing commands come later.
+//! expands it into the atoms of the unit cell and analyzes its symmetry:
+//! the space group type, cell constraints, and each site's site symmetry,
+//! coordinate constraints and Wyckoff position ([`SymmetryAnalysis`]). The
+//! space group tables and the symmetry search come from moyo. Editing
+//! commands come later.
 
+mod constraints;
 mod derived;
 pub mod element;
 mod expand;
 mod lattice;
+mod linalg;
 mod measured;
 pub mod sample;
+mod site;
+mod space_group;
 mod structure;
 mod symmetry;
+mod tables;
 
+pub use constraints::cell_deviation;
 pub use derived::{
-    Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem, Derived,
-    DisplayAtom, SiteSymmetry, SymmetryAnalysis,
+    Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
+    DETECTION_LIMIT, Derived, DisplayAtom, SymmetryAnalysis,
 };
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
 pub use lattice::{CellParams, Lattice};
 pub use measured::Measured;
+pub use site::{CoordinateForm, SiteSymmetry, SpecialPosition, special_position};
+pub use space_group::{
+    DetectedSymmetry, Setting, SpaceGroupType, Wyckoff, detect_symmetry, it_number_of,
+};
 pub use structure::{
     Adp, Disorder, EditMode, Occupant, Site, SiteId, SpaceGroup, Species, Structure, Tolerances,
 };

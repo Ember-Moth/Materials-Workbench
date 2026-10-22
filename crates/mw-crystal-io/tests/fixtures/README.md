@@ -12,7 +12,9 @@ third-party license to track.
 | `zincite_legacy.cif` | Legacy `_symmetry_*` names, decimal translations (`z+0.5`), Biso, elements given only by labels |
 | `bst_su_aniso.cif` | Standard uncertainties, an anisotropic ADP loop, Ba/Sr mixed occupancy on one position |
 | `malformed.cif` | Syntax and content errors at known lines |
-| `multi_block.cif` | A publication block, a P1 structure without operations, and a block that lists no operations |
+| `multi_block.cif` | A publication block, a P1 structure without operations, and a block whose operations come from its H-M symbol |
+| `halite_p1.cif` | NaCl written out in P1; the symmetry search must find F m -3 m |
+| `rutile_near_special.cif` | Operations from a Hall symbol, sites a few mÅ off their special positions, mixed occupancy as two rows, a repeated row |
 
 The operation lists were generated from group generators and are checked
 for closure by the importer itself.

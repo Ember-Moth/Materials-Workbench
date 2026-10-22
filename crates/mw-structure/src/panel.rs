@@ -8,7 +8,10 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal::{Axis, CellParam, Constraint, CoordinateConstraint, CrystalSystem, EditMode};
+use mw_crystal::{
+    Axis, CellParam, Constraint, CoordinateConstraint, CrystalSystem, EditMode, Setting,
+    SpaceGroupType,
+};
 
 use crate::actions::ConvertToP1;
 use crate::workspace::{PanelTab, StructureWorkspace};
@@ -25,14 +28,6 @@ fn param_name(param: CellParam) -> &'static str {
     }
 }
 
-fn axis_name(axis: Axis) -> &'static str {
-    match axis {
-        Axis::X => "x",
-        Axis::Y => "y",
-        Axis::Z => "z",
-    }
-}
-
 fn crystal_system_name(system: CrystalSystem) -> SharedString {
     match system {
         CrystalSystem::Triclinic => tr!("crystal_system.triclinic"),
@@ -45,11 +40,20 @@ fn crystal_system_name(system: CrystalSystem) -> SharedString {
     }
 }
 
+/// The space group type and its number, e.g. `P4₂/mnm (No. 136)`.
+pub(crate) fn space_group_name(number: u16, symbol: &str) -> SharedString {
+    tr!(
+        "panel.symmetry.space_group_value",
+        symbol = format::space_group(symbol),
+        number = number
+    )
+}
+
 /// How a field's constraint is shown next to its label.
 enum FieldNote {
     None,
-    /// Linked to another field, e.g. `= a`.
-    Linked(&'static str),
+    /// Linked to other fields, e.g. `= a` or `= 2x`.
+    Linked(SharedString),
     Fixed,
 }
 
@@ -172,12 +176,12 @@ impl StructureWorkspace {
         let derived = &self.document.derived;
         let params = structure.lattice.params();
 
-        let analysis = derived.symmetry.as_ref();
+        let analysis = &derived.symmetry;
         let cell_field = |param: CellParam| {
-            let note = match analysis.map(|a| a.cell.get(param)) {
-                None | Some(Constraint::Free) => FieldNote::None,
-                Some(Constraint::Equals(other)) => FieldNote::Linked(param_name(other)),
-                Some(Constraint::Fixed) => FieldNote::Fixed,
+            let note = match analysis.cell.get(param) {
+                Constraint::Free => FieldNote::None,
+                Constraint::Equals(other) => FieldNote::Linked(param_name(other).into()),
+                Constraint::Fixed => FieldNote::Fixed,
             };
             let input = self
                 .cell_inputs
@@ -207,10 +211,11 @@ impl StructureWorkspace {
         let cell =
             section(
                 tr!("panel.cell.title"),
-                Some(analysis.map_or_else(
-                    || tr!("panel.cell.system_not_computed"),
-                    |a| crystal_system_name(a.crystal_system),
-                )),
+                Some(
+                    analysis
+                        .crystal_system()
+                        .map_or_else(|| tr!("panel.cell.system_unknown"), crystal_system_name),
+                ),
                 cx,
             )
             .child(
@@ -239,15 +244,7 @@ impl StructureWorkspace {
                         volume = format!("{:.2}", params.volume())
                     ),
                 },
-            ))
-            .when(analysis.is_none(), |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(tr!("panel.cell.constraints_not_computed")),
-                )
-            });
+            ));
 
         let mode = structure.edit_mode();
         let row_label = |label: SharedString| {
@@ -257,78 +254,105 @@ impl StructureWorkspace {
                 .text_color(theme.muted_foreground)
                 .child(label)
         };
-        let space_group = &structure.space_group;
-        let space_group_name = match (&space_group.hm_symbol, space_group.it_number) {
-            (Some(symbol), Some(number)) => tr!(
-                "panel.symmetry.space_group_value",
-                symbol = format::space_group(symbol),
-                number = number
-            ),
-            (Some(symbol), None) => format::space_group(symbol).into(),
-            (None, Some(number)) => tr!("panel.symmetry.space_group_number", number = number),
-            (None, None) => tr!("panel.symmetry.space_group_unnamed"),
+        let row = |label: SharedString, value: SharedString| {
+            h_flex()
+                .gap_3()
+                .child(row_label(label))
+                .child(div().flex_1().min_w_0().child(value))
         };
+        let note = |text: SharedString| {
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(text)
+        };
+        let space_group = analysis.space_group.as_ref();
+        let setting = space_group.and_then(|sg| match &sg.setting {
+            Setting::Standard => None,
+            Setting::Tabulated { symbol, code } => Some(tr!(
+                "panel.symmetry.setting_value",
+                symbol = format::space_group(symbol),
+                code = *code
+            )),
+            Setting::Transformed => Some(tr!("panel.symmetry.setting_transformed")),
+        });
+        // In P1, what the atoms' own symmetry is, when it is higher.
+        let detected = analysis
+            .detected
+            .as_ref()
+            .filter(|d| mode == EditMode::P1 && d.number > 1);
         let symmetry = section(tr!("panel.symmetry.title"), None, cx).child(
             v_flex()
                 .gap_2()
                 .text_sm()
+                .child(row(
+                    tr!("panel.symmetry.space_group"),
+                    space_group.map_or_else(
+                        || tr!("panel.symmetry.space_group_unknown"),
+                        |sg: &SpaceGroupType| space_group_name(sg.number, sg.hm_symbol),
+                    ),
+                ))
+                .children(setting.map(|setting| row(tr!("panel.symmetry.setting"), setting)))
+                .child(row(
+                    tr!("panel.symmetry.operations"),
+                    tr!(
+                        "panel.symmetry.operation_count",
+                        count = structure.symmetry.operations().len()
+                    ),
+                ))
+                .children(detected.map(|d| {
+                    row(
+                        tr!("panel.symmetry.detected"),
+                        space_group_name(d.number, d.hm_symbol),
+                    )
+                }))
                 .child(
                     h_flex()
                         .gap_3()
-                        .child(row_label(tr!("panel.symmetry.space_group")))
-                        .child(space_group_name),
-                )
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .child(row_label(tr!("panel.symmetry.operations")))
-                        .child(tr!(
-                            "panel.symmetry.operation_count",
-                            count = structure.symmetry.operations().len()
-                        )),
-                )
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .child(
-                            div()
-                                .w_24()
-                                .flex_none()
-                                .text_color(theme.muted_foreground)
-                                .child(tr!("panel.symmetry.mode")),
-                        )
+                        .child(row_label(tr!("panel.symmetry.mode")))
                         .child(div().flex_1().child(match mode {
                             EditMode::Symmetric => tr!("panel.symmetry.mode_symmetric"),
                             EditMode::P1 => tr!("panel.symmetry.mode_p1"),
                         }))
-                        .child(match mode {
-                            EditMode::Symmetric => Button::new("convert-to-p1")
-                                .outline()
-                                .xsmall()
-                                .label(tr!("panel.symmetry.convert_to_p1"))
-                                .on_click(cx.listener(|_, _, window, cx| {
-                                    window.dispatch_action(Box::new(ConvertToP1), cx)
-                                })),
-                            EditMode::P1 => Button::new("detect-symmetry")
-                                .outline()
-                                .xsmall()
-                                .label(tr!("panel.symmetry.detect"))
-                                .on_click(cx.listener(|_, _, window, cx| {
-                                    dialogs::not_implemented(
-                                        tr!("feature.detect_symmetry"),
-                                        window,
-                                        cx,
-                                    )
-                                })),
+                        .map(|this| match mode {
+                            EditMode::Symmetric => this.child(
+                                Button::new("convert-to-p1")
+                                    .outline()
+                                    .xsmall()
+                                    .label(tr!("panel.symmetry.convert_to_p1"))
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(Box::new(ConvertToP1), cx)
+                                    })),
+                            ),
+                            // Mock: the detected symmetry is real; the
+                            // Symmetrize command it leads to is v0.2
+                            // (design §7.10).
+                            EditMode::P1 => this.when(detected.is_some(), |this| {
+                                this.child(
+                                    Button::new("symmetrize")
+                                        .outline()
+                                        .xsmall()
+                                        .label(tr!("panel.symmetry.symmetrize"))
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            dialogs::not_implemented(
+                                                tr!("feature.symmetrize"),
+                                                window,
+                                                cx,
+                                            )
+                                        })),
+                                )
+                            }),
                         }),
                 )
-                .when(analysis.is_none(), |this| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(tr!("panel.symmetry.name_from_file")),
-                    )
+                .when(
+                    matches!(
+                        space_group.map(|sg| &sg.setting),
+                        Some(Setting::Transformed)
+                    ),
+                    |this| this.child(note(tr!("panel.symmetry.transformed_hint"))),
+                )
+                .when(detected.is_some(), |this| {
+                    this.child(note(tr!("panel.symmetry.detected_hint")))
                 }),
         );
 
@@ -353,10 +377,12 @@ impl StructureWorkspace {
 
         let symmetry = derived.site_symmetry(site.id);
         let coordinate = |axis: usize| {
-            let note = match symmetry.map(|s| s.coordinates[axis]) {
-                None | Some(CoordinateConstraint::Free) => FieldNote::None,
-                Some(CoordinateConstraint::Follows(other)) => FieldNote::Linked(axis_name(other)),
-                Some(CoordinateConstraint::Fixed) => FieldNote::Fixed,
+            let note = match symmetry.map(|s| (s, s.coordinates[axis])) {
+                None | Some((_, CoordinateConstraint::Free)) => FieldNote::None,
+                Some((s, CoordinateConstraint::Follows(_) | CoordinateConstraint::Combination)) => {
+                    FieldNote::Linked(s.form.expression(Axis::ALL[axis]).into())
+                }
+                Some((_, CoordinateConstraint::Fixed)) => FieldNote::Fixed,
             };
             field(
                 ["x", "y", "z"][axis].into(),
@@ -382,14 +408,15 @@ impl StructureWorkspace {
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(match symmetry {
-                    Some(symmetry) => tr!(
+                .children(symmetry.map(|symmetry| match &symmetry.wyckoff {
+                    Some(wyckoff) => tr!(
                         "panel.site.wyckoff",
-                        wyckoff = symmetry.wyckoff.clone(),
-                        form = symmetry.coordinate_form.clone()
+                        wyckoff = wyckoff.to_string(),
+                        symmetry = wyckoff.site_symmetry,
+                        form = symmetry.form.to_string()
                     ),
-                    None => tr!("panel.site.wyckoff_not_computed"),
-                }),
+                    None => tr!("panel.site.form", form = symmetry.form.to_string()),
+                })),
         )
         .child(h_flex().gap_2().children([0, 1, 2].map(coordinate)))
         .child(
@@ -454,7 +481,10 @@ impl StructureWorkspace {
         let rows = structure.sites.iter().map(|site| {
             let id = site.id;
             let derived = &self.document.derived;
-            let wyckoff = derived.site_symmetry(id).map(|s| s.wyckoff.clone());
+            let wyckoff = derived
+                .site_symmetry(id)
+                .and_then(|s| s.wyckoff.as_ref())
+                .map(ToString::to_string);
             let count = derived.multiplicity(id).unwrap_or_default();
             let occupant = site.occupants.first();
             let element = occupant

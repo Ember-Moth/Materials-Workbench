@@ -1,0 +1,39 @@
+#-----------------------------------------------------------------------------
+# Halite, NaCl (F m -3 m, No. 225), written out in P1: the conventional
+# cell with all eight atoms and only the identity operation. The importer
+# keeps P1; the symmetry search finds F m -3 m again.
+# Hand-written test fixture for Materials Workbench (mw-crystal-io).
+# Values are commonly cited literature parameters, typed in by hand;
+# nothing is copied from a database.
+#-----------------------------------------------------------------------------
+
+data_halite_P1
+_chemical_name_mineral            Halite
+_chemical_formula_sum             'Cl Na'
+_space_group_name_H-M_alt         'P 1'
+_space_group_IT_number            1
+_cell_length_a                    5.640
+_cell_length_b                    5.640
+_cell_length_c                    5.640
+_cell_angle_alpha                 90
+_cell_angle_beta                  90
+_cell_angle_gamma                 90
+
+loop_
+_space_group_symop_operation_xyz
+x,y,z
+
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Na1 Na+ 0   0   0
+Na2 Na+ 0   0.5 0.5
+Na3 Na+ 0.5 0   0.5
+Na4 Na+ 0.5 0.5 0
+Cl1 Cl- 0.5 0.5 0.5
+Cl2 Cl- 0.5 0   0
+Cl3 Cl- 0   0.5 0
+Cl4 Cl- 0   0   0.5

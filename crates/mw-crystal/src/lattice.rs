@@ -52,6 +52,15 @@ impl CellParams {
         self.a.value() * self.b.value() * self.c.value() * self.volume_factor().max(0.0).sqrt()
     }
 
+    /// The metric tensor `G = Aᵀ·A` in Å², from the parameters directly so
+    /// that right angles give exact zeros.
+    pub(crate) fn metric(&self) -> [[f64; 3]; 3] {
+        let lengths = [self.a.value(), self.b.value(), self.c.value()];
+        let (ca, cb, cg) = self.cosines();
+        let cosines = [[1.0, cg, cb], [cg, 1.0, ca], [cb, ca, 1.0]];
+        [0, 1, 2].map(|i| [0, 1, 2].map(|j| lengths[i] * lengths[j] * cosines[i][j]))
+    }
+
     /// Basis vectors a, b, c (as columns) in the standard orientation: a along
     /// x, b in the xy plane, right-handed.
     pub fn matrix(&self) -> [[f64; 3]; 3] {
@@ -66,6 +75,17 @@ impl CellParams {
             [c * cb, c * cy, c * cz],
         ]
     }
+}
+
+/// The length in Å of a fractional vector under the metric tensor `g`.
+pub(crate) fn norm(g: &[[f64; 3]; 3], v: [f64; 3]) -> f64 {
+    let mut sum = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            sum += v[i] * g[i][j] * v[j];
+        }
+    }
+    sum.max(0.0).sqrt()
 }
 
 /// Cosine that is exact for the angles crystallography uses most, so that a

@@ -49,7 +49,7 @@ cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000
 VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 ```
 
-界面截图巡览：依次切换主界面、位点面板、命令面板、删除对话框、深色模式、英文界面、其他示例结构，再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
+界面截图巡览：依次切换主界面、位点面板、命令面板、删除对话框、深色模式、英文界面、其他示例结构，再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、吸附到特殊位置的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
 
 ```bash
 MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -114,8 +114,8 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 | 层次 | 例子 | 位置 |
 |---|---|---|
-| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
-| 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号） | `crates/mw-crystal-io/tests/fixtures.rs` |
+| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、530 个表列设定、空间群识别、位点对称性与坐标形式、晶胞约束、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号）、空间群号与 Wyckoff 位置、吸附与合并、P1 结构的对称性检测 | `crates/mw-crystal-io/tests/fixtures.rs` |
 | 语料统计 | COD 批量导入，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs` |
 | 无头 GPU 测试 | 渲染一帧并检查像素 | `mw-crystal-render` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 驱动真实组件 | 尚未添加，加入第一批编辑功能时开始写 |

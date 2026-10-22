@@ -3,10 +3,13 @@
 //! [`cif::read`] imports the CIF 1.1 subset described in
 //! `docs/design/crystallography-model.md` §9.1: one [`ImportedBlock`] per
 //! data block, each with its structure (unless it has errors) and the
-//! [`Diagnostic`]s found in it, every one tied to a source line.
+//! [`Diagnostic`]s found in it, every one tied to a source line. Structures
+//! come out normalized: sites snapped onto special positions, mixed
+//! occupancy merged into one site, repeated rows dropped.
 
 mod diagnostic;
 mod import;
+mod normalize;
 mod number;
 mod syntax;
 

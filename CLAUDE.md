@@ -61,8 +61,8 @@ cargo fmt --all
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧和投影。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型、对称操作、原子展开、派生数据、元素表、内置示例；
-  - `mw-crystal-io`：CIF 1.1 子集解析，产出带行号的诊断；
+  - `mw-crystal`：模型、对称操作、原子展开、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束）、元素表、内置示例；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断；
   - `mw-crystal-render`：wgpu 离屏渲染器。
 
   这些 crate 都要能在命令行和测试里单独使用。纯计算一律放在这一层并在这里写单元测试。

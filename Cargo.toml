@@ -23,9 +23,14 @@ pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 rust-i18n = "4.2"
+# Space group tables, Wyckoff positions and symmetry search, see
+# docs/design/crystallography-model.md §11. 0.x: pinned to the minor version.
+moyo = "0.21"
+nalgebra = "0.35"
 
 # GPUI and the component library are slow in unoptimized builds; this follows
-# the GPUI Kit installation guide.
+# the GPUI Kit installation guide. The symmetry search is optimized too, so
+# that tests and debug builds analyze structures quickly.
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
 gpui-component = { opt-level = 3 }
@@ -35,3 +40,5 @@ wgpu = { opt-level = 3 }
 wgpu-core = { opt-level = 3 }
 wgpu-hal = { opt-level = 3 }
 naga = { opt-level = 3 }
+moyo = { opt-level = 3 }
+nalgebra = { opt-level = 3 }
