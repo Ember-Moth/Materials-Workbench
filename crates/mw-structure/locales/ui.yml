@@ -4,6 +4,9 @@ header:
     symmetric:
       en: "Symmetry mode · %{symbol}"
       zh-CN: "对称模式 · %{symbol}"
+    symmetric_unnamed:
+      en: Symmetry mode
+      zh-CN: 对称模式
     p1:
       en: P1 mode
       zh-CN: P1 模式
@@ -69,6 +72,15 @@ panel:
     summary:
       en: "Volume %{volume} Å³ · density %{density} g/cm³"
       zh-CN: "体积 %{volume} Å³ · 密度 %{density} g/cm³"
+    volume:
+      en: "Volume %{volume} Å³ · density unknown, an element has no atomic weight"
+      zh-CN: "体积 %{volume} Å³ · 有元素没有原子量，无法计算密度"
+    system_not_computed:
+      en: Crystal system not computed yet
+      zh-CN: 晶系尚未计算
+    constraints_not_computed:
+      en: Which parameters symmetry links or fixes is not computed yet, so all are shown as free.
+      zh-CN: 对称性对晶胞参数的约束尚未计算，所有字段暂按自由参数显示。
   symmetry:
     title:
       en: Symmetry
@@ -76,6 +88,24 @@ panel:
     space_group:
       en: Space group
       zh-CN: 空间群
+    space_group_value:
+      en: "%{symbol} (No. %{number})"
+      zh-CN: "%{symbol}（%{number} 号）"
+    space_group_number:
+      en: "No. %{number}"
+      zh-CN: "%{number} 号"
+    space_group_unnamed:
+      en: Not named in the file
+      zh-CN: 文件未给出
+    operations:
+      en: Operations
+      zh-CN: 对称操作
+    operation_count:
+      en: "%{count}"
+      zh-CN: "%{count} 个"
+    name_from_file:
+      en: The space group name is taken from the file and not yet checked against the operations.
+      zh-CN: 空间群名称取自文件，尚未与对称操作核对。
     mode:
       en: Editing
       zh-CN: 编辑模式
@@ -104,6 +134,9 @@ panel:
     wyckoff:
       en: "Wyckoff %{wyckoff} · coordinates %{form}"
       zh-CN: "Wyckoff %{wyckoff} · 坐标形式 %{form}"
+    wyckoff_not_computed:
+      en: Wyckoff position and coordinate constraints not computed yet
+      zh-CN: Wyckoff 位置和坐标约束尚未计算
     element:
       en: Element
       zh-CN: 元素
@@ -126,6 +159,9 @@ panel:
     row:
       en: "%{element} · %{wyckoff} · %{count} atoms"
       zh-CN: "%{element} · %{wyckoff} · %{count} 个原子"
+    row_without_wyckoff:
+      en: "%{element} · %{count} atoms"
+      zh-CN: "%{element} · %{count} 个原子"
     symmetric_hint:
       en: In symmetry mode, editing a site changes all of its equivalent atoms.
       zh-CN: 对称模式下，编辑一个位点会同时改变它的全部等效原子。
@@ -183,6 +219,9 @@ dialog:
     description:
       en: "The structure is in symmetry mode (%{symbol}), and %{label} has %{count} equivalent atoms in the cell. Deleting the site removes all %{count}; deleting only the selected atom needs the structure converted to P1 first. Both can be undone."
       zh-CN: "当前结构处于对称模式（%{symbol}），%{label} 在晶胞内有 %{count} 个等效原子。删除位点会同时删掉这 %{count} 个；只删除选中的这一个，需要先把结构转为 P1。两种操作都可以撤销。"
+    operations:
+      en: "%{count} operations"
+      zh-CN: "%{count} 个对称操作"
     all:
       en: "Delete all %{count}"
       zh-CN: "删除全部 %{count} 个"
@@ -276,9 +315,196 @@ mock:
     en: "%{feature} is not implemented yet."
     zh-CN: "「%{feature}」尚未实现。"
   diagnostic:
-    snapped:
-      en: "On import, %{site} was snapped to special position %{wyckoff} (largest shift %{shift} Å)."
-      zh-CN: "导入时 %{site} 吸附到特殊位置 %{wyckoff}（最大位移 %{shift} Å）。"
     supercell:
       en: This supercell is in P1. Symmetry detection is not implemented yet, so editing applies to single atoms.
       zh-CN: 这个超胞处于 P1 模式。对称性检测尚未实现，编辑只作用于单个原子。
+diagnostic:
+  line:
+    en: "Line %{line}"
+    zh-CN: "第 %{line} 行"
+  syntax:
+    not_utf8:
+      en: The file is not valid UTF-8; unreadable characters were replaced.
+      zh-CN: 文件不是有效的 UTF-8 文本，无法识别的字符已替换。
+    cif2:
+      en: The file declares CIF 2.0 and was read as CIF 1.1.
+      zh-CN: 文件声明为 CIF 2.0，已按 CIF 1.1 读取。
+    no_data_block:
+      en: The file has no data block (data_).
+      zh-CN: 文件里没有数据块（data_）。
+    content_outside_block:
+      en: Content before the first data block belongs to no block and was ignored.
+      zh-CN: 第一个数据块之前的内容不属于任何数据块，已忽略。
+    empty_block_name:
+      en: The data block has no name.
+      zh-CN: 数据块没有名称。
+    unterminated_quote:
+      en: A quoted string is not closed on its line.
+      zh-CN: 引号在本行内没有闭合。
+    unterminated_text_field:
+      en: A text field that starts with a semicolon is never closed.
+      zh-CN: 以分号开始的文本块没有结束。
+    missing_value:
+      en: "%{tag} has no value."
+      zh-CN: "%{tag} 缺少值。"
+    unexpected_value:
+      en: "The value %{text} belongs to no field."
+      zh-CN: "值 %{text} 不属于任何字段。"
+    empty_loop:
+      en: loop_ is not followed by any field names.
+      zh-CN: loop_ 后面没有字段名。
+    loop_value_count:
+      en: "The loop has %{tags} fields, but its %{values} values are not a multiple of that."
+      zh-CN: "循环有 %{tags} 个字段，但值的个数 %{values} 不是它的整数倍。"
+    reserved_word:
+      en: "CIF does not allow %{word}."
+      zh-CN: "CIF 不允许使用 %{word}。"
+    save_frame_ignored:
+      en: "Skipped the save frame save_%{name}."
+      zh-CN: "已跳过保存帧 save_%{name}。"
+    duplicate_tag:
+      en: "%{tag} appears more than once; the first value is used."
+      zh-CN: "%{tag} 出现了不止一次，使用第一次的值。"
+    alias_conflict:
+      en: "%{used} and %{ignored} differ; %{used} is used."
+      zh-CN: "%{used} 与 %{ignored} 的值不同，使用 %{used}。"
+  block:
+    no_structure:
+      en: This data block has no cell parameters or atom sites and was skipped.
+      zh-CN: 这个数据块没有晶胞参数和原子位点，已跳过。
+  value:
+    invalid_number:
+      en: "%{tag} is %{text}, which is not a number."
+      zh-CN: "%{tag} 的值 %{text} 不是数字。"
+  cell:
+    missing_parameter:
+      en: "The cell parameter %{tag} is missing."
+      zh-CN: "缺少晶胞参数 %{tag}。"
+    angle_defaulted:
+      en: "%{tag} is not given and was taken as 90°."
+      zh-CN: "%{tag} 未给出，按 90° 处理。"
+    invalid:
+      en: The cell parameters form no cell; lengths must be positive and the angles must close a parallelepiped.
+      zh-CN: 晶胞参数无法构成晶胞：边长须为正数，三个夹角须能围成平行六面体。
+  symmetry:
+    invalid_operation:
+      component_count:
+        en: "The symmetry operation %{text} has %{count} components instead of 3."
+        zh-CN: "对称操作 %{text} 有 %{count} 个分量，应为 3 个。"
+      syntax:
+        en: "The symmetry operation %{text} is not of the form x+1/2, -y, z."
+        zh-CN: "对称操作 %{text} 不是 x+1/2, -y, z 这样的形式。"
+      non_integer:
+        en: "In the symmetry operation %{text}, the coefficients of x, y and z are not all integers."
+        zh-CN: "对称操作 %{text} 中 x、y、z 的系数不全是整数。"
+      decimal:
+        en: "In the symmetry operation %{text}, the translation %{value} matches no fraction such as 1/3."
+        zh-CN: "对称操作 %{text} 中的平移 %{value} 无法识别为 1/3 这样的分数。"
+    duplicate_operation:
+      en: "The symmetry operation %{text} is listed again; the repeat was ignored."
+      zh-CN: "对称操作 %{text} 重复列出，已忽略重复的一条。"
+    missing_identity:
+      en: The symmetry operations do not include the identity x,y,z.
+      zh-CN: 对称操作中缺少恒等操作 x,y,z。
+    singular:
+      en: "The symmetry operation %{op} is not invertible."
+      zh-CN: "对称操作 %{op} 不可逆。"
+    not_closed:
+      en: "The symmetry operations do not form a group: the product of %{a} and %{b} is not listed."
+      zh-CN: "对称操作不构成群：%{a} 与 %{b} 的乘积不在列表中。"
+    missing_operations:
+      en: "The file lists no symmetry operations. Generating them from the space group %{name} is not implemented yet."
+      zh-CN: "文件没有列出对称操作。由空间群 %{name} 生成对称操作尚未实现。"
+    missing_operations_and_group:
+      en: The file lists neither symmetry operations nor a space group.
+      zh-CN: 文件既没有列出对称操作，也没有给出空间群。
+    invalid_it_number:
+      en: "The space group number %{text} is not valid and was ignored."
+      zh-CN: "空间群号 %{text} 无效，已忽略。"
+  atom:
+    missing_sites:
+      en: There are no atom sites (no _atom_site_ loop).
+      zh-CN: 没有原子位点（缺少 _atom_site_ 循环）。
+    missing_tag:
+      en: "The atom sites lack %{tag}."
+      zh-CN: "原子位点缺少字段 %{tag}。"
+    cartesian_only:
+      en: The atom sites give only Cartesian coordinates, which are not supported yet.
+      zh-CN: 原子位点只给出了笛卡尔坐标，目前尚不支持。
+    missing_value:
+      en: "%{label} has no %{tag}."
+      zh-CN: "%{label} 缺少 %{tag}。"
+    duplicate_label:
+      en: "The label %{label} is used more than once."
+      zh-CN: "标签 %{label} 重复。"
+    element_from_label:
+      en: "%{count} atoms have no type symbol; their elements were taken from their labels."
+      zh-CN: "%{count} 个原子没有元素符号，已从标签推断元素。"
+    unknown_element:
+      en: "%{symbol} (%{label}) is not an element symbol; the atom is kept as unknown element X."
+      zh-CN: "%{symbol}（%{label}）不是元素符号，按未知元素 X 保留。"
+    invalid_occupancy:
+      en: "%{label} has occupancy %{value}; occupancies must be above 0."
+      zh-CN: "%{label} 的占位率为 %{value}，占位率必须大于 0。"
+    occupancy_above_one:
+      en: "%{label} has occupancy %{value}, above 1."
+      zh-CN: "%{label} 的占位率为 %{value}，大于 1。"
+    occupancy_assumed:
+      en: "%{count} atoms have no occupancy and were taken as fully occupied."
+      zh-CN: "%{count} 个原子没有给出占位率，按 1 处理。"
+    biso_converted:
+      en: "%{count} atoms give displacement parameters as B; they were converted to U = B / 8π²."
+      zh-CN: "%{count} 个原子的位移参数以 B 给出，已换算为 U = B / 8π²。"
+    dummy_skipped:
+      en: "%{label} is a dummy atom and was not imported."
+      zh-CN: "%{label} 是虚拟原子，未导入。"
+    aniso_unknown_label:
+      en: "Anisotropic displacement parameters are given for %{label}, which is not an atom site."
+      zh-CN: "各向异性位移参数引用了不存在的原子位点 %{label}。"
+    close_images:
+      en: "Equivalent atoms of %{label} are only %{distance} Å apart; the site probably belongs on a special position."
+      zh-CN: "%{label} 的等效原子相距仅 %{distance} Å，它可能应位于特殊位置上。"
+    multiplicity_mismatch:
+      en: "The file gives %{label} a multiplicity of %{file}, but its symmetry operations generate %{expanded} atoms."
+      zh-CN: "文件给出 %{label} 的多重度为 %{file}，按对称操作展开得到 %{expanded} 个原子。"
+    overlapping_sites:
+      en: "%{a} and %{b} are at the same position, and both are fully occupied."
+      zh-CN: "%{a} 与 %{b} 位置重合，而且都是满占位。"
+    shared_position:
+      en: "%{a} and %{b} share a position (mixed occupancy). They are still shown as two sites."
+      zh-CN: "%{a} 与 %{b} 位置相同（混合占位），目前仍作为两个位点显示。"
+    short_contact:
+      en: "Atoms of %{a} and %{b} are only %{distance} Å apart."
+      zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance} Å。"
+import:
+  unsupported:
+    en: "Couldn't open %{file}: only CIF files are supported so far."
+    zh-CN: "无法打开 %{file}：目前只支持 CIF 文件。"
+  unreadable:
+    en: "Couldn't read %{file}: %{reason}"
+    zh-CN: "无法读取 %{file}：%{reason}"
+  failed:
+    en: "Couldn't import %{file}: %{count} errors."
+    zh-CN: "无法导入 %{file}：%{count} 个错误。"
+  no_structure:
+    en: "%{file} contains no crystal structure."
+    zh-CN: "%{file} 中没有晶体结构。"
+  partly_failed:
+    en: "Imported %{imported} structures from %{file}; %{failed} could not be imported."
+    zh-CN: "已导入 %{file} 中的 %{imported} 个结构，另有 %{failed} 个无法导入。"
+  with_diagnostics:
+    en: "Imported %{file} with %{count} diagnostics. See the Diagnostics tab."
+    zh-CN: "已导入 %{file}，有 %{count} 条诊断信息，见“诊断”标签页。"
+  show_errors:
+    en: Show errors…
+    zh-CN: 查看错误…
+  errors:
+    title:
+      en: "Couldn't import %{file}"
+      zh-CN: "无法导入 %{file}"
+    block:
+      en: "Data block %{name}"
+      zh-CN: "数据块 %{name}"
+    close:
+      en: Close
+      zh-CN: 关闭

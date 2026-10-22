@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use mw_crystal::sample::SampleKey;
+use mw_crystal_io::ImportedBlock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectId(pub u32);
@@ -18,14 +21,44 @@ pub enum StructureOrigin {
     },
 }
 
+/// Where a structure's data is held.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StructureSource {
+    /// Mock: a built-in sample stands in for the structure a project file
+    /// would hold (M6).
+    Sample(SampleKey),
+    /// A data block read from a file in this session, with the diagnostics
+    /// of its import. Held in memory until project files exist (M6).
+    Imported(Arc<ImportedBlock>),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StructureEntry {
     pub id: StructureEntryId,
     pub name: String,
     pub origin: StructureOrigin,
-    /// Mock: the built-in sample that stands in for the file.
-    pub sample: SampleKey,
+    pub source: StructureSource,
+}
+
+/// A structure to add to the catalog, as [`ProjectCatalog::add_imported`]
+/// takes it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ImportedEntry {
+    pub name: String,
+    pub file_name: String,
+    pub block: Arc<ImportedBlock>,
+}
+
+impl ImportedEntry {
+    pub fn new(name: String, file_name: String, block: Arc<ImportedBlock>) -> Self {
+        Self {
+            name,
+            file_name,
+            block,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +73,8 @@ pub struct Project {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectCatalog {
     projects: Vec<Project>,
+    /// The project that collects files opened outside any project.
+    imports: Option<ProjectId>,
 }
 
 impl ProjectCatalog {
@@ -59,13 +94,13 @@ impl ProjectCatalog {
                             origin: StructureOrigin::Imported {
                                 file_name: "rutile.cif".into(),
                             },
-                            sample: SampleKey::Rutile,
+                            source: StructureSource::Sample(SampleKey::Rutile),
                         },
                         StructureEntry {
                             id: StructureEntryId(2),
                             name: "金红石 2×2×2 超胞".into(),
                             origin: StructureOrigin::Derived { from: rutile },
-                            sample: SampleKey::RutileSupercell,
+                            source: StructureSource::Sample(SampleKey::RutileSupercell),
                         },
                     ],
                 },
@@ -78,10 +113,11 @@ impl ProjectCatalog {
                         origin: StructureOrigin::Imported {
                             file_name: "SrTiO3.cif".into(),
                         },
-                        sample: SampleKey::StrontiumTitanate,
+                        source: StructureSource::Sample(SampleKey::StrontiumTitanate),
                     }],
                 },
             ],
+            imports: None,
         }
     }
 
@@ -98,6 +134,57 @@ impl ProjectCatalog {
                 .find(|entry| entry.id == id)
                 .map(|entry| (project, entry))
         })
+    }
+
+    /// Adds imported structures to the project that collects opened files,
+    /// creating it under `project_name` the first time. Returns the new
+    /// entries' ids in order.
+    ///
+    /// Mock: until there are project files and a "new project" flow (M6),
+    /// every opened file lands in this one in-memory project.
+    pub fn add_imported(
+        &mut self,
+        project_name: &str,
+        entries: impl IntoIterator<Item = ImportedEntry>,
+    ) -> Vec<StructureEntryId> {
+        let project_id = match self.imports {
+            Some(id) => id,
+            None => {
+                let id = ProjectId(self.projects.iter().map(|p| p.id.0).max().unwrap_or(0) + 1);
+                self.projects.push(Project {
+                    id,
+                    name: project_name.to_string(),
+                    structures: Vec::new(),
+                });
+                self.imports = Some(id);
+                id
+            }
+        };
+        let mut next = self
+            .projects
+            .iter()
+            .flat_map(|p| p.structures.iter().map(|s| s.id.0))
+            .max()
+            .unwrap_or(0);
+        let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) else {
+            return Vec::new();
+        };
+        entries
+            .into_iter()
+            .map(|entry| {
+                next += 1;
+                let id = StructureEntryId(next);
+                project.structures.push(StructureEntry {
+                    id,
+                    name: entry.name,
+                    origin: StructureOrigin::Imported {
+                        file_name: entry.file_name,
+                    },
+                    source: StructureSource::Imported(entry.block),
+                });
+                id
+            })
+            .collect()
     }
 
     /// The first structure of the first project, if any.
@@ -118,7 +205,10 @@ mod tests {
         let catalog = ProjectCatalog::sample();
         let (project, entry) = catalog.structure(StructureEntryId(3)).expect("SrTiO₃");
         assert_eq!(project.id, ProjectId(2));
-        assert_eq!(entry.sample, SampleKey::StrontiumTitanate);
+        assert_eq!(
+            entry.source,
+            StructureSource::Sample(SampleKey::StrontiumTitanate)
+        );
         assert!(catalog.structure(StructureEntryId(99)).is_none());
     }
 
@@ -134,5 +224,30 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count);
+    }
+
+    #[test]
+    fn imports_collect_in_one_new_project() {
+        let mut catalog = ProjectCatalog::sample();
+        let block = Arc::new(
+            mw_crystal_io::cif::read_str("data_x\n_cell_length_a 1\n")
+                .blocks
+                .remove(0),
+        );
+        let entry = |name: &str| ImportedEntry::new(name.into(), "x.cif".into(), block.clone());
+        let first = catalog.add_imported("Imported", [entry("a"), entry("b")]);
+        let second = catalog.add_imported("ignored", [entry("c")]);
+        assert_eq!(first, [StructureEntryId(4), StructureEntryId(5)]);
+        assert_eq!(second, [StructureEntryId(6)]);
+        assert_eq!(catalog.projects().len(), 3);
+        let (project, entry) = catalog.structure(StructureEntryId(6)).expect("added");
+        assert_eq!(project.name, "Imported");
+        assert_eq!(project.structures.len(), 3);
+        assert_eq!(
+            entry.origin,
+            StructureOrigin::Imported {
+                file_name: "x.cif".into()
+            }
+        );
     }
 }

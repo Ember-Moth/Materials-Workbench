@@ -3992,6 +3992,13 @@ name = "mw-crystal"
 version = "0.0.0"
 
 [[package]]
+name = "mw-crystal-io"
+version = "0.0.0"
+dependencies = [
+ "mw-crystal",
+]
+
+[[package]]
 name = "mw-crystal-render"
 version = "0.0.0"
 dependencies = [
@@ -4009,6 +4016,7 @@ version = "0.0.0"
 dependencies = [
  "gpui-kit",
  "mw-crystal",
+ "mw-crystal-io",
  "rust-i18n",
 ]
 
@@ -4018,6 +4026,7 @@ version = "0.0.0"
 dependencies = [
  "gpui-kit",
  "mw-crystal",
+ "mw-crystal-io",
  "mw-viewport",
  "rust-i18n",
 ]

@@ -8,6 +8,7 @@ use gpui_kit::component::{WindowExt, h_flex};
 use gpui_kit::*;
 use mw_crystal::EditMode;
 
+use crate::format;
 use crate::workspace::StructureWorkspace;
 
 /// Mock: tells the user a command exists but does nothing yet.
@@ -27,9 +28,15 @@ pub(crate) fn open_delete(workspace: &StructureWorkspace, window: &mut Window, c
     let count = workspace
         .document
         .derived
-        .site(site.id)
-        .map_or(1, |s| s.multiplicity);
-    let symbol = structure.space_group.hm_symbol.clone();
+        .multiplicity(site.id)
+        .unwrap_or(1);
+    let symbol: SharedString = match &structure.space_group.hm_symbol {
+        Some(symbol) => format::space_group(symbol).into(),
+        None => tr!(
+            "dialog.delete_atom.operations",
+            count = structure.symmetry.operations().len()
+        ),
+    };
 
     if structure.edit_mode() == EditMode::P1 || count == 1 {
         window.open_alert_dialog(cx, move |dialog, _, _| {
@@ -98,12 +105,7 @@ pub(crate) fn open_convert_to_p1(
         return;
     }
     let sites = document.structure.sites.len();
-    let atoms: u32 = document
-        .derived
-        .sites
-        .iter()
-        .map(|(_, s)| s.multiplicity)
-        .sum();
+    let atoms = document.derived.atoms_in_cell();
     window.open_alert_dialog(cx, move |dialog, _, _| {
         dialog
             .title(tr!("dialog.convert.title"))

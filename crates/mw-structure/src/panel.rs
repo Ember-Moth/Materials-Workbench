@@ -11,9 +11,8 @@ use gpui_kit::*;
 use mw_crystal::{Axis, CellParam, Constraint, CoordinateConstraint, CrystalSystem, EditMode};
 
 use crate::actions::ConvertToP1;
-use crate::dialogs;
-use crate::document::DiagnosticLevel;
 use crate::workspace::{PanelTab, StructureWorkspace};
+use crate::{dialogs, format};
 
 fn param_name(param: CellParam) -> &'static str {
     match param {
@@ -173,11 +172,12 @@ impl StructureWorkspace {
         let derived = &self.document.derived;
         let params = structure.lattice.params();
 
+        let analysis = derived.symmetry.as_ref();
         let cell_field = |param: CellParam| {
-            let note = match derived.cell.get(param) {
-                Constraint::Free => FieldNote::None,
-                Constraint::Equals(other) => FieldNote::Linked(param_name(other)),
-                Constraint::Fixed => FieldNote::Fixed,
+            let note = match analysis.map(|a| a.cell.get(param)) {
+                None | Some(Constraint::Free) => FieldNote::None,
+                Some(Constraint::Equals(other)) => FieldNote::Linked(param_name(other)),
+                Some(Constraint::Fixed) => FieldNote::Fixed,
             };
             let input = self
                 .cell_inputs
@@ -204,37 +204,70 @@ impl StructureWorkspace {
             })
         };
 
-        let cell = section(
-            tr!("panel.cell.title"),
-            Some(crystal_system_name(derived.crystal_system)),
-            cx,
-        )
-        .child(
-            h_flex().gap_2().children(
-                [CellParam::A, CellParam::B, CellParam::C]
-                    .into_iter()
-                    .filter_map(&cell_field),
-            ),
-        )
-        .child(
-            h_flex().gap_2().children(
-                [CellParam::Alpha, CellParam::Beta, CellParam::Gamma]
-                    .into_iter()
-                    .filter_map(&cell_field),
-            ),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(tr!(
-                    "panel.cell.summary",
-                    volume = format!("{:.2}", params.volume()),
-                    density = format!("{:.2}", derived.density)
+        let cell =
+            section(
+                tr!("panel.cell.title"),
+                Some(analysis.map_or_else(
+                    || tr!("panel.cell.system_not_computed"),
+                    |a| crystal_system_name(a.crystal_system),
                 )),
-        );
+                cx,
+            )
+            .child(
+                h_flex().gap_2().children(
+                    [CellParam::A, CellParam::B, CellParam::C]
+                        .into_iter()
+                        .filter_map(&cell_field),
+                ),
+            )
+            .child(
+                h_flex().gap_2().children(
+                    [CellParam::Alpha, CellParam::Beta, CellParam::Gamma]
+                        .into_iter()
+                        .filter_map(&cell_field),
+                ),
+            )
+            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                match derived.density {
+                    Some(density) => tr!(
+                        "panel.cell.summary",
+                        volume = format!("{:.2}", params.volume()),
+                        density = format!("{density:.2}")
+                    ),
+                    None => tr!(
+                        "panel.cell.volume",
+                        volume = format!("{:.2}", params.volume())
+                    ),
+                },
+            ))
+            .when(analysis.is_none(), |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(tr!("panel.cell.constraints_not_computed")),
+                )
+            });
 
         let mode = structure.edit_mode();
+        let row_label = |label: SharedString| {
+            div()
+                .w_24()
+                .flex_none()
+                .text_color(theme.muted_foreground)
+                .child(label)
+        };
+        let space_group = &structure.space_group;
+        let space_group_name = match (&space_group.hm_symbol, space_group.it_number) {
+            (Some(symbol), Some(number)) => tr!(
+                "panel.symmetry.space_group_value",
+                symbol = format::space_group(symbol),
+                number = number
+            ),
+            (Some(symbol), None) => format::space_group(symbol).into(),
+            (None, Some(number)) => tr!("panel.symmetry.space_group_number", number = number),
+            (None, None) => tr!("panel.symmetry.space_group_unnamed"),
+        };
         let symmetry = section(tr!("panel.symmetry.title"), None, cx).child(
             v_flex()
                 .gap_2()
@@ -242,16 +275,16 @@ impl StructureWorkspace {
                 .child(
                     h_flex()
                         .gap_3()
-                        .child(
-                            div()
-                                .w_24()
-                                .flex_none()
-                                .text_color(theme.muted_foreground)
-                                .child(tr!("panel.symmetry.space_group")),
-                        )
-                        .child(format!(
-                            "{} (No. {})",
-                            structure.space_group.hm_symbol, structure.space_group.it_number
+                        .child(row_label(tr!("panel.symmetry.space_group")))
+                        .child(space_group_name),
+                )
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .child(row_label(tr!("panel.symmetry.operations")))
+                        .child(tr!(
+                            "panel.symmetry.operation_count",
+                            count = structure.symmetry.operations().len()
                         )),
                 )
                 .child(
@@ -288,7 +321,15 @@ impl StructureWorkspace {
                                     )
                                 })),
                         }),
-                ),
+                )
+                .when(analysis.is_none(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(tr!("panel.symmetry.name_from_file")),
+                    )
+                }),
         );
 
         v_flex()
@@ -300,10 +341,9 @@ impl StructureWorkspace {
     fn render_selected_site(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let structure = &self.document.structure;
-        let selected = self
-            .selected_site
-            .and_then(|id| Some((structure.site(id)?, self.document.derived.site(id)?)));
-        let Some((site, symmetry)) = selected else {
+        let derived = &self.document.derived;
+        let selected = self.selected_site.and_then(|id| structure.site(id));
+        let Some(site) = selected else {
             return v_flex()
                 .p_4()
                 .text_sm()
@@ -311,11 +351,12 @@ impl StructureWorkspace {
                 .child(tr!("panel.site.none"));
         };
 
+        let symmetry = derived.site_symmetry(site.id);
         let coordinate = |axis: usize| {
-            let note = match symmetry.coordinates[axis] {
-                CoordinateConstraint::Free => FieldNote::None,
-                CoordinateConstraint::Follows(other) => FieldNote::Linked(axis_name(other)),
-                CoordinateConstraint::Fixed => FieldNote::Fixed,
+            let note = match symmetry.map(|s| s.coordinates[axis]) {
+                None | Some(CoordinateConstraint::Free) => FieldNote::None,
+                Some(CoordinateConstraint::Follows(other)) => FieldNote::Linked(axis_name(other)),
+                Some(CoordinateConstraint::Fixed) => FieldNote::Fixed,
             };
             field(
                 ["x", "y", "z"][axis].into(),
@@ -332,18 +373,23 @@ impl StructureWorkspace {
 
         section(
             tr!("panel.site.title", label = site.label().to_string()),
-            Some(tr!("panel.site.atoms", count = symmetry.multiplicity)),
+            derived
+                .multiplicity(site.id)
+                .map(|count| tr!("panel.site.atoms", count = count)),
             cx,
         )
         .child(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(tr!(
-                    "panel.site.wyckoff",
-                    wyckoff = symmetry.wyckoff.clone(),
-                    form = symmetry.coordinate_form.clone()
-                )),
+                .child(match symmetry {
+                    Some(symmetry) => tr!(
+                        "panel.site.wyckoff",
+                        wyckoff = symmetry.wyckoff.clone(),
+                        form = symmetry.coordinate_form.clone()
+                    ),
+                    None => tr!("panel.site.wyckoff_not_computed"),
+                }),
         )
         .child(h_flex().gap_2().children([0, 1, 2].map(coordinate)))
         .child(
@@ -407,13 +453,15 @@ impl StructureWorkspace {
         let structure = &self.document.structure;
         let rows = structure.sites.iter().map(|site| {
             let id = site.id;
-            let symmetry = self.document.derived.site(id);
+            let derived = &self.document.derived;
+            let wyckoff = derived.site_symmetry(id).map(|s| s.wyckoff.clone());
+            let count = derived.multiplicity(id).unwrap_or_default();
             let occupant = site.occupants.first();
             let element = occupant
                 .map(|o| o.species.element.clone())
                 .unwrap_or_default();
             let occupancy = occupant.map_or(1.0, |o| o.occupancy.value());
-            let coordinates = site.position.map(crate::format::coordinate).join(", ");
+            let coordinates = site.position.map(format::coordinate).join(", ");
             ListItem::new(("site", id.0 as usize))
                 .selected(self.selected_site == Some(id))
                 .on_click(cx.listener(move |this, _, window, cx| this.select_site(id, window, cx)))
@@ -425,17 +473,21 @@ impl StructureWorkspace {
                             h_flex()
                                 .gap_2()
                                 .child(div().font_medium().child(site.label().to_string()))
-                                .children(symmetry.map(|s| {
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child(tr!(
+                                .child(div().text_xs().text_color(theme.muted_foreground).child(
+                                    match wyckoff {
+                                        Some(wyckoff) => tr!(
                                             "panel.sites.row",
                                             element = element.clone(),
-                                            wyckoff = s.wyckoff.clone(),
-                                            count = s.multiplicity
-                                        ))
-                                })),
+                                            wyckoff = wyckoff,
+                                            count = count
+                                        ),
+                                        None => tr!(
+                                            "panel.sites.row_without_wyckoff",
+                                            element = element.clone(),
+                                            count = count
+                                        ),
+                                    },
+                                )),
                         )
                         .child(
                             h_flex()
@@ -444,7 +496,7 @@ impl StructureWorkspace {
                                 .font_family(theme.mono_font_family.clone())
                                 .text_color(theme.muted_foreground)
                                 .child(coordinates)
-                                .child(crate::format::occupancy(occupancy)),
+                                .child(format::occupancy(occupancy)),
                         ),
                 )
         });
@@ -534,29 +586,10 @@ impl StructureWorkspace {
 
     fn render_diagnostics(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let rows = self.document.diagnostics.iter().map(|d| {
-            let (icon, color) = match d.level {
-                DiagnosticLevel::Info => (IconName::Info, theme.info),
-                DiagnosticLevel::Warning => (IconName::TriangleAlert, theme.warning),
-            };
-            h_flex()
-                .items_start()
-                .gap_2()
-                .px_2()
-                .py_1p5()
-                .text_sm()
-                .child(
-                    div()
-                        .pt_0p5()
-                        .text_color(color)
-                        .child(Icon::new(icon).small()),
-                )
-                .child(div().flex_1().child(d.message.clone()))
-        });
         v_flex()
             .p_2()
             .gap_1()
-            .children(rows)
+            .children(self.document.diagnostics.iter().map(|d| d.row()))
             .when(self.document.diagnostics.is_empty(), |this| {
                 this.child(
                     div()

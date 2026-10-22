@@ -8,6 +8,7 @@ publish = false
 
 [workspace.dependencies]
 mw-crystal = { path = "crates/mw-crystal" }
+mw-crystal-io = { path = "crates/mw-crystal-io" }
 mw-crystal-render = { path = "crates/mw-crystal-render" }
 mw-project = { path = "crates/mw-project" }
 mw-structure = { path = "crates/mw-structure" }

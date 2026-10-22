@@ -1,0 +1,44 @@
+#-----------------------------------------------------------------------------
+# Zincite, ZnO (P 63 m c, No. 186): legacy _symmetry_* field names,
+# decimal translations, Biso, and elements given only by the labels.
+# Hand-written test fixture for Materials Workbench (mw-crystal-io).
+# Values are commonly cited literature parameters, typed in by hand;
+# nothing is copied from a database.
+#-----------------------------------------------------------------------------
+
+data_zincite
+_chemical_name_mineral            Zincite
+_symmetry_cell_setting            hexagonal
+_symmetry_space_group_name_H-M    'P 63 m c'
+_symmetry_Int_Tables_number       186
+_cell_length_a                    3.2498
+_cell_length_b                    3.2498
+_cell_length_c                    5.2066
+_cell_angle_alpha                 90
+_cell_angle_beta                  90
+_cell_angle_gamma                 120
+
+loop_
+_symmetry_equiv_pos_site_id
+_symmetry_equiv_pos_as_xyz
+1 x,y,z
+2 x-y,x,z+0.5
+3 -y,-x,z
+4 -y,x-y,z
+5 -x,-x+y,z+0.5
+6 x-y,-y,z+0.5
+7 -x,-y,z+0.5
+8 -x+y,y,z
+9 x,x-y,z
+10 y,-x+y,z+0.5
+11 -x+y,-x,z
+12 y,x,z+0.5
+
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_B_iso_or_equiv
+Zn1 0.33333 0.66667 0      0.57
+O1  0.33333 0.66667 0.3819 0.68

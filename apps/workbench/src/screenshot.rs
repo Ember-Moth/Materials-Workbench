@@ -8,6 +8,7 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use mw_project::StructureEntryId;
+use mw_structure::import::OpenedFile;
 
 use crate::workbench::Workbench;
 use crate::{palette, settings};
@@ -16,6 +17,13 @@ use crate::{palette, settings};
 const SETTLE: Duration = Duration::from_millis(1500);
 
 type Step = fn(&mut Workbench, &mut Window, &mut Context<Workbench>);
+
+/// A CIF from the importer's test fixtures.
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/mw-crystal-io/tests/fixtures")
+        .join(name)
+}
 
 const TOUR: &[(&str, Step)] = &[
     ("01-main", |_, _, _| {}),
@@ -45,12 +53,43 @@ const TOUR: &[(&str, Step)] = &[
     ("08-supercell", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(2), window, cx);
     }),
-    ("09-settings", |_, window, cx| settings::open(window, cx)),
-    ("10-no-sidebar", |workbench, window, cx| {
+    // Opening files goes through the same path as the file dialog and drops.
+    // Several at once, as when dropping a selection: the first opens, the
+    // rest join the "imported files" project.
+    ("09-import-files", |workbench, window, cx| {
+        let files = [
+            "bst_su_aniso.cif",
+            "rutile.cif",
+            "SrTiO3.cif",
+            "multi_block.cif",
+        ];
+        workbench.import_paths(files.map(fixture).to_vec(), window, cx);
+    }),
+    // Entry 5 is the imported rutile, after the three samples and BST.
+    ("10-imported-rutile", |workbench, window, cx| {
+        workbench.open_structure(StructureEntryId(5), window, cx);
+    }),
+    ("11-import-zincite", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
+    }),
+    ("12-import-diagnostics", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
+    }),
+    ("13-import-failed", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("malformed.cif")], window, cx);
+    }),
+    ("14-import-errors", |_, window, cx| {
+        OpenedFile::read(fixture("malformed.cif")).show_errors(window, cx);
+    }),
+    ("15-settings", |_, window, cx| {
+        window.close_dialog(cx);
+        settings::open(window, cx)
+    }),
+    ("16-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    ("11-empty", |workbench, window, cx| {
+    ("17-empty", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
         workbench.close_structure(window, cx);
     }),

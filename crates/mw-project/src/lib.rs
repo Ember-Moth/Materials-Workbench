@@ -1,8 +1,9 @@
 //! Projects: the catalog of projects and their structures, and the sidebar
 //! that navigates it.
 //!
-//! The catalog is in memory and filled from built-in samples until project
-//! files exist (see `docs/architecture.md`, "Mocks").
+//! The catalog is in memory: built-in samples stand in for project files,
+//! and opened files are added to it for the session (see
+//! `docs/architecture.md`, "Mocks").
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -17,6 +18,7 @@ mod catalog;
 mod sidebar;
 
 pub use catalog::{
-    Project, ProjectCatalog, ProjectId, StructureEntry, StructureEntryId, StructureOrigin,
+    ImportedEntry, Project, ProjectCatalog, ProjectId, StructureEntry, StructureEntryId,
+    StructureOrigin, StructureSource,
 };
 pub use sidebar::{ProjectSidebar, ProjectSidebarEvent};

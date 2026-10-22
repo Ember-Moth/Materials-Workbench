@@ -1,0 +1,47 @@
+#------------------------------------------------------------------------------
+# Three data blocks: a publication block without a structure, a structure in
+# P1 named only by its space group, and one that lists no operations.
+# Hand-written test fixture for Materials Workbench (mw-crystal-io).
+#------------------------------------------------------------------------------
+
+data_global
+_journal_name_full                'Materials Workbench test fixtures'
+_publ_section_title
+;
+Several structures in one file
+;
+
+data_CsCl_P1
+_chemical_formula_sum             'Cl Cs'
+_space_group_name_H-M_alt         'P 1'
+_cell_length_a                    4.123
+_cell_length_b                    4.123
+_cell_length_c                    4.123
+_cell_angle_alpha                 90
+_cell_angle_beta                  90
+_cell_angle_gamma                 90
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Cs1 Cs 0   0   0
+Cl1 Cl 0.5 0.5 0.5
+
+data_copper
+_space_group_name_H-M_alt         'F m -3 m'
+_space_group_IT_number            225
+_cell_length_a                    3.615
+_cell_length_b                    3.615
+_cell_length_c                    3.615
+_cell_angle_alpha                 90
+_cell_angle_beta                  90
+_cell_angle_gamma                 90
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Cu1 Cu 0 0 0

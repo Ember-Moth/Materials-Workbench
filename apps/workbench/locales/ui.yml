@@ -47,8 +47,8 @@ empty:
     en: Open a structure
     zh-CN: 打开一个结构
   description:
-    en: Pick one from a project on the left, or open a CIF, POSCAR or extended XYZ file. You can also drop files onto the window.
-    zh-CN: 从左侧项目中选择，或打开 CIF、POSCAR、扩展 XYZ 文件。也可以把文件直接拖进窗口。
+    en: Pick one from a project on the left, or open a CIF file. You can also drop files onto the window.
+    zh-CN: 从左侧项目中选择，或打开 CIF 文件。也可以把文件直接拖进窗口。
   open_file:
     en: Open File…
     zh-CN: 打开文件…
@@ -68,10 +68,15 @@ settings:
   not_saved:
     en: These choices are not saved yet and reset when the app restarts.
     zh-CN: 这些选择暂不保存，重启应用后会恢复默认。
+project:
+  imported:
+    en: Imported files
+    zh-CN: 导入的文件
+open:
+  unavailable:
+    en: "The file dialog could not be opened: %{reason}"
+    zh-CN: "无法打开文件对话框：%{reason}"
 feature:
-  open_file:
-    en: Opening files
-    zh-CN: 打开文件
   new_project:
     en: New projects
     zh-CN: 新建项目

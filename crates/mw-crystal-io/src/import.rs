@@ -1,0 +1,873 @@
+//! CIF semantics: one data block to one [`Structure`] (design §9.1).
+//!
+//! Reads the cell, the symmetry operations, the space group name and the
+//! atom sites with their ADPs and disorder, under the current or the legacy
+//! (`_symmetry_*`) field names. Anything that breaks a hard constraint is an
+//! error and the block yields no structure; everything the importer decides
+//! on the user's behalf is reported.
+//!
+//! Mock: design §9.1 also normalizes — snaps atoms onto special positions
+//! and merges rows into mixed occupancy — which needs site symmetry (M2);
+//! until then `check_geometry` only reports the likely cases. Unrecognized
+//! fields are not kept for export yet (M5).
+
+use std::collections::{HashMap, HashSet};
+use std::f64::consts::PI;
+
+use mw_crystal::{
+    Adp, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId, SpaceGroup, Species,
+    Structure, SymOp, Symmetry, SymmetryError, UNKNOWN_ELEMENT, element,
+};
+
+use crate::diagnostic::{Diagnostic, DiagnosticKind, Severity};
+use crate::number;
+use crate::syntax::{Block, Item, Value};
+
+const SYMOP_TAGS: [&str; 2] = [
+    "_space_group_symop_operation_xyz",
+    "_symmetry_equiv_pos_as_xyz",
+];
+const HM_TAGS: [&str; 2] = [
+    "_space_group_name_h-m_alt",
+    "_symmetry_space_group_name_h-m",
+];
+const IT_NUMBER_TAGS: [&str; 2] = ["_space_group_it_number", "_symmetry_int_tables_number"];
+const LENGTH_TAGS: [&str; 3] = ["_cell_length_a", "_cell_length_b", "_cell_length_c"];
+const ANGLE_TAGS: [&str; 3] = ["_cell_angle_alpha", "_cell_angle_beta", "_cell_angle_gamma"];
+const ADP_U_TAGS: [&str; 6] = [
+    "_atom_site_aniso_u_11",
+    "_atom_site_aniso_u_22",
+    "_atom_site_aniso_u_33",
+    "_atom_site_aniso_u_12",
+    "_atom_site_aniso_u_13",
+    "_atom_site_aniso_u_23",
+];
+const ADP_B_TAGS: [&str; 6] = [
+    "_atom_site_aniso_b_11",
+    "_atom_site_aniso_b_22",
+    "_atom_site_aniso_b_33",
+    "_atom_site_aniso_b_12",
+    "_atom_site_aniso_b_13",
+    "_atom_site_aniso_b_23",
+];
+
+/// How far an occupancy may exceed 1 before it is reported; refinements
+/// often end slightly above.
+const OCCUPANCY_TOLERANCE: f64 = 0.01;
+
+/// U = B / 8π².
+fn b_to_u(b: Measured) -> Measured {
+    let factor = 8.0 * PI * PI;
+    match b.su() {
+        Some(su) => Measured::with_su(b.value() / factor, su / factor),
+        None => Measured::exact(b.value() / factor),
+    }
+}
+
+/// A category's values as rows, from a loop or from single pairs.
+struct Table<'a> {
+    columns: HashMap<&'a str, usize>,
+    rows: Vec<Vec<&'a Value>>,
+    line: u32,
+}
+
+impl<'a> Table<'a> {
+    fn get(&self, row: &[&'a Value], tag: &str) -> Option<&'a Value> {
+        self.columns.get(tag).map(|&column| row[column])
+    }
+
+    fn has(&self, tag: &str) -> bool {
+        self.columns.contains_key(tag)
+    }
+}
+
+/// Lookup of a block's values by tag.
+struct Fields<'a> {
+    block: &'a Block,
+}
+
+impl<'a> Fields<'a> {
+    fn has(&self, tag: &str) -> bool {
+        self.values(tag).is_some()
+    }
+
+    /// The values of a tag: one for a pair, a column for a loop.
+    fn values(&self, tag: &str) -> Option<Vec<&'a Value>> {
+        self.block.items.iter().find_map(|item| match item {
+            Item::Pair { tag: t, value } => (t.name == tag).then(|| vec![value]),
+            Item::Loop(table) => table
+                .column(tag)
+                .map(|column| table.rows().map(|row| &row[column]).collect()),
+        })
+    }
+
+    fn value(&self, tag: &str) -> Option<&'a Value> {
+        self.values(tag)?.into_iter().next()
+    }
+
+    /// The first of several names for one field that is present. Reports
+    /// another name that is also present with a different value.
+    fn alias(
+        &self,
+        tags: &[&'static str],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<&'static str> {
+        let present: Vec<(&'static str, Vec<&Value>)> = tags
+            .iter()
+            .filter_map(|tag| Some((*tag, self.values(tag)?)))
+            .collect();
+        let (used, used_values) = present.first()?;
+        let texts = |values: &[&Value]| values.iter().map(|v| v.text.clone()).collect::<Vec<_>>();
+        for (ignored, values) in &present[1..] {
+            if texts(values) != texts(used_values) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticKind::AliasConflict {
+                        used: (*used).to_string(),
+                        ignored: (*ignored).to_string(),
+                    },
+                    values.first().map(|v| v.line),
+                ));
+            }
+        }
+        Some(used)
+    }
+
+    /// The rows of the category that `anchor` belongs to. In a loop, that
+    /// loop; as pairs, every pair whose tag starts with `prefix` but not
+    /// with `exclude`.
+    fn table(&self, anchor: &str, prefix: &str, exclude: Option<&str>) -> Option<Table<'a>> {
+        for item in &self.block.items {
+            match item {
+                Item::Loop(table) if table.column(anchor).is_some() => {
+                    return Some(Table {
+                        columns: table
+                            .tags
+                            .iter()
+                            .enumerate()
+                            .map(|(i, tag)| (tag.name.as_str(), i))
+                            .collect(),
+                        rows: table.rows().map(|row| row.iter().collect()).collect(),
+                        line: table.line,
+                    });
+                }
+                Item::Pair { tag, .. } if tag.name == anchor => {
+                    let mut columns = HashMap::new();
+                    let mut row = Vec::new();
+                    for item in &self.block.items {
+                        if let Item::Pair { tag, value } = item
+                            && tag.name.starts_with(prefix)
+                            && !exclude.is_some_and(|e| tag.name.starts_with(e))
+                        {
+                            columns.insert(tag.name.as_str(), row.len());
+                            row.push(value);
+                        }
+                    }
+                    return Some(Table {
+                        columns,
+                        rows: vec![row],
+                        line: tag.line,
+                    });
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// A number field: `Ok(None)` for `?` and `.`, an error diagnostic for text
+/// that is no number.
+fn number(
+    value: &Value,
+    tag: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<Measured>, ()> {
+    if value.is_missing() {
+        return Ok(None);
+    }
+    match number::parse(&value.text) {
+        Some(measured) => Ok(Some(measured)),
+        None => {
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::InvalidNumber {
+                    tag: tag.to_string(),
+                    text: value.text.clone(),
+                },
+                value.line,
+            ));
+            Err(())
+        }
+    }
+}
+
+/// Interprets one data block. The structure is `None` when any diagnostic,
+/// including a syntax error in the block, is an error.
+pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
+    let mut diagnostics = block.diagnostics.clone();
+    let fields = Fields { block };
+    let has_cell = LENGTH_TAGS.iter().any(|tag| fields.has(tag));
+    let has_atoms = [
+        "_atom_site_label",
+        "_atom_site_fract_x",
+        "_atom_site_cartn_x",
+    ]
+    .iter()
+    .any(|tag| fields.has(tag));
+    if !has_cell && !has_atoms {
+        diagnostics.push(Diagnostic::at(DiagnosticKind::NoStructure, block.line));
+        return (None, diagnostics);
+    }
+
+    let lattice = read_cell(&fields, block.line, &mut diagnostics);
+    let space_group = read_space_group(&fields, &mut diagnostics);
+    let symmetry = read_symmetry(&fields, &space_group, block.line, &mut diagnostics);
+    let sites = read_sites(&fields, block.line, &mut diagnostics);
+
+    let structure = match (lattice, symmetry, sites) {
+        (Some(lattice), Some(symmetry), Some(sites))
+            if !diagnostics.iter().any(|d| d.severity() == Severity::Error) =>
+        {
+            let structure =
+                Structure::new(lattice, symmetry, sites.sites).with_space_group(space_group);
+            check_geometry(&structure, &sites.rows, &mut diagnostics);
+            Some(structure)
+        }
+        _ => None,
+    };
+    // Stable: diagnostics on one line keep the order they were found in.
+    diagnostics.sort_by_key(|d| d.line().unwrap_or(u32::MAX));
+    (structure, diagnostics)
+}
+
+fn read_cell(
+    fields: &Fields,
+    block_line: u32,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Lattice> {
+    let mut lengths = [Measured::exact(0.0); 3];
+    let mut complete = true;
+    for (length, tag) in lengths.iter_mut().zip(LENGTH_TAGS) {
+        let value = fields.value(tag);
+        match value.map(|v| number(v, tag, diagnostics)) {
+            Some(Ok(Some(measured))) => *length = measured,
+            Some(Err(())) => complete = false,
+            Some(Ok(None)) | None => {
+                complete = false;
+                diagnostics.push(Diagnostic::at(
+                    DiagnosticKind::MissingCellParameter {
+                        tag: tag.to_string(),
+                    },
+                    value.map_or(block_line, |v| v.line),
+                ));
+            }
+        }
+    }
+    let mut angles = [Measured::exact(90.0); 3];
+    for (angle, tag) in angles.iter_mut().zip(ANGLE_TAGS) {
+        let value = fields.value(tag);
+        match value.map(|v| number(v, tag, diagnostics)) {
+            Some(Ok(Some(measured))) => *angle = measured,
+            Some(Err(())) => complete = false,
+            // The core dictionary's default for cell angles is 90°.
+            Some(Ok(None)) | None => diagnostics.push(Diagnostic::at(
+                DiagnosticKind::AngleDefaulted {
+                    tag: tag.to_string(),
+                },
+                value.map_or(block_line, |v| v.line),
+            )),
+        }
+    }
+    if !complete {
+        return None;
+    }
+    let [a, b, c] = lengths;
+    let [alpha, beta, gamma] = angles;
+    let params = CellParams {
+        a,
+        b,
+        c,
+        alpha,
+        beta,
+        gamma,
+    };
+    if !params.is_valid() {
+        let line = fields.value(LENGTH_TAGS[0]).map_or(block_line, |v| v.line);
+        diagnostics.push(Diagnostic::at(DiagnosticKind::InvalidCell, line));
+        return None;
+    }
+    Some(Lattice::new(params))
+}
+
+fn read_space_group(fields: &Fields, diagnostics: &mut Vec<Diagnostic>) -> SpaceGroup {
+    let hm_symbol = fields
+        .alias(&HM_TAGS, diagnostics)
+        .and_then(|tag| fields.value(tag))
+        .filter(|v| !v.is_missing())
+        .map(|v| v.text.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let it_number = fields
+        .alias(&IT_NUMBER_TAGS, diagnostics)
+        .and_then(|tag| fields.value(tag))
+        .filter(|v| !v.is_missing())
+        .and_then(|v| match v.text.parse::<u16>() {
+            Ok(n) if (1..=230).contains(&n) => Some(n),
+            _ => {
+                diagnostics.push(Diagnostic::at(
+                    DiagnosticKind::InvalidItNumber {
+                        text: v.text.clone(),
+                    },
+                    v.line,
+                ));
+                None
+            }
+        });
+    SpaceGroup::new(hm_symbol, it_number)
+}
+
+fn is_p1(space_group: &SpaceGroup) -> bool {
+    space_group.it_number == Some(1)
+        || space_group.hm_symbol.as_deref().is_some_and(|symbol| {
+            symbol
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+                .eq_ignore_ascii_case("P1")
+        })
+}
+
+fn read_symmetry(
+    fields: &Fields,
+    space_group: &SpaceGroup,
+    block_line: u32,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Symmetry> {
+    let Some(tag) = fields.alias(&SYMOP_TAGS, diagnostics) else {
+        // Mock: design §4.4 falls back to the Hall symbol, the H-M symbol
+        // and the IT number, which needs their tables (M2). Only P1 is known.
+        if is_p1(space_group) {
+            return Some(Symmetry::p1());
+        }
+        let name = space_group
+            .hm_symbol
+            .clone()
+            .or_else(|| space_group.it_number.map(|n| n.to_string()));
+        diagnostics.push(Diagnostic::at(
+            DiagnosticKind::MissingSymops { name },
+            block_line,
+        ));
+        return None;
+    };
+    let values = fields.values(tag).unwrap_or_default();
+    let mut operations: Vec<(SymOp, &Value)> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut valid = true;
+    for value in values {
+        match SymOp::parse(&value.text) {
+            Ok(op) if !seen.insert(op) => diagnostics.push(Diagnostic::at(
+                DiagnosticKind::DuplicateSymop {
+                    text: value.text.clone(),
+                },
+                value.line,
+            )),
+            Ok(op) => operations.push((op, value)),
+            Err(error) => {
+                valid = false;
+                diagnostics.push(Diagnostic::at(
+                    DiagnosticKind::InvalidSymop {
+                        text: value.text.clone(),
+                        error,
+                    },
+                    value.line,
+                ));
+            }
+        }
+    }
+    if !valid {
+        return None;
+    }
+    let first_line = operations.first().map_or(block_line, |(_, v)| v.line);
+    match Symmetry::new(operations.iter().map(|(op, _)| *op).collect()) {
+        Ok(symmetry) => Some(symmetry),
+        Err(error) => {
+            let involved: Vec<usize> = match error {
+                SymmetryError::MissingIdentity => Vec::new(),
+                SymmetryError::Singular(i) => vec![i],
+                SymmetryError::Duplicate(a, b) | SymmetryError::NotClosed(a, b) => vec![a, b],
+            };
+            let line = involved
+                .first()
+                .map_or(first_line, |&i| operations[i].1.line);
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::InvalidSymmetry {
+                    error,
+                    operations: involved
+                        .iter()
+                        .map(|&i| operations[i].1.text.clone())
+                        .collect(),
+                },
+                line,
+            ));
+            None
+        }
+    }
+}
+
+/// The element and oxidation state a type symbol such as `Fe3+` or `O2-`
+/// names, or `None` if it names no element.
+fn parse_type_symbol(text: &str) -> Option<(String, Option<i8>)> {
+    let letters: String = text.chars().take_while(char::is_ascii_alphabetic).collect();
+    let rest = &text[letters.len()..];
+    let element = element_from_letters(&letters)?;
+    // Charge as `3+`, `+3`, `+` or `2-`; anything else is not a charge.
+    let oxidation = {
+        let (digits, sign) = if let Some(digits) = rest.strip_suffix(['+', '-']) {
+            (digits, rest.chars().last())
+        } else if let Some(digits) = rest.strip_prefix(['+', '-']) {
+            (digits, rest.chars().next())
+        } else {
+            ("", None)
+        };
+        match (sign, digits) {
+            (Some(sign), digits) if digits.chars().all(|c| c.is_ascii_digit()) => {
+                let magnitude: i8 = if digits.is_empty() {
+                    1
+                } else {
+                    digits.parse().ok()?
+                };
+                Some(if sign == '-' { -magnitude } else { magnitude })
+            }
+            _ => None,
+        }
+    };
+    Some((element, oxidation))
+}
+
+/// The element a symbol or label starts with: a two-letter symbol when its
+/// second letter is lowercase (`Ca1` is calcium), otherwise a one-letter
+/// symbol (`CA1` is carbon), otherwise a capitalized two-letter one (`FE`).
+/// `D` (deuterium) is hydrogen.
+fn element_from_letters(letters: &str) -> Option<String> {
+    let mut chars = letters.chars();
+    let first = chars.next()?.to_ascii_uppercase();
+    let second = chars.next();
+    if let Some(second) = second.filter(char::is_ascii_lowercase) {
+        let symbol = format!("{first}{second}");
+        if element::is_element(&symbol) {
+            return Some(symbol);
+        }
+    }
+    if first == 'D' {
+        return Some("H".into());
+    }
+    let symbol = first.to_string();
+    if element::is_element(&symbol) {
+        return Some(symbol);
+    }
+    let symbol = format!("{first}{}", second?.to_ascii_lowercase());
+    element::is_element(&symbol).then_some(symbol)
+}
+
+/// Sites read from the atom site loop, and per site the source line and
+/// the multiplicity the file states.
+struct SiteRows {
+    sites: Vec<Site>,
+    rows: HashMap<SiteId, (u32, Option<u32>)>,
+}
+
+fn read_aniso(
+    fields: &Fields,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> HashMap<String, (Adp, bool, u32)> {
+    let mut adps = HashMap::new();
+    let Some(table) = fields.table("_atom_site_aniso_label", "_atom_site_aniso_", None) else {
+        return adps;
+    };
+    let (tags, is_b) = if table.has(ADP_U_TAGS[0]) {
+        (ADP_U_TAGS, false)
+    } else if table.has(ADP_B_TAGS[0]) {
+        (ADP_B_TAGS, true)
+    } else {
+        return adps;
+    };
+    for row in &table.rows {
+        let Some(label) = table.get(row, "_atom_site_aniso_label") else {
+            continue;
+        };
+        let mut components = [Measured::exact(0.0); 6];
+        let mut complete = true;
+        for (component, tag) in components.iter_mut().zip(tags) {
+            match table.get(row, tag).map(|v| number(v, tag, diagnostics)) {
+                Some(Ok(Some(m))) => *component = if is_b { b_to_u(m) } else { m },
+                // An unknown component leaves the atom isotropic.
+                _ => complete = false,
+            }
+        }
+        if complete {
+            adps.insert(
+                label.text.clone(),
+                (Adp::Anisotropic(components), is_b, label.line),
+            );
+        }
+    }
+    adps
+}
+
+fn read_sites(
+    fields: &Fields,
+    block_line: u32,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<SiteRows> {
+    let Some(table) = fields.table(
+        "_atom_site_fract_x",
+        "_atom_site_",
+        Some("_atom_site_aniso_"),
+    ) else {
+        let kind = if fields.has("_atom_site_cartn_x") {
+            DiagnosticKind::CartesianOnly
+        } else {
+            DiagnosticKind::MissingAtomSites
+        };
+        diagnostics.push(Diagnostic::at(kind, block_line));
+        return None;
+    };
+    let required = [
+        "_atom_site_label",
+        "_atom_site_fract_x",
+        "_atom_site_fract_y",
+        "_atom_site_fract_z",
+    ];
+    let missing: Vec<_> = required.iter().filter(|tag| !table.has(tag)).collect();
+    for tag in &missing {
+        diagnostics.push(Diagnostic::at(
+            DiagnosticKind::MissingAtomTag {
+                tag: tag.to_string(),
+            },
+            table.line,
+        ));
+    }
+    if !missing.is_empty() {
+        return None;
+    }
+
+    let mut aniso = read_aniso(fields, diagnostics);
+    let mut sites = Vec::new();
+    let mut rows = HashMap::new();
+    let mut labels = HashSet::new();
+    let mut from_label = 0;
+    let mut occupancy_assumed = 0;
+    let mut b_converted = 0;
+    let mut valid = true;
+
+    for row in &table.rows {
+        let label_value = table.get(row, "_atom_site_label").expect("required");
+        let line = label_value.line;
+        let label = label_value.text.clone();
+        if label_value.is_missing() {
+            valid = false;
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::MissingAtomValue {
+                    label,
+                    tag: "_atom_site_label".into(),
+                },
+                line,
+            ));
+            continue;
+        }
+        if table
+            .get(row, "_atom_site_calc_flag")
+            .is_some_and(|v| v.text.eq_ignore_ascii_case("dum"))
+        {
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::DummyAtomSkipped { label },
+                line,
+            ));
+            continue;
+        }
+        if !labels.insert(label.clone()) {
+            valid = false;
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::DuplicateLabel { label },
+                line,
+            ));
+            continue;
+        }
+
+        let mut position = [0.0; 3];
+        for (coordinate, tag) in position.iter_mut().zip(&required[1..]) {
+            let value = table.get(row, tag).expect("required");
+            match number(value, tag, diagnostics) {
+                Ok(Some(m)) => *coordinate = m.value(),
+                Ok(None) => {
+                    valid = false;
+                    diagnostics.push(Diagnostic::at(
+                        DiagnosticKind::MissingAtomValue {
+                            label: label.clone(),
+                            tag: tag.to_string(),
+                        },
+                        value.line,
+                    ));
+                }
+                Err(()) => valid = false,
+            }
+        }
+
+        let species = match table
+            .get(row, "_atom_site_type_symbol")
+            .filter(|v| !v.is_missing())
+        {
+            Some(symbol) => match parse_type_symbol(&symbol.text) {
+                Some((element, oxidation)) => Species::new(&element, oxidation, &symbol.text),
+                None => {
+                    diagnostics.push(Diagnostic::at(
+                        DiagnosticKind::UnknownElement {
+                            label: label.clone(),
+                            symbol: symbol.text.clone(),
+                        },
+                        symbol.line,
+                    ));
+                    Species::new(UNKNOWN_ELEMENT, None, &symbol.text)
+                }
+            },
+            None => {
+                let letters: String = label
+                    .chars()
+                    .take_while(char::is_ascii_alphabetic)
+                    .collect();
+                match element_from_letters(&letters) {
+                    Some(element) => {
+                        from_label += 1;
+                        Species::new(&element, None, &element)
+                    }
+                    None => {
+                        diagnostics.push(Diagnostic::at(
+                            DiagnosticKind::UnknownElement {
+                                label: label.clone(),
+                                symbol: label.clone(),
+                            },
+                            line,
+                        ));
+                        Species::new(UNKNOWN_ELEMENT, None, &label)
+                    }
+                }
+            }
+        };
+
+        let occupancy = match table.get(row, "_atom_site_occupancy") {
+            None => Measured::exact(1.0),
+            Some(value) => match number(value, "_atom_site_occupancy", diagnostics) {
+                Ok(Some(m)) if m.value() <= 0.0 => {
+                    valid = false;
+                    diagnostics.push(Diagnostic::at(
+                        DiagnosticKind::InvalidOccupancy {
+                            label: label.clone(),
+                            value: m.value(),
+                        },
+                        value.line,
+                    ));
+                    m
+                }
+                Ok(Some(m)) => {
+                    if m.value() > 1.0 + OCCUPANCY_TOLERANCE {
+                        diagnostics.push(Diagnostic::at(
+                            DiagnosticKind::OccupancyAboveOne {
+                                label: label.clone(),
+                                value: m.value(),
+                            },
+                            value.line,
+                        ));
+                    }
+                    m
+                }
+                Ok(None) => {
+                    occupancy_assumed += 1;
+                    Measured::exact(1.0)
+                }
+                Err(()) => {
+                    valid = false;
+                    Measured::exact(1.0)
+                }
+            },
+        };
+
+        let mut occupant = Occupant::new(&label, species, occupancy);
+        let isotropic = |tag: &str, diagnostics: &mut Vec<Diagnostic>| {
+            table
+                .get(row, tag)
+                .and_then(|v| number(v, tag, diagnostics).ok().flatten())
+        };
+        if let Some((adp, is_b, _)) = aniso.remove(&label) {
+            b_converted += usize::from(is_b);
+            occupant = occupant.with_adp(adp);
+        } else if let Some(u) = isotropic("_atom_site_u_iso_or_equiv", diagnostics) {
+            occupant = occupant.with_adp(Adp::Isotropic(u));
+        } else if let Some(b) = isotropic("_atom_site_b_iso_or_equiv", diagnostics) {
+            b_converted += 1;
+            occupant = occupant.with_adp(Adp::Isotropic(b_to_u(b)));
+        }
+
+        let id = SiteId(sites.len() as u32 + 1);
+        let mut site = Site::new(id, position, vec![occupant]);
+        let text = |tag: &str| {
+            table
+                .get(row, tag)
+                .filter(|v| !v.is_missing())
+                .map(|v| v.text.clone())
+        };
+        if let Some(group) = text("_atom_site_disorder_group") {
+            site = site.with_disorder(Disorder::new(text("_atom_site_disorder_assembly"), group));
+        }
+        let multiplicity = text("_atom_site_symmetry_multiplicity").and_then(|t| t.parse().ok());
+        rows.insert(id, (line, multiplicity));
+        sites.push(site);
+    }
+
+    for (label, (_, _, line)) in aniso {
+        diagnostics.push(Diagnostic::at(
+            DiagnosticKind::AnisoUnknownLabel { label },
+            line,
+        ));
+    }
+    for (count, kind) in [
+        (
+            from_label,
+            DiagnosticKind::ElementFromLabel { count: from_label },
+        ),
+        (
+            occupancy_assumed,
+            DiagnosticKind::OccupancyAssumed {
+                count: occupancy_assumed,
+            },
+        ),
+        (
+            b_converted,
+            DiagnosticKind::BisoConverted { count: b_converted },
+        ),
+    ] {
+        if count > 0 {
+            diagnostics.push(Diagnostic::at(kind, table.line));
+        }
+    }
+    valid.then_some(SiteRows { sites, rows })
+}
+
+/// Reports what the expansion reveals: atoms that likely belong on a
+/// special position, multiplicities that disagree with the file, and sites
+/// that overlap or come too close.
+fn check_geometry(
+    structure: &Structure,
+    rows: &HashMap<SiteId, (u32, Option<u32>)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let orbits = mw_crystal::orbits(structure);
+    let tolerances = structure.tolerances;
+    // A fully occupied, ordered site: anything close to it is a conflict
+    // rather than an alternative position.
+    let is_full = |id: SiteId| {
+        structure.site(id).is_some_and(|site| {
+            site.disorder.is_none()
+                && site
+                    .occupants
+                    .iter()
+                    .map(|o| o.occupancy.value())
+                    .sum::<f64>()
+                    >= 1.0 - OCCUPANCY_TOLERANCE
+        })
+    };
+    let label = |id: SiteId| {
+        structure
+            .site(id)
+            .map_or_else(String::new, |s| s.label().to_string())
+    };
+    let line = |id: SiteId| rows.get(&id).map(|(line, _)| *line);
+
+    for orbit in &orbits {
+        let close = orbit
+            .nearest_image
+            .filter(|d| *d < tolerances.short_contact && is_full(orbit.site));
+        if let Some(distance) = close {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticKind::CloseImages {
+                    label: label(orbit.site),
+                    distance,
+                },
+                line(orbit.site),
+            ));
+            continue;
+        }
+        let stated = rows.get(&orbit.site).and_then(|(_, m)| *m);
+        if let Some(file) = stated.filter(|m| *m as usize != orbit.positions.len()) {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticKind::MultiplicityMismatch {
+                    label: label(orbit.site),
+                    file,
+                    expanded: orbit.positions.len(),
+                },
+                line(orbit.site),
+            ));
+        }
+    }
+
+    for contact in mw_crystal::close_contacts(structure, &orbits, tolerances.short_contact) {
+        let both_full = is_full(contact.a) && is_full(contact.b);
+        let (a, b) = (label(contact.a), label(contact.b));
+        let kind = if contact.distance < tolerances.position {
+            if both_full {
+                DiagnosticKind::OverlappingSites { a, b }
+            } else {
+                DiagnosticKind::SharedPosition { a, b }
+            }
+        } else if both_full {
+            DiagnosticKind::ShortContact {
+                a,
+                b,
+                distance: contact.distance,
+            }
+        } else {
+            continue;
+        };
+        diagnostics.push(Diagnostic::new(kind, line(contact.b)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_symbols() {
+        let parse = |t: &str| parse_type_symbol(t);
+        assert_eq!(parse("Fe3+"), Some(("Fe".into(), Some(3))));
+        assert_eq!(parse("O2-"), Some(("O".into(), Some(-2))));
+        assert_eq!(parse("Na+"), Some(("Na".into(), Some(1))));
+        assert_eq!(parse("Ti+4"), Some(("Ti".into(), Some(4))));
+        assert_eq!(parse("Sr"), Some(("Sr".into(), None)));
+        assert_eq!(parse("D"), Some(("H".into(), None)));
+        assert_eq!(parse("Q"), None);
+    }
+
+    #[test]
+    fn elements_from_labels() {
+        let from = |label: &str| {
+            let letters: String = label
+                .chars()
+                .take_while(char::is_ascii_alphabetic)
+                .collect();
+            element_from_letters(&letters)
+        };
+        assert_eq!(from("Ti1").as_deref(), Some("Ti"));
+        assert_eq!(from("Ca2").as_deref(), Some("Ca"));
+        assert_eq!(from("CA2").as_deref(), Some("C"));
+        assert_eq!(from("OW1").as_deref(), Some("O"));
+        assert_eq!(from("FE1").as_deref(), Some("F"));
+        assert_eq!(from("ZN1").as_deref(), Some("Zn"));
+        assert_eq!(from("O1A").as_deref(), Some("O"));
+        assert_eq!(from("Q1"), None);
+    }
+
+    #[test]
+    fn b_converts_to_u() {
+        let u = b_to_u(Measured::with_su(0.79, 0.08));
+        assert!((u.value() - 0.010_005).abs() < 1e-6);
+        assert!((u.su().unwrap() - 0.001_013).abs() < 1e-6);
+    }
+}

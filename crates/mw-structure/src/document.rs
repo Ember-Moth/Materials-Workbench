@@ -1,6 +1,9 @@
 use gpui_kit::SharedString;
 use mw_crystal::sample::{self, SampleKey};
 use mw_crystal::{Derived, Lattice, Structure};
+use mw_crystal_io::{Diagnostic, ImportedBlock, Severity};
+
+use crate::diagnostics::DiagnosticRow;
 
 /// A distance between two atoms, as shown in the measurements panel and as
 /// a label in the viewport.
@@ -35,16 +38,24 @@ impl Measurement {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DiagnosticLevel {
-    Info,
-    Warning,
+/// A diagnostic shown in the diagnostics tab.
+#[derive(Clone, Debug)]
+pub(crate) enum DocumentDiagnostic {
+    Import(Diagnostic),
+    /// Mock: stands in for the provenance note a derived structure will
+    /// carry (M5).
+    SupercellInP1,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct Diagnostic {
-    pub level: DiagnosticLevel,
-    pub message: SharedString,
+impl DocumentDiagnostic {
+    pub fn row(&self) -> DiagnosticRow {
+        match self {
+            Self::Import(diagnostic) => DiagnosticRow::from_import(diagnostic),
+            Self::SupercellInP1 => {
+                DiagnosticRow::new(Severity::Warning, tr!("mock.diagnostic.supercell"), None)
+            }
+        }
+    }
 }
 
 /// One open structure and everything shown about it.
@@ -54,12 +65,12 @@ pub struct StructureDocument {
     pub(crate) structure: Structure,
     pub(crate) derived: Derived,
     pub(crate) measurements: Vec<Measurement>,
-    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) diagnostics: Vec<DocumentDiagnostic>,
 }
 
 impl StructureDocument {
-    /// Mock: builds the document from a built-in sample instead of a file,
-    /// with hand-written measurements and import diagnostics.
+    /// Mock: builds the document from a built-in sample instead of a project
+    /// file, with hand-written measurements.
     pub fn from_sample(
         project_name: impl Into<SharedString>,
         name: impl Into<SharedString>,
@@ -75,15 +86,7 @@ impl StructureDocument {
                     [0.5, 0.5, 0.5],
                     [0.8048, 0.1952, 0.5],
                 )],
-                vec![Diagnostic {
-                    level: DiagnosticLevel::Info,
-                    message: tr!(
-                        "mock.diagnostic.snapped",
-                        site = "O1",
-                        wyckoff = "4f",
-                        shift = "0.0003"
-                    ),
-                }],
+                Vec::new(),
             ),
             SampleKey::StrontiumTitanate => (
                 vec![Measurement::between(
@@ -94,13 +97,7 @@ impl StructureDocument {
                 )],
                 Vec::new(),
             ),
-            SampleKey::RutileSupercell => (
-                Vec::new(),
-                vec![Diagnostic {
-                    level: DiagnosticLevel::Warning,
-                    message: tr!("mock.diagnostic.supercell"),
-                }],
-            ),
+            SampleKey::RutileSupercell => (Vec::new(), vec![DocumentDiagnostic::SupercellInP1]),
         };
         Self {
             project_name: project_name.into(),
@@ -110,6 +107,29 @@ impl StructureDocument {
             measurements,
             diagnostics,
         }
+    }
+
+    /// The document for an imported data block, with the diagnostics of its
+    /// import. `None` if the block yielded no structure.
+    pub fn from_import(
+        project_name: impl Into<SharedString>,
+        name: impl Into<SharedString>,
+        block: &ImportedBlock,
+    ) -> Option<Self> {
+        let structure = block.structure.clone()?;
+        Some(Self {
+            project_name: project_name.into(),
+            name: name.into(),
+            derived: Derived::compute(&structure),
+            structure,
+            measurements: Vec::new(),
+            diagnostics: block
+                .diagnostics
+                .iter()
+                .cloned()
+                .map(DocumentDiagnostic::Import)
+                .collect(),
+        })
     }
 }
 
@@ -128,5 +148,21 @@ mod tests {
     fn strontium_titanate_ti_o_is_half_the_cell() {
         let document = StructureDocument::from_sample("p", "SrTiO3", SampleKey::StrontiumTitanate);
         assert!((document.measurements[0].distance() - 3.905 / 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn imported_documents_keep_the_import_diagnostics() {
+        let report = mw_crystal_io::cif::read_str(
+            "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+             _cell_length_a 4\n_cell_length_b 4\n_cell_length_c 4\n\
+             loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+             Na1 0 0 0\n",
+        );
+        let document =
+            StructureDocument::from_import("p", "x", &report.blocks[0]).expect("structure");
+        assert_eq!(document.derived.atoms.len(), 8);
+        // Three defaulted angles and one element taken from its label.
+        assert_eq!(document.diagnostics.len(), 4);
+        assert!(document.derived.symmetry.is_none());
     }
 }

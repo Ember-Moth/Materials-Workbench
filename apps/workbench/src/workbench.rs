@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::command::CommandState;
 use gpui_kit::component::notification::Notification;
@@ -6,7 +8,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_project::{ProjectCatalog, ProjectSidebar, ProjectSidebarEvent, StructureEntryId};
+use mw_project::{
+    ImportedEntry, ProjectCatalog, ProjectSidebar, ProjectSidebarEvent, StructureEntryId,
+    StructureSource,
+};
+use mw_structure::import::OpenedFile;
 use mw_structure::{StructureDocument, StructureWorkspace};
 
 use crate::actions::*;
@@ -51,17 +57,25 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((project, name, sample)) = self
-            .sidebar
-            .read(cx)
-            .catalog()
-            .structure(id)
-            .map(|(project, entry)| (project.name.clone(), entry.name.clone(), entry.sample))
+        let Some(document) =
+            self.sidebar
+                .read(cx)
+                .catalog()
+                .structure(id)
+                .and_then(|(project, entry)| {
+                    let (project, name) = (project.name.clone(), entry.name.clone());
+                    match &entry.source {
+                        StructureSource::Sample(key) => {
+                            Some(StructureDocument::from_sample(project, name, *key))
+                        }
+                        StructureSource::Imported(block) => {
+                            StructureDocument::from_import(project, name, block)
+                        }
+                    }
+                })
         else {
             return;
         };
-        // Mock: the entry's built-in sample stands in for its file.
-        let document = StructureDocument::from_sample(project, name, sample);
         let workspace = cx.new(|cx| StructureWorkspace::new(document, window, cx));
         let focus = workspace.focus_handle(cx);
         focus.focus(window, cx);
@@ -74,6 +88,59 @@ impl Workbench {
     pub(crate) fn set_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.sidebar_open = open;
         cx.notify();
+    }
+
+    /// Reads the files in the background, adds the structures they hold to
+    /// the catalog, opens the first one and reports how each file went.
+    pub(crate) fn import_paths(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        let read = cx.background_spawn(async move {
+            paths.into_iter().map(OpenedFile::read).collect::<Vec<_>>()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let files = read.await;
+            this.update_in(cx, |this, window, cx| {
+                this.add_opened_files(files, window, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn add_opened_files(
+        &mut self,
+        files: Vec<OpenedFile>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project_name = tr!("project.imported").to_string();
+        let mut first = None;
+        for file in &files {
+            let entries: Vec<ImportedEntry> = file
+                .structures()
+                .into_iter()
+                .map(|(name, block)| ImportedEntry::new(name, file.file_name(), block))
+                .collect();
+            let ids = self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.add_imported(&project_name, entries, cx)
+            });
+            first = first.or(ids.first().copied());
+        }
+        if let Some(id) = first {
+            self.open_structure(id, window, cx);
+        }
+        // After opening, so the notifications are not lost behind a focus
+        // change and refer to what is now on screen.
+        for file in &files {
+            file.notify(window, cx);
+        }
     }
 
     /// Shows the empty state; only the screenshot tour needs this so far.
@@ -133,7 +200,33 @@ impl Workbench {
     }
 
     fn open_file(&mut self, _: &OpenFile, window: &mut Window, cx: &mut Context<Self>) {
-        self.not_implemented(tr!("feature.open_file"), window, cx);
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match paths.await {
+                Ok(Ok(Some(paths))) => paths,
+                // Cancelled.
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(error)) => {
+                    let reason = error.to_string();
+                    this.update_in(cx, |_, window, cx| {
+                        window.push_notification(
+                            Notification::error(tr!("open.unavailable", reason = reason)),
+                            cx,
+                        )
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            this.update_in(cx, |this, window, cx| this.import_paths(paths, window, cx))
+                .ok();
+        })
+        .detach();
     }
 
     fn new_project(&mut self, _: &NewProject, window: &mut Window, cx: &mut Context<Self>) {
@@ -238,6 +331,10 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_dark_mode))
             .on_action(cx.listener(Self::switch_language))
+            // Files dropped anywhere on the window are opened.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.import_paths(paths.paths().to_vec(), window, cx)
+            }))
             .when(self.sidebar_open, |this| this.child(self.sidebar.clone()))
             .child(
                 v_flex()
@@ -261,6 +358,7 @@ impl Render for Workbench {
                     })
                     .child(
                         div()
+                            .id("workbench-content")
                             .flex_1()
                             .min_h_0()
                             .rounded(theme.radius_lg)
@@ -268,6 +366,11 @@ impl Render for Workbench {
                             .border_color(theme.border)
                             .bg(theme.background)
                             .overflow_hidden()
+                            .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                                style
+                                    .border_color(cx.theme().drag_border)
+                                    .bg(cx.theme().drop_target)
+                            })
                             .child(content),
                     ),
             )

@@ -29,6 +29,14 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
+CIF 导入的语料统计：读取本地一个 COD 目录（不随仓库提交），打印解析失败率和各类诊断的数量。测试默认忽略，用 release 构建跑得快得多：
+
+```bash
+MW_COD_DIR=~/cod/cif cargo test -p mw-crystal-io --release --test cod_corpus -- --ignored --nocapture
+```
+
+`MW_COD_LIMIT=1000` 只读前 1000 个文件。
+
 不开窗口、只看渲染器输出：
 
 ```bash
@@ -41,7 +49,7 @@ cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000
 VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 ```
 
-界面截图巡览：依次切换主界面、位点面板、命令面板、删除对话框、深色模式、英文界面、其他示例结构、设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
+界面截图巡览：依次切换主界面、位点面板、命令面板、删除对话框、深色模式、英文界面、其他示例结构，再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
 
 ```bash
 MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -84,6 +92,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 - 每种语言按自己的习惯写，不逐字对译；完整的句子放在一个键里，用 `%{name}` 传参数，不要拼接翻译片段。
 - 打开对话框或需要进一步输入的按钮、菜单项结尾加省略号 `…`（单个字符）。
 - 术语遵循[界面外壳设计稿](design/ui-shell.md) 第 7 节的术语表。
+- 领域 crate 不放界面文字。比如导入诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字在 `mw-structure` 的 `locales/ui.yml` 里，新增一种诊断要同时加上两种语言的文字。
 
 ### 3.6 命令
 
@@ -105,13 +114,21 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 | 层次 | 例子 | 位置 |
 |---|---|---|
-| 纯单元测试 | 晶胞矩阵与体积、示例数据的一致性、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号） | `crates/mw-crystal-io/tests/fixtures.rs` |
+| 语料统计 | COD 批量导入，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs` |
 | 无头 GPU 测试 | 渲染一帧并检查像素 | `mw-crystal-render` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 驱动真实组件 | 尚未添加，加入第一批编辑功能时开始写 |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |
 
 改动界面时，至少手动检查：键盘能否完成操作、焦点去向、深浅色主题、中英文两种语言下的文字长度。
+
+### 4.1 测试数据
+
+- 测试用的结构文件放在使用它的 crate 的 `tests/fixtures/` 里，每个文件开头注释写明内容和来源；目录里的 `README.md` 列出所有文件的来源。
+- 优先手写小文件。取自 COD 等数据库的文件，先核实许可，并在文件开头注明条目号和许可。
+- 完整的数据库语料不提交，用环境变量指向本地目录。
 
 ## 5. 交付一个功能
 

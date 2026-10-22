@@ -1,4 +1,5 @@
-use crate::SiteId;
+use crate::expand::{self, Orbit};
+use crate::{SiteId, Structure, element};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrystalSystem {
@@ -76,10 +77,12 @@ pub enum CoordinateConstraint {
     Fixed,
 }
 
+/// The symmetry of one site: its Wyckoff position and how it constrains
+/// the coordinates (design §5.2).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SiteSymmetry {
     pub wyckoff: String,
-    pub multiplicity: u32,
     /// The Wyckoff coordinate expression, e.g. `x, x, 0`.
     pub coordinate_form: String,
     pub coordinates: [CoordinateConstraint; 3],
@@ -87,32 +90,94 @@ pub struct SiteSymmetry {
 
 /// One atom of the displayed structure, in Cartesian Å.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DisplayAtom {
     pub site: SiteId,
     pub element: String,
     pub position: [f64; 3],
 }
 
-/// Data the design derives from the structure (design §5).
+/// What the symmetry engine derives from the operation set (design §5.2,
+/// §7.3): crystal system, cell constraints, Wyckoff positions.
 ///
-/// Mock: until the symmetry engine exists this is filled in by hand for the
-/// samples, so it is only as correct as the sample that supplies it.
+/// Mock: the engine comes with M2. Until then only the built-in samples
+/// have this, written by hand; imported structures have none.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Derived {
+#[non_exhaustive]
+pub struct SymmetryAnalysis {
     pub crystal_system: CrystalSystem,
     pub cell: CellConstraints,
     pub sites: Vec<(SiteId, SiteSymmetry)>,
-    /// Atoms in the displayed range, including boundary images.
-    pub atoms: Vec<DisplayAtom>,
-    pub formula: String,
-    /// g/cm³.
-    pub density: f64,
 }
 
+/// Data derived from the structure (design §5).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Derived {
+    /// `None` until the symmetry engine exists (M2), except for samples.
+    pub symmetry: Option<SymmetryAnalysis>,
+    pub orbits: Vec<Orbit>,
+    /// Atoms in the displayed range, including boundary images.
+    pub atoms: Vec<DisplayAtom>,
+    /// g/cm³; `None` when a species has no known atomic weight.
+    pub density: Option<f64>,
+}
+
+const AVOGADRO: f64 = 6.022_140_76e23;
+
 impl Derived {
-    pub fn site(&self, id: SiteId) -> Option<&SiteSymmetry> {
-        self.sites
+    /// Expands the structure. The symmetry analysis is left empty.
+    pub fn compute(structure: &Structure) -> Self {
+        let orbits = expand::orbits(structure);
+        let atoms = expand::display_atoms(structure, &orbits);
+        let density = density(structure, &orbits);
+        Self {
+            symmetry: None,
+            orbits,
+            atoms,
+            density,
+        }
+    }
+
+    pub fn with_symmetry(mut self, symmetry: SymmetryAnalysis) -> Self {
+        self.symmetry = Some(symmetry);
+        self
+    }
+
+    pub fn site_symmetry(&self, id: SiteId) -> Option<&SiteSymmetry> {
+        self.symmetry
+            .as_ref()?
+            .sites
             .iter()
             .find_map(|(site, symmetry)| (*site == id).then_some(symmetry))
     }
+
+    pub fn orbit(&self, id: SiteId) -> Option<&Orbit> {
+        self.orbits.iter().find(|orbit| orbit.site == id)
+    }
+
+    /// Number of equivalent atoms of a site in the unit cell.
+    pub fn multiplicity(&self, id: SiteId) -> Option<usize> {
+        self.orbit(id).map(|orbit| orbit.positions.len())
+    }
+
+    /// Number of atoms in the unit cell, without boundary images.
+    pub fn atoms_in_cell(&self) -> usize {
+        self.orbits.iter().map(|orbit| orbit.positions.len()).sum()
+    }
+}
+
+/// Mass of the cell contents (orbit size × occupancy × atomic weight) over
+/// its volume.
+fn density(structure: &Structure, orbits: &[Orbit]) -> Option<f64> {
+    let mut mass = 0.0;
+    for orbit in orbits {
+        let site = structure.site(orbit.site)?;
+        for occupant in &site.occupants {
+            let weight = element::atomic_weight(&occupant.species.element)?;
+            mass += orbit.positions.len() as f64 * occupant.occupancy.value() * weight;
+        }
+    }
+    let volume = structure.lattice.params().volume();
+    (volume > 0.0).then(|| mass / (AVOGADRO * volume * 1e-24))
 }

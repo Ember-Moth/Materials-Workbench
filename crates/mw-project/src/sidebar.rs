@@ -4,7 +4,7 @@ use gpui_kit::component::sidebar::{Sidebar, SidebarFooter, SidebarMenu, SidebarM
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, h_flex};
 use gpui_kit::*;
 
-use crate::{ProjectCatalog, StructureEntryId, StructureOrigin};
+use crate::{ImportedEntry, ProjectCatalog, StructureEntryId, StructureOrigin};
 
 /// Requests from the sidebar; the window that hosts it decides what they do.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,6 +37,21 @@ impl ProjectSidebar {
 
     pub fn catalog(&self) -> &ProjectCatalog {
         &self.catalog
+    }
+
+    /// Adds imported structures to the catalog; see
+    /// [`ProjectCatalog::add_imported`].
+    pub fn add_imported(
+        &mut self,
+        project_name: &str,
+        entries: Vec<ImportedEntry>,
+        cx: &mut Context<Self>,
+    ) -> Vec<StructureEntryId> {
+        let ids = self.catalog.add_imported(project_name, entries);
+        if !ids.is_empty() {
+            cx.notify();
+        }
+        ids
     }
 
     pub fn set_selected(&mut self, selected: Option<StructureEntryId>, cx: &mut Context<Self>) {

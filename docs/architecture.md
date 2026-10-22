@@ -1,6 +1,6 @@
 # 架构
 
-> 状态：v0.1 框架已搭好，功能以模拟（mock）为主 · 2026-10-22
+> 状态：v0.1 框架已搭好，M1 CIF 导入已实现，其余功能以模拟（mock）为主 · 2026-10-22
 > 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md)
 > 开发流程与约定见 [开发指南](development.md)；版本规划见 [产品路线图](roadmap.md)。
 
@@ -8,7 +8,7 @@
 
 Materials Workbench 是一个用 Rust 编写的现代化、开源、跨平台的材料科学桌面工作台。第一阶段做晶体学：查看、测量、编辑晶体结构，再导出给下游计算。之后逐步加入 XRD、相图和显微组织分析。
 
-当前状态：界面按设计稿实现，数据来自内置示例，编辑和文件操作都还是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
+当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集和原子展开是真实计算的。Wyckoff 位置与约束、编辑、导出和项目文件仍是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
 
 架构上为后续模块预留的位置：XRD、热力学、显微组织各自是"计算 crate（无界面）+ 界面能力 crate"的组合，与晶体学模块并列，共享项目系统、命令与撤销、视口与图表、国际化。计划中的 crate 见[产品路线图](roadmap.md)第 8–10 节。
 
@@ -21,6 +21,7 @@ materials-workbench/
 │   └── viewport-poc/         视口基准测试工具
 ├── crates/
 │   ├── mw-crystal/           晶体结构模型（纯 Rust，无界面）
+│   ├── mw-crystal-io/        结构文件读写（纯 Rust，无界面）：目前是 CIF 导入
 │   ├── mw-crystal-render/    wgpu 离屏渲染器（不依赖 GPUI）
 │   ├── mw-viewport/          3D 视口组件（GPUI + 渲染器）
 │   ├── mw-project/           项目：项目目录与左侧边栏
@@ -42,25 +43,28 @@ apps/workbench ─────────┬───────────�
                    mw-project         mw-structure
                         │             │          │
                         ▼             ▼          ▼
-                     mw-crystal ◄─────┘     mw-viewport
-                                                 │
-                                                 ▼
-                                        mw-crystal-render
+                   mw-crystal-io ◄────┘     mw-viewport
+                        │                        │
+                        ▼                        ▼
+                    mw-crystal          mw-crystal-render
 ```
+
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
-| `mw-crystal` | 晶体结构的数据类型（晶胞、位点、空间群标识），以及内置示例 | 否 |
+| `mw-crystal` | 晶体结构的数据类型（晶胞、对称操作集、位点、容差）、原子展开与派生数据、元素表，以及内置示例 | 否 |
+| `mw-crystal-io` | 解析结构文件（CIF 1.1 子集），产出结构和带源文件行号的导入诊断；诊断是数据，文字由界面翻译 | 否 |
 | `mw-crystal-render` | 离屏渲染球体并回读像素；只依赖 wgpu | 否 |
 | `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧、3D 坐标投影到屏幕 | 是 |
 | `mw-project` | 项目目录模型和左侧边栏视图 | 是 |
-| `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令 | 是 |
+| `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令；打开文件后的通知与错误列表 | 是 |
 | `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言 | 是 |
 
 **规则**：
 
 - **按能力分 crate，而不是按"视图 / 模型 / 对话框"分目录**（GPUI Kit Coding Guides）。一个能力的模型、视图、命令和对话框放在同一个 crate 里。
-- **领域 crate 不依赖界面**。`mw-crystal` 和以后的文件格式、对称性引擎都要能在 CLI 或测试里单独使用。
+- **领域 crate 不依赖界面**。`mw-crystal`、`mw-crystal-io` 和以后的对称性引擎都要能在 CLI 或测试里单独使用。
 - **渲染器不依赖 GPUI**，见视口设计稿 5.1 节。
 - **能力之间不互相依赖**。`mw-project` 和 `mw-structure` 互不引用，由外壳通过事件转接（见第 4 节）。
 - 只有一个能力在用的东西不提前抽成共享 crate；有第二个使用者时再抽。
@@ -80,8 +84,15 @@ Workbench（窗口根视图，apps/workbench）
 **打开结构的流程**：
 
 1. 用户点击边栏里的结构，`ProjectSidebar` 发出 `ProjectSidebarEvent::OpenStructure(id)`。
-2. `Workbench` 在项目目录里查到这个结构，构造 `StructureDocument`（目前来自内置示例）。
+2. `Workbench` 在项目目录里查到这个结构，按它的 `StructureSource` 构造 `StructureDocument`：内置示例，或本次会话导入的数据块。
 3. `Workbench` 新建一个 `StructureWorkspace`，把焦点交给它，并告诉边栏选中项变了。
+
+**打开文件的流程**：
+
+1. 边栏、⌘O、命令面板和空状态里的"打开文件…"都派发 `OpenFile`；`Workbench` 用 `prompt_for_paths` 弹出系统文件对话框。拖进窗口的文件由根视图的 `on_drop::<ExternalPaths>` 接收，走同一条路。
+2. 后台任务里，`mw_structure::import::OpenedFile::read` 读文件，用 `mw_crystal_io::cif::read` 解析。
+3. 回到界面线程，每个成功的数据块加入项目目录里的"导入的文件"项目（`ProjectCatalog::add_imported`），然后打开第一个。
+4. `OpenedFile::notify` 告诉用户结果：顺利导入时不提示（打开的结构本身就是反馈）；有诊断时发通知，诊断在"诊断"标签页里；导入失败时发错误通知，通知上的"查看错误…"打开带行号的错误列表。
 
 **视口出帧**：`StructureWorkspace` 把文档的原子转成球体交给 `Viewport::set_scene`。视口在需要时渲染并异步回读，每完成一帧就通知自己；工作区订阅了视口，随之重绘测量标注等浮层，浮层位置由 `Viewport::project` 算出。
 
@@ -100,6 +111,7 @@ Workbench（窗口根视图，apps/workbench）
 - 代码里用各 crate 定义的 `tr!("key", 参数 = 值)` 宏取文字，得到 `SharedString`。
 - 默认界面语言是简体中文；设置对话框和命令面板都能切换，切换后刷新所有窗口。
 - 用户数据（项目名、结构名、原子标签）不翻译。
+- 导入诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），由 `mw-structure/src/diagnostics.rs` 在渲染时翻译成当前语言，切换语言后已打开的诊断也会跟着变。
 - 数字格式统一在 `mw-structure/src/format.rs`。
 
 ## 7. 主题与样式
@@ -122,13 +134,18 @@ Workbench（窗口根视图，apps/workbench）
 
 | 模拟 | 位置 | 代替的是 | 由哪一步替换 |
 |---|---|---|---|
-| 内置示例结构（金红石、2×2×2 超胞、SrTiO₃） | `mw-crystal/src/sample.rs` | 文件导入 | M1 CIF 导入 |
-| 手写的派生数据：Wyckoff、多重度、坐标约束、晶胞约束、显示用原子 | `mw-crystal` 的 `Derived` | 对称性引擎 | M2 对称性 |
-| 项目目录 | `mw-project` 的 `ProjectCatalog::sample` | 项目文件 | M6 项目与设置持久化 |
-| 测量和导入诊断 | `mw-structure/src/document.rs` | 测量工具、导入流水线 | M1、M3 |
+| 内置示例结构（金红石、2×2×2 超胞、SrTiO₃）；操作集和展开是真实的 | `mw-crystal/src/sample.rs` | 项目文件里保存的结构 | M6 项目与设置持久化 |
+| 手写的对称性分析：晶系、晶胞约束、Wyckoff 位置、坐标约束（`SymmetryAnalysis`）。导入的结构没有这部分，界面显示"尚未计算" | `mw-crystal/src/sample.rs` | 对称性引擎 | M2 对称性 |
+| 空间群名称直接取自文件，不与操作集核对 | `mw-crystal` 的 `SpaceGroup` | 由操作集识别空间群 | M2 对称性 |
+| 导入不做规范化：靠近特殊位置的原子不吸附、坐标相同的行不合并为混合占位，只给出诊断 | `mw-crystal-io/src/import.rs` | 导入流水线的规范化步骤（晶体学设计稿 9.1 节） | M2 对称性 |
+| 文件没有列出对称操作时报错，不能由空间群符号生成操作集 | `mw-crystal-io/src/import.rs` | Hall / H-M 符号表 | M2 对称性 |
+| 项目目录；打开的文件只留在内存里，统一放进"导入的文件"项目 | `mw-project` 的 `ProjectCatalog` | 项目文件、新建项目 | M6 项目与设置持久化 |
+| 示例结构的测量、超胞的诊断 | `mw-structure/src/document.rs` | 测量工具、派生结构的来源记录 | M3、M5 |
+| 显示固定为一个晶胞，面、棱、角上的原子在对面补一份 | `mw-crystal/src/expand.rs` 的 `display_atoms` | 视图层的显示范围 | v0.3 |
+| 导入时不保留未识别的字段 | `mw-crystal-io` | CIF 往返导出 | M5 变换与导出 |
 | 字段可以输入，但不会改变结构 | `mw-structure` 的属性面板 | 编辑命令与撤销 | M4 编辑 |
 | 删除、转为 P1、生成超胞、导出：对话框齐全，确认后只提示"尚未实现" | `mw-structure/src/dialogs.rs` | 对应的编辑命令 | M4、M5 |
-| 打开文件、新建项目、显示范围、多面体、更换元素、混合占位 | 各处的 `not_implemented` | 对应功能 | 见第 10 节 |
+| 新建项目、显示范围、多面体、更换元素、混合占位 | 各处的 `not_implemented` | 对应功能 | 见第 10 节 |
 | 不能点选原子；选中位点只能在位点列表里切换，视口里用颜色高亮代替描边 | `mw-structure/src/scene.rs` | ID 纹理拾取 | M3 渲染 |
 | 只画原子，不画键和晶胞边框 | 渲染器 | 圆柱、线段管线 | M3 渲染 |
 | 设置不保存 | `apps/workbench/src/settings.rs` | 设置持久化 | M6 |
@@ -139,13 +156,13 @@ Workbench（窗口根视图，apps/workbench）
 
 当前处于 v0.1，按以下里程碑把第 9 节的模拟逐个换成真实功能：
 
-| 里程碑 | 内容 | 主要涉及 |
-|---|---|---|
-| M1 CIF 导入 | CIF 1.1 子集解析、导入诊断（带行号）、"打开文件…"对话框；示例改为从文件读 | 新增 `mw-crystal-io` |
-| M2 对称性 | 对称操作集、轨道展开、位点对称性与约束子空间，真正计算 `Derived` | `mw-crystal`（候选依赖 moyo，见晶体学设计稿 11 节） |
-| M3 渲染 | 键（impostor 圆柱）、晶胞边框、ID 纹理拾取；点选原子与测量模式 | `mw-crystal-render`、`mw-viewport` |
-| M4 基础编辑 | 命令与撤销栈：晶胞参数（按对称约束联动）、元素、占位率、删除位点；P1 模式下自由编辑 | `mw-crystal`、`mw-structure` |
-| M5 变换与导出 | 转为 P1、生成超胞、导出 CIF / POSCAR / 扩展 XYZ | `mw-crystal`、`mw-crystal-io` |
-| M6 持久化 | 项目文件、最近项目、设置保存 | `mw-project`、外壳 |
+| 里程碑 | 内容 | 主要涉及 | 状态 |
+|---|---|---|---|
+| M1 CIF 导入 | CIF 1.1 子集解析、导入诊断（带行号）、"打开文件…"对话框和拖放；对称操作集（整数矩阵 + 有理平移、群封闭检查）和显示所需的最小原子展开 | 新增 `mw-crystal-io`；`mw-crystal` | 已实现。COD 语料的批量统计（`crates/mw-crystal-io/tests/cod_corpus.rs`）还没有在完整语料上跑过 |
+| M2 对称性 | 空间群识别、位点对称性与约束子空间、Wyckoff 指认，真正计算 `SymmetryAnalysis`；导入时吸附到特殊位置、合并混合占位 | `mw-crystal`（候选依赖 moyo，见晶体学设计稿 11 节）、`mw-crystal-io` | 未开始 |
+| M3 渲染 | 键（impostor 圆柱）、晶胞边框、ID 纹理拾取；点选原子与测量模式 | `mw-crystal-render`、`mw-viewport` | 未开始 |
+| M4 基础编辑 | 命令与撤销栈：晶胞参数（按对称约束联动）、元素、占位率、删除位点；P1 模式下自由编辑 | `mw-crystal`、`mw-structure` | 未开始 |
+| M5 变换与导出 | 转为 P1、生成超胞、导出 CIF / POSCAR / 扩展 XYZ | `mw-crystal`、`mw-crystal-io` | 未开始 |
+| M6 持久化 | 项目文件、最近项目、设置保存；示例结构改为从项目文件读 | `mw-project`、外壳 | 未开始 |
 
 对称模式下移动、添加原子（特殊位置吸附）、对称性检测与对称化、晶胞变换属于 v0.2。

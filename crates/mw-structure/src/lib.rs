@@ -15,9 +15,11 @@ macro_rules! tr {
 }
 
 mod actions;
+mod diagnostics;
 mod dialogs;
 mod document;
 mod format;
+pub mod import;
 mod overlays;
 mod panel;
 mod scene;

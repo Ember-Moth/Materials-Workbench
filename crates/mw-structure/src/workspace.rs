@@ -90,7 +90,7 @@ impl StructureWorkspace {
             .find(|site| {
                 document
                     .derived
-                    .site(site.id)
+                    .site_symmetry(site.id)
                     .is_some_and(|s| s.coordinates.contains(&CoordinateConstraint::Free))
             })
             .or(document.structure.sites.first())
@@ -278,12 +278,14 @@ impl StructureWorkspace {
     // MARK: Rendering
 
     pub(crate) fn mode_label(&self) -> SharedString {
-        match self.document.structure.edit_mode() {
-            EditMode::Symmetric => tr!(
+        let structure = &self.document.structure;
+        match (structure.edit_mode(), &structure.space_group.hm_symbol) {
+            (EditMode::Symmetric, Some(symbol)) => tr!(
                 "header.mode.symmetric",
-                symbol = self.document.structure.space_group.hm_symbol.clone()
+                symbol = format::space_group(symbol)
             ),
-            EditMode::P1 => tr!("header.mode.p1"),
+            (EditMode::Symmetric, None) => tr!("header.mode.symmetric_unnamed"),
+            (EditMode::P1, _) => tr!("header.mode.p1"),
         }
     }
 
