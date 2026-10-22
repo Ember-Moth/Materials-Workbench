@@ -1,0 +1,15 @@
+[package]
+name = "mw-viewport"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+mw-crystal-render.workspace = true
+gpui-kit.workspace = true
+rust-i18n.workspace = true
+log.workspace = true
+glam.workspace = true
+# Same major version as GPUI's own image dependency; only used to wrap the
+# read-back pixels in the frame type `RenderImage` expects.
+image = { version = "0.25", default-features = false }

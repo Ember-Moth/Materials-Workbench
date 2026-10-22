@@ -1,0 +1,284 @@
+_version: 2
+header:
+  mode:
+    symmetric:
+      en: "Symmetry mode · %{symbol}"
+      zh-CN: "对称模式 · %{symbol}"
+    p1:
+      en: P1 mode
+      zh-CN: P1 模式
+  saved:
+    en: Saved
+    zh-CN: 已保存
+  export:
+    en: Export…
+    zh-CN: 导出…
+  toggle_panel:
+    en: Show or hide the side panel
+    zh-CN: 显示或隐藏侧面板
+viewport:
+  info:
+    en: "%{atoms} atoms · 1 × 1 × 1 cell · orthographic"
+    zh-CN: "%{atoms} 个原子 · 1 × 1 × 1 晶胞 · 正交投影"
+toolbar:
+  ball_and_stick:
+    en: Ball and stick
+    zh-CN: 球棍
+  space_filling:
+    en: Space filling
+    zh-CN: 空间填充
+  polyhedra:
+    en: Polyhedra
+    zh-CN: 多面体
+  measure:
+    en: Measure
+    zh-CN: 测量
+  measure_tooltip:
+    en: Measure distances and angles
+    zh-CN: 测量距离和键角
+  display_range:
+    en: Display range…
+    zh-CN: 显示范围…
+  display_range_title:
+    en: Display range
+    zh-CN: 显示范围
+  display_range_mock:
+    en: Choosing how many cells to show is not implemented yet.
+    zh-CN: 选择显示多少个晶胞的功能尚未实现。
+  reset_view:
+    en: Reset view
+    zh-CN: 重置视图
+panel:
+  tab:
+    properties:
+      en: Properties
+      zh-CN: 属性
+    sites:
+      en: Sites
+      zh-CN: 位点
+    measurements:
+      en: Measurements
+      zh-CN: 测量
+    diagnostics:
+      en: Diagnostics
+      zh-CN: 诊断
+  cell:
+    title:
+      en: Cell parameters
+      zh-CN: 晶胞参数
+    summary:
+      en: "Volume %{volume} Å³ · density %{density} g/cm³"
+      zh-CN: "体积 %{volume} Å³ · 密度 %{density} g/cm³"
+  symmetry:
+    title:
+      en: Symmetry
+      zh-CN: 对称性
+    space_group:
+      en: Space group
+      zh-CN: 空间群
+    mode:
+      en: Editing
+      zh-CN: 编辑模式
+    mode_symmetric:
+      en: Keep symmetry
+      zh-CN: 保持对称
+    mode_p1:
+      en: P1, atoms edited one by one
+      zh-CN: P1，逐个原子编辑
+    convert_to_p1:
+      en: Convert to P1…
+      zh-CN: 转为 P1…
+    detect:
+      en: Detect symmetry…
+      zh-CN: 检测对称性…
+  site:
+    none:
+      en: Select a site in the 3D view or the Sites tab.
+      zh-CN: 在视口或"位点"标签页中选择一个位点。
+    title:
+      en: "Selected site %{label}"
+      zh-CN: "选中位点 %{label}"
+    atoms:
+      en: "%{count} atoms per cell"
+      zh-CN: "晶胞内 %{count} 个原子"
+    wyckoff:
+      en: "Wyckoff %{wyckoff} · coordinates %{form}"
+      zh-CN: "Wyckoff %{wyckoff} · 坐标形式 %{form}"
+    element:
+      en: Element
+      zh-CN: 元素
+    occupancy:
+      en: Occupancy
+      zh-CN: 占位率
+    add_occupant:
+      en: Add mixed occupant…
+      zh-CN: 添加混合占位…
+  sites:
+    title:
+      en: Asymmetric unit
+      zh-CN: 不对称单元
+    count:
+      en: "%{count} sites"
+      zh-CN: "%{count} 个位点"
+    add:
+      en: Add site…
+      zh-CN: 添加位点…
+    row:
+      en: "%{element} · %{wyckoff} · %{count} atoms"
+      zh-CN: "%{element} · %{wyckoff} · %{count} 个原子"
+    symmetric_hint:
+      en: In symmetry mode, editing a site changes all of its equivalent atoms.
+      zh-CN: 对称模式下，编辑一个位点会同时改变它的全部等效原子。
+  measurements:
+    empty:
+      en: No measurements yet.
+      zh-CN: 还没有测量。
+    hint:
+      en: Turn on Measure, then pick two atoms for a distance or three for an angle.
+      zh-CN: 打开"测量"后，依次点选 2 个原子得到距离，点选 3 个得到键角。
+  diagnostics:
+    empty:
+      en: No diagnostics.
+      zh-CN: 没有诊断信息。
+crystal_system:
+  triclinic:
+    en: Triclinic
+    zh-CN: 三斜晶系
+  monoclinic:
+    en: Monoclinic
+    zh-CN: 单斜晶系
+  orthorhombic:
+    en: Orthorhombic
+    zh-CN: 正交晶系
+  tetragonal:
+    en: Tetragonal
+    zh-CN: 四方晶系
+  trigonal:
+    en: Trigonal
+    zh-CN: 三方晶系
+  hexagonal:
+    en: Hexagonal
+    zh-CN: 六方晶系
+  cubic:
+    en: Cubic
+    zh-CN: 立方晶系
+dialog:
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+  delete:
+    en: Delete
+    zh-CN: 删除
+  delete_site:
+    title:
+      en: "Delete %{label}?"
+      zh-CN: "删除 %{label}？"
+    description:
+      en: You can undo this.
+      zh-CN: 删除后可以撤销。
+  delete_atom:
+    title:
+      en: "Which atoms of %{label} should be deleted?"
+      zh-CN: "删除 %{label} 的哪些原子？"
+    description:
+      en: "The structure is in symmetry mode (%{symbol}), and %{label} has %{count} equivalent atoms in the cell. Deleting the site removes all %{count}; deleting only the selected atom needs the structure converted to P1 first. Both can be undone."
+      zh-CN: "当前结构处于对称模式（%{symbol}），%{label} 在晶胞内有 %{count} 个等效原子。删除位点会同时删掉这 %{count} 个；只删除选中的这一个，需要先把结构转为 P1。两种操作都可以撤销。"
+    all:
+      en: "Delete all %{count}"
+      zh-CN: "删除全部 %{count} 个"
+    one:
+      en: Convert to P1 and delete this one
+      zh-CN: 转为 P1 后删除这一个
+  convert:
+    title:
+      en: Convert to P1?
+      zh-CN: 转为 P1？
+    description:
+      en: "The %{sites} sites expand to %{atoms} atoms, each edited on its own. You can undo this, or detect the symmetry again later."
+      zh-CN: "%{sites} 个位点会展开为 %{atoms} 个原子，之后每个原子都可以单独编辑。可以撤销，也可以之后重新检测对称性。"
+    ok:
+      en: Convert to P1
+      zh-CN: 转为 P1
+    already_p1:
+      en: This structure is already in P1 mode.
+      zh-CN: 这个结构已经是 P1 模式。
+  supercell:
+    title:
+      en: Make supercell
+      zh-CN: 生成超胞
+    description:
+      en: "Creates a new structure from %{name}, repeated 2 × 2 × 2. The original stays unchanged."
+      zh-CN: "由「%{name}」按 2 × 2 × 2 重复生成一个新结构，原结构保持不变。"
+    ok:
+      en: Make supercell
+      zh-CN: 生成超胞
+command:
+  make_supercell:
+    en: Make supercell…
+    zh-CN: 生成超胞…
+  convert_to_p1:
+    en: Convert to P1…
+    zh-CN: 转为 P1…
+  export:
+    en: Export…
+    zh-CN: 导出…
+  delete_selection:
+    en: Delete selection…
+    zh-CN: 删除所选…
+  toggle_measure:
+    en: Measure
+    zh-CN: 测量
+  ball_and_stick:
+    en: Ball and stick
+    zh-CN: 球棍模型
+  space_filling:
+    en: Space filling
+    zh-CN: 空间填充模型
+  polyhedra:
+    en: Polyhedra
+    zh-CN: 多面体模型
+  reset_view:
+    en: Reset view
+    zh-CN: 重置视图
+  toggle_panel:
+    en: Show or hide side panel
+    zh-CN: 显示或隐藏侧面板
+feature:
+  polyhedra:
+    en: Polyhedra
+    zh-CN: 多面体显示
+  export:
+    en: Export
+    zh-CN: 导出
+  detect_symmetry:
+    en: Symmetry detection
+    zh-CN: 对称性检测
+  change_element:
+    en: Changing the element
+    zh-CN: 更换元素
+  mixed_occupancy:
+    en: Mixed occupancy
+    zh-CN: 混合占位
+  add_site:
+    en: Adding sites
+    zh-CN: 添加位点
+  delete:
+    en: Deleting
+    zh-CN: 删除
+  convert_to_p1:
+    en: Converting to P1
+    zh-CN: 转为 P1
+  supercell:
+    en: Supercells
+    zh-CN: 生成超胞
+mock:
+  not_implemented:
+    en: "%{feature} is not implemented yet."
+    zh-CN: "「%{feature}」尚未实现。"
+  diagnostic:
+    snapped:
+      en: "On import, %{site} was snapped to special position %{wyckoff} (largest shift %{shift} Å)."
+      zh-CN: "导入时 %{site} 吸附到特殊位置 %{wyckoff}（最大位移 %{shift} Å）。"
+    supercell:
+      en: This supercell is in P1. Symmetry detection is not implemented yet, so editing applies to single atoms.
+      zh-CN: 这个超胞处于 P1 模式。对称性检测尚未实现，编辑只作用于单个原子。

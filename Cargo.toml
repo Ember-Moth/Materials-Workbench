@@ -7,7 +7,11 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+mw-crystal = { path = "crates/mw-crystal" }
 mw-crystal-render = { path = "crates/mw-crystal-render" }
+mw-project = { path = "crates/mw-project" }
+mw-structure = { path = "crates/mw-structure" }
+mw-viewport = { path = "crates/mw-viewport" }
 gpui-kit = "0.8.0"
 # Same major version as GPUI's own wgpu renderer (gpui-pre-wgpu 0.3.9),
 # see docs/design/viewport-rendering.md §5.2.
@@ -17,6 +21,7 @@ glam = { version = "0.30", features = ["bytemuck"] }
 pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
+rust-i18n = "4.2"
 
 # GPUI and the component library are slow in unoptimized builds; this follows
 # the GPUI Kit installation guide.

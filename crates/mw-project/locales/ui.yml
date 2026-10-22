@@ -1,0 +1,20 @@
+_version: 2
+sidebar:
+  hide:
+    en: Hide sidebar
+    zh-CN: 隐藏边栏
+  new_project:
+    en: New Project…
+    zh-CN: 新建项目…
+  open_file:
+    en: Open File…
+    zh-CN: 打开文件…
+  search_commands:
+    en: Search commands
+    zh-CN: 搜索命令
+  derived:
+    en: Derived
+    zh-CN: 派生
+  settings:
+    en: Settings…
+    zh-CN: 设置…

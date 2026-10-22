@@ -1,0 +1,10 @@
+[package]
+name = "mw-project"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+mw-crystal.workspace = true
+gpui-kit.workspace = true
+rust-i18n.workspace = true

@@ -35,6 +35,12 @@ impl OrbitCamera {
         }
     }
 
+    /// Adapts depth range and zoom limits to a scene of a new size, keeping
+    /// the current angle and zoom.
+    pub fn set_scene_radius(&mut self, scene_radius: f32) {
+        self.scene_radius = scene_radius.max(1.0);
+    }
+
     /// Rotates by the given angles in radians.
     pub fn rotate(&mut self, delta_yaw: f32, delta_pitch: f32) {
         self.yaw = (self.yaw + delta_yaw) % std::f32::consts::TAU;

@@ -1,0 +1,135 @@
+# 开发指南
+
+> 架构与模块划分见 [架构](architecture.md)。本文讲怎么构建、怎么写代码、怎么交付一个功能。
+
+## 1. 环境
+
+| 平台 | 需要 |
+|---|---|
+| 全部 | Rust 1.92 或更新（GPUI Kit 当前依赖要求）；本仓库在 1.97 上开发 |
+| macOS | Xcode（GPUI 用 Metal），`xcode-select -p` 指向 Xcode |
+| Linux | 图形会话（Wayland 或 X11）和可用的 Vulkan 驱动；依赖包见 [GPUI Kit 安装说明](https://gpui-kit.com/docs/installation) |
+| Windows | 尚未测试 |
+
+## 2. 常用命令
+
+```bash
+cargo run --bin materials-workbench
+```
+
+```bash
+cargo test --workspace
+```
+
+```bash
+cargo clippy --workspace --all-targets
+```
+
+```bash
+cargo fmt --all
+```
+
+不开窗口、只看渲染器输出：
+
+```bash
+cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000
+```
+
+视口性能基准（会打开窗口，约 40 秒后自动退出）：
+
+```bash
+VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
+```
+
+界面截图巡览：依次切换主界面、位点面板、命令面板、删除对话框、深色模式、英文界面、其他示例结构、设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
+
+```bash
+MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
+```
+
+运行期间让窗口保持在前台：窗口被遮挡时系统会降低刷新，可能截到还没重绘完的画面（偶尔会看到旧的边栏或空白视口），重跑一次即可。
+
+debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
+
+## 3. 代码约定
+
+### 3.1 必读
+
+界面代码必须遵守 GPUI Kit 的两份规范：Coding Guides 和 Design Guides（[gpui-kit.com/docs](https://gpui-kit.com/docs)）。以下是本项目里最常用到的几条，不能代替原文：
+
+- **不要凭印象写 API。** 先在 `~/.cargo/registry/src/*/gpui-pre-*`、`gpui-component-*`、`gpui-base-*`、`wgpu-*` 里找到真实签名。版本以 `Cargo.lock` 为准（当前 GPUI Kit 0.8.0、`gpui-pre` 0.3.9、wgpu 29）。
+- **优先用标准组件。** 菜单、选择器、命令面板、侧边栏、列表行都有现成组件，不要用 `div` 拼一个"看起来像"的。
+- **状态放在能保证它正确的最窄的地方。** 跨帧的行为用 `Entity<T>`，纯展示用 `RenderOnce`。`render` 里不改状态、不无条件 `notify`。
+- **重复元素用领域 ID 作 `ElementId`**，不用列表下标。
+
+### 3.2 放在哪里
+
+- 一个新能力（例如 XRD）是一个新 crate，包含它的模型、视图、命令和对话框。
+- 纯计算（解析、对称性、物理量）放在不依赖 GPUI 的 crate 里，并在那里写单元测试。
+- `apps/workbench` 只做组装：创建实体、转接事件、注册全局命令，不放业务逻辑。
+
+### 3.3 样式
+
+- 颜色只用 `cx.theme()` 的语义色。数据颜色（元素颜色等）是唯一例外，集中放在 `mw-structure/src/scene.rs` 并加注释。
+- 尺寸用 rem 辅助函数（`p_2()`、`w_80()`、`text_sm()`）。必须写像素时要有注释说明原因（平台边界、测量出的几何）。
+
+### 3.4 图标
+
+- GPUI Kit 组件自带的 `IconName` 只是 Lucide 的一个子集。需要其他图标时用 `gpui_kit::assets::IconName`（完整集合），包成 `Icon::new(...)` 传给组件。
+- 完整集合里的图标要由可执行程序打包：用到子集之外的图标时，把它加进 `apps/workbench/src/assets.rs` 的列表，否则运行时会报"找不到资源"，图标显示为空白。
+
+### 3.5 文字
+
+- 所有界面文字写进所在 crate 的 `locales/ui.yml`，同时提供 `zh-CN` 和 `en`，代码里用 `tr!` 取。
+- 每种语言按自己的习惯写，不逐字对译；完整的句子放在一个键里，用 `%{name}` 传参数，不要拼接翻译片段。
+- 打开对话框或需要进一步输入的按钮、菜单项结尾加省略号 `…`（单个字符）。
+- 术语遵循[界面外壳设计稿](design/ui-shell.md) 第 7 节的术语表。
+
+### 3.6 命令
+
+新增一个命令：
+
+1. 在拥有它的 crate 里用 `gpui_kit::actions!` 定义动作。
+2. 在该视图上用 `.on_action(cx.listener(...))` 处理。
+3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。
+4. 加进命令面板：结构相关的加到 `mw_structure::palette_commands()`，外壳命令加到 `apps/workbench/src/palette.rs`。关键词里写英文名和拼音。
+5. 按钮、菜单都派发同一个动作，不要各自复制一份逻辑。
+
+### 3.7 模拟
+
+- 模拟代码用 `Mock:` 开头的注释标出，说明它代替的是什么。
+- 用户能触发的未实现操作必须给出反馈：调用 `not_implemented` 弹出"尚未实现"通知。
+- 替换掉一个模拟后，同步更新[架构](architecture.md)第 9 节的模拟表。
+
+## 4. 测试
+
+| 层次 | 例子 | 位置 |
+|---|---|---|
+| 纯单元测试 | 晶胞矩阵与体积、示例数据的一致性、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 无头 GPU 测试 | 渲染一帧并检查像素 | `mw-crystal-render` |
+| 界面集成测试 | 用 `#[gpui_kit::test]` 驱动真实组件 | 尚未添加，加入第一批编辑功能时开始写 |
+| 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
+| 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |
+
+改动界面时，至少手动检查：键盘能否完成操作、焦点去向、深浅色主题、中英文两种语言下的文字长度。
+
+## 5. 交付一个功能
+
+把一个模拟换成真实功能时，按这个顺序：
+
+1. 读对应设计稿里的相关章节；设计需要改动时，先改设计稿。
+2. 在不依赖界面的 crate 里实现逻辑，并写单元测试。
+3. 接到界面上，替换掉模拟，删除对应的 `not_implemented` 调用。
+4. 更新架构文档的模拟表和路线图。
+5. 运行 `cargo fmt --all`、`cargo clippy --workspace --all-targets`、`cargo test --workspace`，再在应用里手动走一遍。
+
+## 6. 提交
+
+- 使用 Conventional Commits：`feat:`、`fix:`、`docs:`、`refactor:`、`test:`、`chore:`。
+- 标题用英文、祈使语气；正文说明改了什么、为什么，需要时列出要点。
+- 一次提交只做一件事；文档跟随它描述的代码一起提交。
+
+## 7. 文档
+
+- 文档用中文写，API 名、crate 名、文件名保留原文并用代码格式。
+- 模块设计放在 `docs/design/`。实现与设计不一致时，以修订后的设计稿为准，不要让两者长期分叉。

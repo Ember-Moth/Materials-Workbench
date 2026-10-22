@@ -1,0 +1,29 @@
+[package]
+name = "workbench"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "materials-workbench"
+path = "src/main.rs"
+
+[features]
+# Development aid: renders a tour of the interface to PNG files.
+# MW_SCREENSHOT_DIR=out cargo run --bin materials-workbench --features screenshot
+# Turns on GPUI's test support directly: Kit's own `test-support` feature
+# also names an alternative GPUI backend whose dependencies conflict here.
+screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image"]
+
+[dependencies]
+mw-project.workspace = true
+mw-structure.workspace = true
+gpui-kit.workspace = true
+rust-i18n.workspace = true
+log.workspace = true
+env_logger.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+gpui-pre = { version = "=0.3.9", optional = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-pre-macos = { version = "=0.3.9", optional = true, features = ["test-support"] }

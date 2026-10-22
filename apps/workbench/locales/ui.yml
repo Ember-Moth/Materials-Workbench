@@ -1,0 +1,81 @@
+_version: 2
+command:
+  placeholder:
+    en: Search commands in English, Chinese or pinyin…
+    zh-CN: 搜索命令，中文、英文或拼音都可以…
+  group:
+    structure:
+      en: Structure
+      zh-CN: 当前结构
+    app:
+      en: Application
+      zh-CN: 应用
+  footer:
+    navigate:
+      en: ↑↓ Select
+      zh-CN: ↑↓ 选择
+    confirm:
+      en: ↵ Run
+      zh-CN: ↵ 执行
+    search:
+      en: Esc Close
+      zh-CN: Esc 关闭
+  open_file:
+    en: Open File…
+    zh-CN: 打开文件…
+  new_project:
+    en: New Project…
+    zh-CN: 新建项目…
+  toggle_sidebar:
+    en: Show or hide sidebar
+    zh-CN: 显示或隐藏边栏
+  toggle_dark_mode:
+    en: Toggle dark mode
+    zh-CN: 切换深色模式
+  switch_language:
+    en: 切换到中文
+    zh-CN: Switch to English
+  settings:
+    en: Settings…
+    zh-CN: 设置…
+sidebar:
+  show:
+    en: Show sidebar
+    zh-CN: 显示边栏
+empty:
+  title:
+    en: Open a structure
+    zh-CN: 打开一个结构
+  description:
+    en: Pick one from a project on the left, or open a CIF, POSCAR or extended XYZ file. You can also drop files onto the window.
+    zh-CN: 从左侧项目中选择，或打开 CIF、POSCAR、扩展 XYZ 文件。也可以把文件直接拖进窗口。
+  open_file:
+    en: Open File…
+    zh-CN: 打开文件…
+  open_sample:
+    en: "Open sample: rutile TiO₂"
+    zh-CN: 打开示例：金红石 TiO₂
+settings:
+  title:
+    en: Settings
+    zh-CN: 设置
+  dark_mode:
+    en: Dark mode
+    zh-CN: 深色模式
+  language:
+    en: Language
+    zh-CN: 界面语言
+  not_saved:
+    en: These choices are not saved yet and reset when the app restarts.
+    zh-CN: 这些选择暂不保存，重启应用后会恢复默认。
+feature:
+  open_file:
+    en: Opening files
+    zh-CN: 打开文件
+  new_project:
+    en: New projects
+    zh-CN: 新建项目
+mock:
+  not_implemented:
+    en: "%{feature} is not implemented yet."
+    zh-CN: "「%{feature}」尚未实现。"

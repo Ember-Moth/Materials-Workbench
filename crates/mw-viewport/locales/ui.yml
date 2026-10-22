@@ -1,0 +1,5 @@
+_version: 2
+viewport:
+  unavailable:
+    en: "The 3D view is unavailable: %{reason}"
+    zh-CN: "3D 视图不可用：%{reason}"

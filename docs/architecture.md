@@ -1,0 +1,146 @@
+# 架构
+
+> 状态：v0.1 框架已搭好，功能以模拟（mock）为主 · 2026-10-22
+> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md)
+> 开发流程与约定见 [开发指南](development.md)。
+
+## 1. 目标
+
+Materials Workbench 是一个用 Rust 编写的现代化、开源、跨平台的材料科学桌面工作台。第一阶段做晶体学：查看、测量、编辑晶体结构，再导出给下游计算。之后逐步加入 XRD、相图和显微组织分析。
+
+当前状态：界面按设计稿实现，数据来自内置示例，编辑和文件操作都还是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
+
+## 2. 仓库结构
+
+```text
+materials-workbench/
+├── apps/
+│   ├── workbench/            桌面应用（可执行文件 materials-workbench）
+│   └── viewport-poc/         视口基准测试工具
+├── crates/
+│   ├── mw-crystal/           晶体结构模型（纯 Rust，无界面）
+│   ├── mw-crystal-render/    wgpu 离屏渲染器（不依赖 GPUI）
+│   ├── mw-viewport/          3D 视口组件（GPUI + 渲染器）
+│   ├── mw-project/           项目：项目目录与左侧边栏
+│   └── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
+└── docs/
+    ├── architecture.md       本文
+    ├── development.md        开发指南
+    └── design/               各模块设计稿
+```
+
+## 3. crate 与依赖方向
+
+依赖只能从上往下，同层之间不互相依赖：
+
+```text
+apps/workbench ─────────┬──────────────────┐
+                        ▼                  ▼
+                   mw-project         mw-structure
+                        │             │          │
+                        ▼             ▼          ▼
+                     mw-crystal ◄─────┘     mw-viewport
+                                                 │
+                                                 ▼
+                                        mw-crystal-render
+```
+
+| crate | 职责 | 依赖 GPUI |
+|---|---|---|
+| `mw-crystal` | 晶体结构的数据类型（晶胞、位点、空间群标识），以及内置示例 | 否 |
+| `mw-crystal-render` | 离屏渲染球体并回读像素；只依赖 wgpu | 否 |
+| `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧、3D 坐标投影到屏幕 | 是 |
+| `mw-project` | 项目目录模型和左侧边栏视图 | 是 |
+| `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令 | 是 |
+| `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言 | 是 |
+
+**规则**：
+
+- **按能力分 crate，而不是按"视图 / 模型 / 对话框"分目录**（GPUI Kit Coding Guides）。一个能力的模型、视图、命令和对话框放在同一个 crate 里。
+- **领域 crate 不依赖界面**。`mw-crystal` 和以后的文件格式、对称性引擎都要能在 CLI 或测试里单独使用。
+- **渲染器不依赖 GPUI**，见视口设计稿 5.1 节。
+- **能力之间不互相依赖**。`mw-project` 和 `mw-structure` 互不引用，由外壳通过事件转接（见第 4 节）。
+- 只有一个能力在用的东西不提前抽成共享 crate；有第二个使用者时再抽。
+
+## 4. 运行时结构
+
+```text
+Workbench（窗口根视图，apps/workbench）
+├── ProjectSidebar（mw-project）
+├── StructureWorkspace（mw-structure），没有打开结构时为空状态
+│   ├── StructureDocument：结构 + 派生数据 + 测量 + 诊断
+│   ├── Viewport（mw-viewport）：渲染器、相机、出帧流水线
+│   └── 各字段的 InputState
+└── CommandState：命令面板的查询与选择状态
+```
+
+**打开结构的流程**：
+
+1. 用户点击边栏里的结构，`ProjectSidebar` 发出 `ProjectSidebarEvent::OpenStructure(id)`。
+2. `Workbench` 在项目目录里查到这个结构，构造 `StructureDocument`（目前来自内置示例）。
+3. `Workbench` 新建一个 `StructureWorkspace`，把焦点交给它，并告诉边栏选中项变了。
+
+**视口出帧**：`StructureWorkspace` 把文档的原子转成球体交给 `Viewport::set_scene`。视口在需要时渲染并异步回读，每完成一帧就通知自己；工作区订阅了视口，随之重绘测量标注等浮层，浮层位置由 `Viewport::project` 算出。
+
+## 5. 命令与快捷键
+
+- 每个 crate 用 `gpui_kit::actions!` 定义自己的动作，并在一个 `bind_keys` 函数里注册快捷键。外壳启动时依次调用。
+- **按键上下文**：外壳根视图是 `Workbench`，结构工作区是 `StructureWorkspace`。只在工作区内有效的快捷键（如 Delete、M）绑定在 `StructureWorkspace` 上下文里；输入框有自己更深的上下文，所以打字不会触发这些快捷键。
+- **动作处理器写在拥有该命令的视图上**（`.on_action(cx.listener(...))`）。快捷键、按钮、命令面板都派发同一个动作。
+- **命令面板**（⌘K）由外壳打开，列出外壳命令，并在有打开的结构时加上 `mw_structure::palette_commands()`。确认后先关闭面板，把焦点还给打开前的位置，再派发动作，这样动作能沿焦点路径传到对应的视图。
+
+新增一个命令的步骤见开发指南。
+
+## 6. 国际化
+
+- 使用 GPUI Kit 推荐的 `rust-i18n`。每个有界面文字的 crate 都有自己的 `locales/ui.yml`，同时写 `zh-CN` 和 `en`，回退到 `en`。
+- 代码里用各 crate 定义的 `tr!("key", 参数 = 值)` 宏取文字，得到 `SharedString`。
+- 默认界面语言是简体中文；设置对话框和命令面板都能切换，切换后刷新所有窗口。
+- 用户数据（项目名、结构名、原子标签）不翻译。
+- 数字格式统一在 `mw-structure/src/format.rs`。
+
+## 7. 主题与样式
+
+- 颜色只从 `cx.theme()` 按语义取。唯一的例外是数据本身的颜色：元素颜色（Jmol 配色）在 `mw-structure/src/scene.rs`，坐标轴颜色以后也放在那里。
+- 尺寸和间距用 rem 辅助函数。直接写像素只用于有注释说明的边界：初始窗口大小、标题栏按钮位置、测量标注相对锚点的偏移。
+- 深色模式由 GPUI Kit 主题切换，视口背景跟随主题的 `muted` 色。
+
+## 8. 3D 视口
+
+技术方案和实测数据见[视口设计稿](design/viewport-rendering.md)。框架里的分工：
+
+- `mw-crystal-render` 只负责"给定球体和相机，产出一帧像素"。
+- `mw-viewport` 负责相机交互（拖动旋转、滚轮缩放）、出帧流水线和投影，不知道晶体是什么。
+- `mw-structure` 决定画什么（原子颜色、半径、选中高亮）以及上面叠什么（信息标签、测量标注、浮动工具条）。
+
+## 9. 模拟（Mocks）
+
+所有模拟都在代码里用 `Mock:` 开头的注释标出（`rg "Mock:"` 可以全部列出）；用户能触发的模拟操作会弹出"尚未实现"的通知，而不是悄悄什么都不做。
+
+| 模拟 | 位置 | 代替的是 | 由哪一步替换 |
+|---|---|---|---|
+| 内置示例结构（金红石、2×2×2 超胞、SrTiO₃） | `mw-crystal/src/sample.rs` | 文件导入 | M1 CIF 导入 |
+| 手写的派生数据：Wyckoff、多重度、坐标约束、晶胞约束、显示用原子 | `mw-crystal` 的 `Derived` | 对称性引擎 | M2 对称性 |
+| 项目目录 | `mw-project` 的 `ProjectCatalog::sample` | 项目文件 | M6 项目与设置持久化 |
+| 测量和导入诊断 | `mw-structure/src/document.rs` | 测量工具、导入流水线 | M1、M3 |
+| 字段可以输入，但不会改变结构 | `mw-structure` 的属性面板 | 编辑命令与撤销 | M4 编辑 |
+| 删除、转为 P1、生成超胞、导出：对话框齐全，确认后只提示"尚未实现" | `mw-structure/src/dialogs.rs` | 对应的编辑命令 | M4、M5 |
+| 打开文件、新建项目、显示范围、多面体、更换元素、混合占位 | 各处的 `not_implemented` | 对应功能 | 见第 10 节 |
+| 不能点选原子；选中位点只能在位点列表里切换，视口里用颜色高亮代替描边 | `mw-structure/src/scene.rs` | ID 纹理拾取 | M3 渲染 |
+| 只画原子，不画键和晶胞边框 | 渲染器 | 圆柱、线段管线 | M3 渲染 |
+| 设置不保存 | `apps/workbench/src/settings.rs` | 设置持久化 | M6 |
+
+## 10. 路线图
+
+每一步都是可以单独交付、能在界面里看到效果的增量：
+
+| 步骤 | 内容 | 主要涉及 |
+|---|---|---|
+| M1 CIF 导入 | CIF 1.1 子集解析、导入诊断（带行号）、"打开文件…"对话框；示例改为从文件读 | 新增 `mw-crystal-io` |
+| M2 对称性 | 对称操作集、轨道展开、位点对称性与约束子空间，真正计算 `Derived` | `mw-crystal`（候选依赖 moyo，见晶体学设计稿 11 节） |
+| M3 渲染 | 键（impostor 圆柱）、晶胞边框、ID 纹理拾取；点选原子与测量模式 | `mw-crystal-render`、`mw-viewport` |
+| M4 编辑 | 命令与撤销栈：晶胞参数、元素、占位率、增删位点，对称模式下的约束联动 | `mw-crystal`、`mw-structure` |
+| M5 变换与导出 | 转为 P1、生成超胞、导出 CIF / POSCAR / 扩展 XYZ | `mw-crystal`、`mw-crystal-io` |
+| M6 持久化 | 项目文件、最近项目、设置保存 | `mw-project`、外壳 |
+
+之后：显示范围、多面体、对称性检测与对称化、XRD 模块。
