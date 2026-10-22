@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec3};
 
 /// View and projection matrices for one frame.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraMatrices {
     pub view: Mat4,
     pub proj: Mat4,

@@ -2,12 +2,15 @@
 //!
 //! The types follow `docs/design/crystallography-model.md`. A [`Structure`]
 //! is the asymmetric unit plus its [`Symmetry`] operation set; [`Derived`]
-//! expands it into the atoms of the unit cell and analyzes its symmetry:
+//! expands it into the atoms of the unit cell, finds their bonds, with each
+//! atom of the crystal named by an [`AtomRef`], and analyzes its symmetry:
 //! the space group type, cell constraints, and each site's site symmetry,
 //! coordinate constraints and Wyckoff position ([`SymmetryAnalysis`]). The
 //! space group tables and the symmetry search come from moyo. Editing
 //! commands come later.
 
+mod atom_ref;
+mod bonds;
 mod constraints;
 mod derived;
 pub mod element;
@@ -22,6 +25,8 @@ mod structure;
 mod symmetry;
 mod tables;
 
+pub use atom_ref::{AtomRef, Measurement, angle, distance};
+pub use bonds::{Bond, BondRules, covalent_radius, display_bonds};
 pub use constraints::cell_deviation;
 pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,

@@ -32,6 +32,16 @@ pub(crate) fn occupancy(value: f64) -> String {
     format!("{value:.3}")
 }
 
+/// Measured distances in Å, e.g. `1.948 Å`.
+pub(crate) fn distance(value: f64) -> String {
+    format!("{value:.3} Å")
+}
+
+/// Measured bond angles, e.g. `90.0°`.
+pub(crate) fn bond_angle(value: f64) -> String {
+    format!("{value:.1}°")
+}
+
 /// A Hermann–Mauguin symbol as CIF writes it (`P 42/m n m`) in its usual
 /// display form (`P4₂/mnm`): spaces dropped and screw axes subscripted. A
 /// screw axis is recognized only where the symbol's spacing makes it

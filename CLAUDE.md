@@ -25,20 +25,20 @@ Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工�
 cargo run --bin materials-workbench          # 运行应用
 cargo test --workspace                       # 全部测试
 cargo test -p mw-crystal-io --test fixtures  # 单个集成测试文件
-cargo test -p mw-structure rutile_apical_bond_length   # 单个测试（按名称过滤）
+cargo test -p mw-structure rutile_apical_bond_and_angle   # 单个测试（按名称过滤）
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里。
+- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里；点选和测量两步发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径。
 
   ```bash
   MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
   ```
 
-  窗口被遮挡时系统会降低刷新，偶尔会截到旧画面，重跑一次即可。
+  窗口被遮挡或切到后台时系统会降低刷新，会截到旧画面：运行期间让窗口保持在前台，看图时先确认相邻几张没有完全相同的。
 - **无窗口渲染一帧**：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000`
-- **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 40 秒后自动退出。
+- **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 1 分钟后自动退出；包括带键的负载和拾取延迟。窗口失去焦点的档位（输出里 `window_lost_focus=true`）数据作废。
 - **COD 语料统计**：测试默认忽略，需要本地语料，不随仓库提交。
 
   ```bash
@@ -59,11 +59,11 @@ cargo fmt --all
   - `mw-structure`：打开的结构，包括文档、视口浮层、右侧面板、对话框和命令。
 
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
-- **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧和投影。它不知道晶体是什么。
+- **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型、对称操作、原子展开、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束）、元素表、内置示例；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal`：模型、对称操作、原子展开、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`）、`AtomRef` 与测量的几何、元素表、内置示例；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
   - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断；
-  - `mw-crystal-render`：wgpu 离屏渲染器。
+  - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"。
 
   这些 crate 都要能在命令行和测试里单独使用。纯计算一律放在这一层并在这里写单元测试。
 - **按能力分 crate**：一个能力的模型、视图、命令和对话框放在一起，不按"视图 / 模型"分目录。只有一个使用者的东西不提前抽成共享 crate。
@@ -71,15 +71,19 @@ cargo fmt --all
 ### 晶体学模型
 
 - **真源**是不对称单元加对称操作：整数矩阵加有理平移，并做群封闭检查。
-- **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性。
+- **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性、键（共价半径之和 + 容差，跨周期边界，金属之间默认不成键）。
 - 能力、选区和测量都引用稳定 ID（`StructureEntryId`、`SiteId`、`AtomRef`），不用列表下标。
 - 编辑分对称模式和 P1 模式，都是可序列化的命令，进入同一个撤销栈。这一部分从 M4 开始实现。
 
 ### 视口
 
-- 视口在 wgpu 里离屏渲染（impostor 球体，正交投影，MSAA 4×），回读后用 `Window::paint_image` 画进 GPUI。
+- 视口在 wgpu 里离屏渲染（impostor 球和圆柱，正交投影，MSAA 4×），回读后用 `Window::paint_image` 画进 GPUI。
 - stock GPUI 在任何平台上都没有零拷贝的表面，理由见 `viewport-rendering.md` 第 3 节。
-- `mw-structure` 决定画什么和叠什么：原子颜色与半径在 `src/scene.rs`，测量标注等浮层的位置用 `Viewport::project` 计算。
+- 拾取用单独的 1× `R32Uint` ID 通道，只在拾取时、相机或场景变过之后才重画（`viewport-rendering.md` 5.4 节）。
+- `mw-structure` 决定画什么和叠什么：
+  - 原子颜色与半径、键、晶胞边和测量线在 `src/scene.rs` 组成场景，第 i 个球就是 `derived.atoms[i]`；
+  - 选区（位点列表和视口共用）在 `src/selection.rs`，测量模式在 `src/measure.rs`；
+  - 测量标注等浮层的位置用 `Viewport::project` 计算。
 
 ### 命令与快捷键
 

@@ -85,6 +85,12 @@ impl Workbench {
         cx.notify();
     }
 
+    /// The open structure, if any; only the screenshot tour needs this so far.
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn workspace(&self) -> Option<&Entity<StructureWorkspace>> {
+        self.workspace.as_ref()
+    }
+
     pub(crate) fn set_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.sidebar_open = open;
         cx.notify();

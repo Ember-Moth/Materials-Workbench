@@ -1,21 +1,27 @@
-//! Everything GPUI draws over the 3D image: the info chip, measurement
-//! labels and the floating view toolbar (`docs/design/ui-shell.md` §4.2).
+//! Everything GPUI draws over the 3D image: the info chip, the hovered
+//! atom, the measuring prompt, measurement labels and the floating view
+//! toolbar (`docs/design/ui-shell.md` §4.2). Only the toolbar takes the
+//! pointer; the chips and labels let clicks through to the atoms.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
+};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::actions::{KEY_CONTEXT, ResetView, ToggleMeasure};
+use crate::format;
 use crate::scene::DisplayModel;
 use crate::workspace::StructureWorkspace;
 
-/// Offset from a measurement's midpoint to its label's top-left corner, so
-/// the label sits just above the bond. Measured runtime geometry.
-const LABEL_OFFSET: Point<Pixels> = Point {
-    x: px(-32.),
-    y: px(-30.),
+/// Offset from the hovered atom's center to its chip, up and to the right,
+/// clear of the pointer. Measured runtime geometry.
+const HOVER_OFFSET: Point<Pixels> = Point {
+    x: px(14.),
+    y: px(-34.),
 };
 
 impl StructureWorkspace {
@@ -25,17 +31,20 @@ impl StructureWorkspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let viewport = self.viewport.read(cx);
-        let labels: Vec<_> = self
-            .document
-            .measurements
-            .iter()
-            .filter_map(|m| {
-                let position = viewport.project(m.midpoint())?;
-                Some((position + LABEL_OFFSET, format!("{:.3} Å", m.distance())))
-            })
-            .collect();
+        let labels = self.measurement_labels(cx);
+        let hovered = self.render_hovered_atom(cx);
         let atom_count = self.document.derived.atoms.len();
+        let chip = || {
+            div()
+                .absolute()
+                .px_2()
+                .py_0p5()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .text_xs()
+        };
 
         div()
             .id("structure-viewport")
@@ -47,20 +56,24 @@ impl StructureWorkspace {
             .on_any_mouse_down(cx.listener(|this, _, window, cx| this.focus(window, cx)))
             .child(self.viewport.clone())
             .child(
-                div()
-                    .absolute()
+                chip()
                     .top_3()
                     .left_3()
-                    .px_2()
-                    .py_0p5()
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.background)
-                    .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(tr!("viewport.info", atoms = atom_count)),
             )
+            .when(self.measuring, |this| {
+                this.child(
+                    h_flex()
+                        .absolute()
+                        .top_3()
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(chip().relative().child(self.measure_prompt())),
+                )
+            })
+            .children(hovered)
             .children(labels.into_iter().map(|(position, text)| {
                 div()
                     .absolute()
@@ -86,6 +99,38 @@ impl StructureWorkspace {
             )
     }
 
+    /// The hovered atom's label and fractional coordinates, next to it.
+    fn render_hovered_atom(&self, cx: &App) -> Option<impl IntoElement + use<>> {
+        let theme = cx.theme();
+        let viewport = self.viewport.read(cx);
+        let atom = self.picked_atom(viewport.hovered())?;
+        let derived = &self.document.derived;
+        let site = self.document.structure.site(atom.site)?;
+        let lattice = &self.document.structure.lattice;
+        let position = viewport.project(derived.cartesian(lattice, atom)?)? + HOVER_OFFSET;
+        let coordinates = derived.fractional(atom)?.map(format::coordinate).join(", ");
+        Some(
+            h_flex()
+                .absolute()
+                .left(position.x)
+                .top(position.y)
+                .gap_1p5()
+                .px_1p5()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .text_xs()
+                .child(div().font_medium().child(site.label().to_string()))
+                .child(
+                    div()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground)
+                        .child(coordinates),
+                ),
+        )
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let model_button = |id: &'static str, label: SharedString, model: DisplayModel| {
@@ -99,6 +144,9 @@ impl StructureWorkspace {
                 }))
         };
         h_flex()
+            .id("view-toolbar")
+            // Clicks between the buttons must not select atoms behind.
+            .occlude()
             .gap_1()
             .p_1()
             .rounded(theme.radius_lg)

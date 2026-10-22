@@ -8,6 +8,7 @@ gpui_kit::actions!(
         TogglePanel,
         ResetView,
         ToggleMeasure,
+        ClearSelection,
         DeleteSelection,
         ConvertToP1,
         MakeSupercell,
@@ -36,6 +37,7 @@ pub fn bind_keys(cx: &mut App) {
         // Text fields bind these keys in their own, deeper context, so typing
         // still edits text.
         KeyBinding::new("m", ToggleMeasure, context),
+        KeyBinding::new("escape", ClearSelection, context),
         KeyBinding::new("backspace", DeleteSelection, context),
         KeyBinding::new("delete", DeleteSelection, context),
     ]);
@@ -95,6 +97,17 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             &["measure", "distance", "celiang"],
             Lucide::Ruler,
             Box::new(ToggleMeasure),
+        ),
+        command(
+            tr!("command.clear_selection"),
+            &[
+                "clear selection",
+                "deselect",
+                "qingchu xuanze",
+                "quxiao xuanze",
+            ],
+            Lucide::X,
+            Box::new(ClearSelection),
         ),
         command(
             tr!("command.ball_and_stick"),

@@ -7,8 +7,8 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{ActiveTheme, Selectable, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::*;
 use mw_crystal_render::{
-    FrameImage, OrbitCamera, RenderError, RenderRequest, Renderer, srgb_to_linear,
-    synthetic_lattice,
+    FrameImage, OrbitCamera, PendingPick, PickRequest, RenderError, RenderRequest, Renderer, Scene,
+    srgb_to_linear, synthetic_bonds, synthetic_lattice,
 };
 
 use crate::stats::{FrameStats, PaintProbe};
@@ -21,14 +21,36 @@ const DRAG_RADIANS_PER_PIXEL: f32 = 0.008;
 const AUTO_ROTATE_RADIANS_PER_SECOND: f32 = 0.8;
 const BENCH_WARMUP: Duration = Duration::from_secs(1);
 const BENCH_MEASURE: Duration = Duration::from_secs(5);
+/// Picks timed after each benchmark step, with a new camera and with the
+/// cached ID texture.
+const BENCH_PICKS: usize = 20;
+
+/// One benchmark load: atoms, render scale percent, whether bonds are drawn.
+type Step = (usize, u32, bool);
+
+/// The synthetic load: spheres, and about three bonds per sphere if asked.
+fn synthetic_scene(count: usize, bonds: bool) -> Scene {
+    let spheres = synthetic_lattice(count);
+    Scene {
+        bonds: if bonds {
+            synthetic_bonds(&spheres)
+        } else {
+            Vec::new()
+        },
+        spheres,
+        ..Scene::default()
+    }
+}
 
 /// Scripted measurement run, enabled with `VIEWPORT_POC_BENCH`: rotates
 /// through each load, prints one line per load and quits.
 ///
-/// `VIEWPORT_POC_BENCH=1` runs every load; a list such as
-/// `100000:50,1000:100` (atoms:render scale percent) runs those in order.
+/// `VIEWPORT_POC_BENCH=1` runs every sphere-only load of
+/// `docs/design/viewport-rendering.md` §8.1, then each atom count with bonds
+/// at full resolution. A list such as `100000:50,1000:100:bonds` (atoms:render
+/// scale percent, optionally with bonds) runs those in order.
 struct Bench {
-    steps: Vec<(usize, u32)>,
+    steps: Vec<Step>,
     ix: usize,
     step_started: Option<Instant>,
     measure_started: Option<Instant>,
@@ -39,18 +61,23 @@ struct Bench {
 impl Bench {
     fn from_env() -> Option<Self> {
         let value = std::env::var("VIEWPORT_POC_BENCH").ok()?;
-        let custom: Vec<(usize, u32)> = value
+        let custom: Vec<Step> = value
             .split(',')
             .filter_map(|step| {
-                let (atoms, scale) = step.trim().split_once(':')?;
-                Some((atoms.parse().ok()?, scale.parse().ok()?))
+                let mut parts = step.trim().split(':');
+                let atoms = parts.next()?.parse().ok()?;
+                let scale = parts.next()?.parse().ok()?;
+                Some((atoms, scale, parts.next() == Some("bonds")))
             })
             .collect();
         let steps = if custom.is_empty() {
-            ATOM_COUNTS
-                .iter()
-                .flat_map(|(count, _)| RENDER_SCALES.iter().map(|(scale, _)| (*count, *scale)))
-                .collect()
+            let spheres = ATOM_COUNTS.iter().flat_map(|(count, _)| {
+                RENDER_SCALES
+                    .iter()
+                    .map(|(scale, _)| (*count, *scale, false))
+            });
+            let bonds = ATOM_COUNTS.iter().map(|(count, _)| (*count, 100, true));
+            spheres.chain(bonds).collect()
         } else {
             custom
         };
@@ -87,6 +114,7 @@ pub struct ViewportView {
     renderer: Result<Renderer, SharedString>,
     camera: OrbitCamera,
     atom_count: usize,
+    bonds: bool,
     render_scale_percent: u32,
     auto_rotate: bool,
     last_auto_rotate: Option<Instant>,
@@ -112,7 +140,7 @@ impl ViewportView {
         let mut camera = OrbitCamera::framing(1.0);
         let renderer = Renderer::new()
             .map(|mut renderer| {
-                let radius = renderer.set_spheres(&synthetic_lattice(atom_count));
+                let radius = renderer.set_scene(&synthetic_scene(atom_count, false));
                 camera = OrbitCamera::framing(radius);
                 renderer
             })
@@ -122,6 +150,7 @@ impl ViewportView {
             renderer,
             camera,
             atom_count,
+            bonds: false,
             render_scale_percent: 100,
             auto_rotate: bench.is_some(),
             last_auto_rotate: None,
@@ -148,13 +177,14 @@ impl ViewportView {
         }
     }
 
-    fn set_atom_count(&mut self, count: usize, cx: &mut Context<Self>) {
-        if count == self.atom_count {
+    fn set_load(&mut self, count: usize, bonds: bool, cx: &mut Context<Self>) {
+        if (count, bonds) == (self.atom_count, self.bonds) {
             return;
         }
         self.atom_count = count;
+        self.bonds = bonds;
         if let Ok(renderer) = &mut self.renderer {
-            let radius = renderer.set_spheres(&synthetic_lattice(count));
+            let radius = renderer.set_scene(&synthetic_scene(count, bonds));
             self.camera = OrbitCamera::framing(radius);
         }
         self.reset_measurements();
@@ -178,7 +208,7 @@ impl ViewportView {
 
     fn reset_view(&mut self, cx: &mut Context<Self>) {
         if let Ok(renderer) = &mut self.renderer {
-            let radius = renderer.set_spheres(&synthetic_lattice(self.atom_count));
+            let radius = renderer.set_scene(&synthetic_scene(self.atom_count, self.bonds));
             self.camera = OrbitCamera::framing(radius);
         }
         self.request_frame(cx);
@@ -199,14 +229,14 @@ impl ViewportView {
             bench.was_inactive = true;
         }
         let now = Instant::now();
-        let Some(&(atoms, scale)) = bench.steps.get(bench.ix) else {
+        let Some(&(atoms, scale, bonds)) = bench.steps.get(bench.ix) else {
             cx.quit();
             return;
         };
         let step_started = *bench.step_started.get_or_insert(now);
         if now.duration_since(step_started) < BENCH_WARMUP {
             if step_started == now {
-                self.set_atom_count(atoms, cx);
+                self.set_load(atoms, bonds, cx);
                 self.set_render_scale(scale, cx);
             }
             return;
@@ -227,10 +257,13 @@ impl ViewportView {
         let was_inactive = bench.was_inactive;
         let ms = |v: Option<f64>| v.map_or(f64::NAN, |v| v);
         let (w, h) = self.last_frame_size.unwrap_or_default();
+        let (pick_stale, pick_cached) = self.time_picks();
         println!(
-            "bench atoms={atoms} scale={scale}% render={w}x{h} frame_mb={:.1} \
+            "bench atoms={atoms} bonds={bonds} scale={scale}% render={w}x{h} frame_mb={:.1} \
              presented_fps={:.1} finished_fps={:.1} encode_ms={:.2} gpu_wait_ms={:.2} \
-             copy_ms={:.2} paint_ms={:.2} request_to_image_ms={:.2} window_lost_focus={was_inactive}",
+             copy_ms={:.2} paint_ms={:.2} request_to_image_ms={:.2} \
+             pick_new_camera_ms={pick_stale:.2} pick_cached_ms={pick_cached:.2} \
+             window_lost_focus={was_inactive}",
             self.stats.last_bytes().unwrap_or(0) as f64 / 1e6,
             self.probe.presented_total() as f64 / seconds,
             self.frames_finished as f64 / seconds,
@@ -246,6 +279,40 @@ impl ViewportView {
             bench.measure_started = None;
             bench.was_inactive = false;
         }
+    }
+
+    /// Mean milliseconds from requesting a pick at the viewport center until
+    /// its result is on the CPU: first with a new camera each time, which
+    /// redraws the ID texture, then with the cached one. Blocks the UI
+    /// thread, so it only runs between benchmark steps.
+    fn time_picks(&mut self) -> (f64, f64) {
+        let (Some(geometry), Ok(renderer)) = (self.geometry, &mut self.renderer) else {
+            return (f64::NAN, f64::NAN);
+        };
+        let (width, height) = geometry.physical(self.render_scale_percent);
+        let mut camera = self.camera;
+        let mut time = |camera: &OrbitCamera| {
+            let started = Instant::now();
+            let request = PickRequest {
+                width,
+                height,
+                camera: camera.matrices(width as f32 / height.max(1) as f32),
+                x: width / 2,
+                y: height / 2,
+            };
+            if let Err(e) = renderer.pick(&request).and_then(PendingPick::wait) {
+                log::error!("pick failed: {e}");
+            }
+            started.elapsed().as_secs_f64() * 1e3
+        };
+        let stale: f64 = (0..BENCH_PICKS)
+            .map(|_| {
+                camera.rotate(0.01, 0.0);
+                time(&camera)
+            })
+            .sum();
+        let cached: f64 = (0..BENCH_PICKS).map(|_| time(&camera)).sum();
+        (stale / BENCH_PICKS as f64, cached / BENCH_PICKS as f64)
     }
 
     /// Called once per displayed frame while auto-rotation is on, so the
@@ -325,6 +392,7 @@ impl ViewportView {
                 srgb_to_linear(background.b) as f64,
                 1.0,
             ],
+            scale_factor: geometry.scale_factor * self.render_scale_percent as f32 / 100.0,
         };
         let Ok(renderer) = &mut self.renderer else {
             return;
@@ -439,7 +507,11 @@ impl ViewportView {
         let info = match (&self.renderer, self.last_frame_size) {
             (Err(e), _) => format!("渲染器不可用：{e}"),
             (Ok(_), Some((w, h))) => {
-                format!("{} 个原子 · {w} × {h} px · 正交投影", self.atom_count)
+                let bonds = if self.bonds { " · 含键" } else { "" };
+                format!(
+                    "{} 个原子{bonds} · {w} × {h} px · 正交投影",
+                    self.atom_count
+                )
             }
             (Ok(_), None) => "正在渲染…".to_string(),
         };
@@ -604,8 +676,19 @@ impl ViewportView {
                     .small()
                     .selected(self.atom_count == count)
                     .label(label)
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_atom_count(count, cx)))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.set_load(count, this.bonds, cx)),
+                    )
             })))
+            .child(
+                Button::new("bonds")
+                    .small()
+                    .selected(self.bonds)
+                    .label("画键（每个原子约 3 根）")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_load(this.atom_count, !this.bonds, cx)
+                    })),
+            )
             .child(
                 h_flex()
                     .gap_1()

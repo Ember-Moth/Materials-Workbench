@@ -6,15 +6,34 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::camera::CameraMatrices;
-use crate::scene::{SphereInstance, bounding_radius};
+use crate::scene::{BondInstance, HighlightRing, LineInstance, Scene, SphereInstance};
 
 /// sRGB so that the bytes read back match what GPUI expects from a decoded
 /// image: sRGB-encoded BGRA.
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Pick IDs (`docs/design/viewport-rendering.md` §5.4). WebGPU does not
+/// guarantee multisampling for this format, and integer formats cannot be
+/// resolved, so IDs are drawn in a separate single-sample pass.
+const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const SAMPLE_COUNT: u32 = 4;
 /// Readback buffers kept for reuse; a few frames can be in flight at once.
 const READBACK_POOL_LIMIT: usize = 4;
+/// Pixels around the pointer searched for the nearest object, so that thin
+/// bonds and the soft edges of atoms are easy to hit.
+const PICK_RADIUS: u32 = 4;
+
+// Must match the constants in common.wgsl.
+const SPHERE_ID: u32 = 1 << 30;
+const BOND_ID: u32 = 2 << 30;
+const ID_INDEX_MASK: u32 = (1 << 30) - 1;
+
+const SPHERE_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+const BOND_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -45,6 +64,39 @@ pub struct RenderRequest {
     pub camera: CameraMatrices,
     /// Linear RGBA.
     pub clear_color: [f64; 4],
+    /// Physical pixels per logical pixel. Line and ring widths are given in
+    /// logical pixels.
+    pub scale_factor: f32,
+}
+
+/// What is under one pixel, for a frame of the given size and camera.
+#[derive(Clone, Copy, Debug)]
+pub struct PickRequest {
+    pub width: u32,
+    pub height: u32,
+    pub camera: CameraMatrices,
+    /// Physical pixels from the top-left corner.
+    pub x: u32,
+    pub y: u32,
+}
+
+/// An object found under the pointer: the index of a sphere or bond in the
+/// current [`Scene`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Pick {
+    Sphere(usize),
+    Bond(usize),
+}
+
+impl Pick {
+    fn decode(id: u32) -> Option<Self> {
+        let index = (id & ID_INDEX_MASK) as usize;
+        match id & !ID_INDEX_MASK {
+            SPHERE_ID => Some(Self::Sphere(index)),
+            BOND_ID => Some(Self::Bond(index)),
+            _ => None,
+        }
+    }
 }
 
 /// Where the time of one frame went, measured on the CPU.
@@ -67,6 +119,35 @@ pub struct FrameImage {
     pub timings: FrameTimings,
 }
 
+/// Waits for a submission and the mapping of its readback buffer.
+fn wait_for_map(
+    device: &wgpu::Device,
+    submission: wgpu::SubmissionIndex,
+    mapped: &mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+) -> Result<(), RenderError> {
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        })
+        .map_err(|e| RenderError::Readback(e.to_string()))?;
+    // The map callback runs inside `poll` once the copy has completed.
+    mapped
+        .recv()
+        .map_err(|e| RenderError::Readback(e.to_string()))?
+        .map_err(|e| RenderError::Readback(e.to_string()))
+}
+
+fn map_for_reading(buffer: &wgpu::Buffer) -> mpsc::Receiver<Result<(), wgpu::BufferAsyncError>> {
+    let (sender, mapped) = mpsc::channel();
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+    mapped
+}
+
 /// A submitted frame whose pixels are not yet on the CPU.
 ///
 /// [`PendingFrame::wait`] blocks until the GPU has finished, so call it off
@@ -86,17 +167,7 @@ pub struct PendingFrame {
 
 impl PendingFrame {
     pub fn wait(self) -> Result<FrameImage, RenderError> {
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(self.submission),
-                timeout: None,
-            })
-            .map_err(|e| RenderError::Readback(e.to_string()))?;
-        // The map callback runs inside `poll` once the copy has completed.
-        self.mapped
-            .recv()
-            .map_err(|e| RenderError::Readback(e.to_string()))?
-            .map_err(|e| RenderError::Readback(e.to_string()))?;
+        wait_for_map(&self.device, self.submission, &self.mapped)?;
         let gpu_wait = self.submitted_at.elapsed();
 
         let copy_started = Instant::now();
@@ -132,11 +203,67 @@ impl PendingFrame {
     }
 }
 
+/// A submitted pick whose IDs are not yet on the CPU. Like
+/// [`PendingFrame::wait`], [`PendingPick::wait`] blocks.
+pub struct PendingPick {
+    device: wgpu::Device,
+    buffer: wgpu::Buffer,
+    submission: wgpu::SubmissionIndex,
+    mapped: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    /// Size of the region read back.
+    width: u32,
+    height: u32,
+    /// The pointer, relative to the region.
+    target: (u32, u32),
+}
+
+impl PendingPick {
+    /// The object nearest to the pointer within [`PICK_RADIUS`] pixels.
+    pub fn wait(self) -> Result<Option<Pick>, RenderError> {
+        wait_for_map(&self.device, self.submission, &self.mapped)?;
+        let mut nearest: Option<(u32, Pick)> = None;
+        {
+            let mapped = self.buffer.slice(..).get_mapped_range();
+            let ids: &[u32] = bytemuck::cast_slice(&mapped);
+            let row = padded_bytes_per_row(self.width) / 4;
+            for y in 0..self.height {
+                for x in 0..self.width {
+                    let Some(pick) = Pick::decode(ids[(y * row + x) as usize]) else {
+                        continue;
+                    };
+                    let (dx, dy) = (x.abs_diff(self.target.0), y.abs_diff(self.target.1));
+                    let distance = dx * dx + dy * dy;
+                    if nearest.is_none_or(|(d, _)| distance < d) {
+                        nearest = Some((distance, pick));
+                    }
+                }
+            }
+        }
+        self.buffer.unmap();
+        Ok(nearest.map(|(_, pick)| pick))
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CameraUniform {
     view: [[f32; 4]; 4],
     proj: [[f32; 4]; 4],
+    /// Width and height in physical pixels, world-space size of one pixel,
+    /// physical pixels per logical pixel.
+    viewport: [f32; 4],
+}
+
+impl CameraUniform {
+    fn new(camera: &CameraMatrices, width: u32, height: u32, scale_factor: f32) -> Self {
+        // For the orthographic projection, proj[1][1] is 1 / half-height.
+        let world_per_pixel = 2.0 / (camera.proj.y_axis.y * height as f32);
+        Self {
+            view: camera.view.to_cols_array_2d(),
+            proj: camera.proj.to_cols_array_2d(),
+            viewport: [width as f32, height as f32, world_per_pixel, scale_factor],
+        }
+    }
 }
 
 struct Targets {
@@ -148,21 +275,191 @@ struct Targets {
     depth_view: wgpu::TextureView,
 }
 
-struct SphereBuffer {
+/// The single-sample ID pass, kept until the camera, the scene or the size
+/// changes so that hovering over a still image costs only a tiny readback.
+struct IdTargets {
+    width: u32,
+    height: u32,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    /// The camera and scene generation the texture holds, if any.
+    drawn: Option<(CameraMatrices, u64)>,
+}
+
+struct Instances {
     buffer: wgpu::Buffer,
     count: u32,
 }
 
-/// Renders impostor spheres offscreen and reads the pixels back.
+impl Instances {
+    fn upload<T: Pod>(device: &wgpu::Device, label: &str, items: &[T]) -> Option<Self> {
+        (!items.is_empty()).then(|| Self {
+            buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(items),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            count: items.len() as u32,
+        })
+    }
+
+    fn draw(this: &Option<Self>, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
+        if let Some(instances) = this {
+            pass.set_pipeline(pipeline);
+            pass.set_vertex_buffer(0, instances.buffer.slice(..));
+            pass.draw(0..6, 0..instances.count);
+        }
+    }
+}
+
+struct Pipelines {
+    spheres: wgpu::RenderPipeline,
+    bonds: wgpu::RenderPipeline,
+    lines: wgpu::RenderPipeline,
+    rings: wgpu::RenderPipeline,
+    sphere_ids: wgpu::RenderPipeline,
+    bond_ids: wgpu::RenderPipeline,
+}
+
+/// How one pipeline differs from the others.
+struct PipelineSpec<'a> {
+    label: &'a str,
+    module: &'a wgpu::ShaderModule,
+    vertex: &'a str,
+    fragment: &'a str,
+    stride: usize,
+    attributes: &'a [wgpu::VertexAttribute],
+    /// The ID pass: single-sample R32Uint instead of MSAA color.
+    ids: bool,
+    /// Rings are drawn over the scene without hiding anything behind them.
+    depth_write: bool,
+}
+
+impl Pipelines {
+    fn new(device: &wgpu::Device, layout: &wgpu::PipelineLayout) -> Self {
+        let shader = |label, body: &str| {
+            let source = format!("{}\n{body}", include_str!("common.wgsl"));
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            })
+        };
+        let sphere = shader("sphere.wgsl", include_str!("sphere.wgsl"));
+        let bond = shader("bond.wgsl", include_str!("bond.wgsl"));
+        let line = shader("line.wgsl", include_str!("line.wgsl"));
+        let sphere_size = std::mem::size_of::<SphereInstance>();
+        let pipeline = |spec: PipelineSpec| {
+            let (format, samples, write_mask) = if spec.ids {
+                (ID_FORMAT, 1, wgpu::ColorWrites::ALL)
+            } else {
+                // Alpha only drives coverage; keep the cleared opaque alpha.
+                (COLOR_FORMAT, SAMPLE_COUNT, wgpu::ColorWrites::COLOR)
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(spec.label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: spec.module,
+                    entry_point: Some(spec.vertex),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: spec.stride as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: spec.attributes,
+                    }],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(spec.depth_write),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    mask: !0,
+                    alpha_to_coverage_enabled: samples > 1,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: spec.module,
+                    entry_point: Some(spec.fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let spheres = |label, fragment, ids| PipelineSpec {
+            label,
+            module: &sphere,
+            vertex: "vs_main",
+            fragment,
+            stride: sphere_size,
+            attributes: &SPHERE_ATTRIBUTES,
+            ids,
+            depth_write: true,
+        };
+        let bonds = |label, fragment, ids| PipelineSpec {
+            label,
+            module: &bond,
+            vertex: "vs_main",
+            fragment,
+            stride: std::mem::size_of::<BondInstance>(),
+            attributes: &BOND_ATTRIBUTES,
+            ids,
+            depth_write: true,
+        };
+        Self {
+            spheres: pipeline(spheres("spheres", "fs_main", false)),
+            sphere_ids: pipeline(spheres("sphere ids", "fs_id", true)),
+            bonds: pipeline(bonds("bonds", "fs_main", false)),
+            bond_ids: pipeline(bonds("bond ids", "fs_id", true)),
+            lines: pipeline(PipelineSpec {
+                label: "lines",
+                module: &line,
+                vertex: "vs_main",
+                fragment: "fs_main",
+                stride: std::mem::size_of::<LineInstance>(),
+                attributes: &LINE_ATTRIBUTES,
+                ids: false,
+                depth_write: true,
+            }),
+            rings: pipeline(PipelineSpec {
+                label: "highlight rings",
+                vertex: "vs_ring",
+                fragment: "fs_ring",
+                stride: std::mem::size_of::<HighlightRing>(),
+                depth_write: false,
+                ..spheres("", "", false)
+            }),
+        }
+    }
+}
+
+/// Renders impostor spheres and bonds offscreen, reads the pixels back, and
+/// answers which object lies under a pixel.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter_name: String,
-    pipeline: wgpu::RenderPipeline,
+    pipelines: Pipelines,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    spheres: Option<SphereBuffer>,
+    spheres: Option<Instances>,
+    bonds: Option<Instances>,
+    lines: Option<Instances>,
+    rings: Option<Instances>,
+    /// Counts scene changes, so a stale ID texture is redrawn.
+    scene_generation: u64,
     targets: Option<Targets>,
+    id_targets: Option<IdTargets>,
     readback_pool: Arc<Mutex<Vec<wgpu::Buffer>>>,
 }
 
@@ -192,7 +489,6 @@ impl Renderer {
             .await
             .map_err(|e| RenderError::Device(e.to_string()))?;
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("sphere.wgsl"));
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -221,60 +517,26 @@ impl Renderer {
             }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("spheres"),
+            label: Some("scene"),
             bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("spheres"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<SphereInstance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
-                }],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: SAMPLE_COUNT,
-                mask: !0,
-                alpha_to_coverage_enabled: true,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: COLOR_FORMAT,
-                    blend: None,
-                    // Alpha only drives coverage; keep the cleared opaque alpha.
-                    write_mask: wgpu::ColorWrites::COLOR,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipelines = Pipelines::new(&device, &pipeline_layout);
 
         Ok(Self {
             device,
             queue,
             adapter_name: format!("{} ({:?})", info.name, info.backend),
-            pipeline,
+            pipelines,
             camera_buffer,
             camera_bind_group,
             spheres: None,
+            bonds: None,
+            lines: None,
+            rings: None,
+            scene_generation: 0,
             targets: None,
+            id_targets: None,
             readback_pool: Arc::default(),
         })
     }
@@ -284,19 +546,27 @@ impl Renderer {
         &self.adapter_name
     }
 
-    /// Replaces the scene. Returns the scene's bounding radius in Å.
-    pub fn set_spheres(&mut self, spheres: &[SphereInstance]) -> f32 {
-        self.spheres = (!spheres.is_empty()).then(|| SphereBuffer {
-            buffer: self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("spheres"),
-                    contents: bytemuck::cast_slice(spheres),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-            count: spheres.len() as u32,
-        });
-        bounding_radius(spheres)
+    /// Replaces the scene and clears the highlights. Returns the scene's
+    /// bounding radius in Å.
+    pub fn set_scene(&mut self, scene: &Scene) -> f32 {
+        self.spheres = Instances::upload(&self.device, "spheres", &scene.spheres);
+        self.bonds = Instances::upload(&self.device, "bonds", &scene.bonds);
+        self.lines = Instances::upload(&self.device, "lines", &scene.lines);
+        self.rings = None;
+        self.scene_generation += 1;
+        scene.bounding_radius()
+    }
+
+    /// Replaces the highlight rings. They are not pickable, so the ID
+    /// texture stays valid.
+    pub fn set_highlights(&mut self, rings: &[HighlightRing]) {
+        self.rings = Instances::upload(&self.device, "highlight rings", rings);
+    }
+
+    fn write_camera(&self, camera: &CameraMatrices, width: u32, height: u32, scale_factor: f32) {
+        let uniform = CameraUniform::new(camera, width, height, scale_factor);
+        self.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     /// Encodes and submits one frame. The returned frame must be waited on to
@@ -311,13 +581,7 @@ impl Renderer {
         let Some(targets) = &self.targets else {
             return Err(RenderError::EmptyViewport);
         };
-
-        let uniform = CameraUniform {
-            view: request.camera.view.to_cols_array_2d(),
-            proj: request.camera.proj.to_cols_array_2d(),
-        };
-        self.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        self.write_camera(&request.camera, width, height, request.scale_factor);
 
         let padded_row = padded_bytes_per_row(width);
         let buffer = take_readback_buffer(
@@ -334,7 +598,7 @@ impl Renderer {
         {
             let [r, g, b, a] = request.clear_color;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("spheres"),
+                label: Some("scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &targets.msaa_view,
                     depth_slice: None,
@@ -354,12 +618,12 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
-            if let Some(spheres) = &self.spheres {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, spheres.buffer.slice(..));
-                pass.draw(0..6, 0..spheres.count);
-            }
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            let pipelines = &self.pipelines;
+            Instances::draw(&self.spheres, &mut pass, &pipelines.spheres);
+            Instances::draw(&self.bonds, &mut pass, &pipelines.bonds);
+            Instances::draw(&self.lines, &mut pass, &pipelines.lines);
+            Instances::draw(&self.rings, &mut pass, &pipelines.rings);
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -383,13 +647,7 @@ impl Renderer {
             },
         );
         let submission = self.queue.submit([encoder.finish()]);
-
-        let (sender, mapped) = mpsc::channel();
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result);
-            });
+        let mapped = map_for_reading(&buffer);
 
         Ok(PendingFrame {
             device: self.device.clone(),
@@ -405,6 +663,130 @@ impl Renderer {
         })
     }
 
+    /// Reads back the IDs around one pixel, drawing the ID pass first if
+    /// the camera, size or scene changed since it was last drawn.
+    pub fn pick(&mut self, request: &PickRequest) -> Result<PendingPick, RenderError> {
+        let (width, height) = (request.width, request.height);
+        if width == 0 || height == 0 || request.x >= width || request.y >= height {
+            return Err(RenderError::EmptyViewport);
+        }
+        self.ensure_id_targets(width, height);
+        let drawn = (request.camera, self.scene_generation);
+        let stale = self
+            .id_targets
+            .as_ref()
+            .is_some_and(|t| t.drawn != Some(drawn));
+        if stale {
+            // Widths do not matter: lines and rings are not pickable.
+            self.write_camera(&request.camera, width, height, 1.0);
+        }
+        let Some(targets) = &mut self.id_targets else {
+            return Err(RenderError::EmptyViewport);
+        };
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("viewport pick"),
+            });
+        if stale {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ids"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &targets.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            Instances::draw(&self.spheres, &mut pass, &self.pipelines.sphere_ids);
+            Instances::draw(&self.bonds, &mut pass, &self.pipelines.bond_ids);
+            targets.drawn = Some(drawn);
+        }
+
+        let x0 = request.x.saturating_sub(PICK_RADIUS);
+        let y0 = request.y.saturating_sub(PICK_RADIUS);
+        let region_width = (request.x + PICK_RADIUS + 1).min(width) - x0;
+        let region_height = (request.y + PICK_RADIUS + 1).min(height) - y0;
+        let padded_row = padded_bytes_per_row(region_width);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pick readback"),
+            size: padded_row as u64 * region_height as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &targets.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(region_height),
+                },
+            },
+            wgpu::Extent3d {
+                width: region_width,
+                height: region_height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submission = self.queue.submit([encoder.finish()]);
+        let mapped = map_for_reading(&buffer);
+
+        Ok(PendingPick {
+            device: self.device.clone(),
+            buffer,
+            submission,
+            mapped,
+            width: region_width,
+            height: region_height,
+            target: (request.x - x0, request.y - y0),
+        })
+    }
+
+    fn texture(
+        &self,
+        label: &str,
+        (width, height): (u32, u32),
+        sample_count: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    }
+
     fn ensure_targets(&mut self, width: u32, height: u32) {
         if self
             .targets
@@ -413,40 +795,28 @@ impl Renderer {
         {
             return;
         }
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-        let texture = |label, sample_count, format, usage| {
-            self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size,
-                mip_level_count: 1,
-                sample_count,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            })
-        };
-        let msaa = texture(
+        let size = (width, height);
+        let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let msaa = self.texture(
             "viewport msaa",
+            size,
             SAMPLE_COUNT,
             COLOR_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            attachment,
         );
-        let resolve = texture(
+        let resolve = self.texture(
             "viewport resolve",
+            size,
             1,
             COLOR_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            attachment | wgpu::TextureUsages::COPY_SRC,
         );
-        let depth = texture(
+        let depth = self.texture(
             "viewport depth",
+            size,
             SAMPLE_COUNT,
             DEPTH_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            attachment,
         );
         self.targets = Some(Targets {
             width,
@@ -460,6 +830,34 @@ impl Renderer {
         if let Ok(mut pool) = self.readback_pool.lock() {
             pool.clear();
         }
+    }
+
+    fn ensure_id_targets(&mut self, width: u32, height: u32) {
+        if self
+            .id_targets
+            .as_ref()
+            .is_some_and(|t| t.width == width && t.height == height)
+        {
+            return;
+        }
+        let size = (width, height);
+        let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let texture = self.texture(
+            "viewport ids",
+            size,
+            1,
+            ID_FORMAT,
+            attachment | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth = self.texture("viewport id depth", size, 1, DEPTH_FORMAT, attachment);
+        self.id_targets = Some(IdTargets {
+            width,
+            height,
+            view: texture.create_view(&Default::default()),
+            depth_view: depth.create_view(&Default::default()),
+            texture,
+            drawn: None,
+        });
     }
 }
 
@@ -513,40 +911,146 @@ mod tests {
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
     }
 
-    /// Renders one sphere and checks that it lands in the middle of the frame
-    /// and not in the corner. Needs a GPU; skipped when none is available.
     #[test]
-    fn renders_sphere_at_center() {
-        let mut renderer = match Renderer::new() {
-            Ok(renderer) => renderer,
-            Err(e) => {
-                eprintln!("skipping: {e}");
-                return;
-            }
-        };
-        let sphere = SphereInstance {
-            center_radius: [0.0, 0.0, 0.0, 1.0],
-            color: [1.0, 0.0, 0.0, 1.0],
-        };
-        let radius = renderer.set_spheres(&[sphere]);
-        let camera = OrbitCamera::framing(radius).matrices(1.0);
-        let frame = renderer
+    fn pick_ids_round_trip() {
+        assert_eq!(Pick::decode(0), None);
+        assert_eq!(Pick::decode(SPHERE_ID | 7), Some(Pick::Sphere(7)));
+        assert_eq!(Pick::decode(BOND_ID), Some(Pick::Bond(0)));
+        assert_eq!(Pick::decode(3 << 30), None);
+    }
+
+    const SIZE: u32 = 65;
+
+    /// A renderer, or `None` (and the test passes) on machines without a GPU.
+    fn renderer() -> Option<Renderer> {
+        Renderer::new().map_err(|e| eprintln!("skipping: {e}")).ok()
+    }
+
+    fn frame(renderer: &mut Renderer, camera: CameraMatrices) -> FrameImage {
+        renderer
             .render(&RenderRequest {
-                width: 65,
-                height: 65,
+                width: SIZE,
+                height: SIZE,
                 camera,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
+                scale_factor: 1.0,
             })
             .and_then(PendingFrame::wait)
-            .expect("frame");
+            .expect("frame")
+    }
 
-        assert_eq!(frame.bgra.len(), 65 * 65 * 4);
-        let pixel = |x: usize, y: usize| {
-            let i = (y * 65 + x) * 4;
-            &frame.bgra[i..i + 4]
+    fn pick(renderer: &mut Renderer, camera: CameraMatrices, x: u32, y: u32) -> Option<Pick> {
+        renderer
+            .pick(&PickRequest {
+                width: SIZE,
+                height: SIZE,
+                camera,
+                x,
+                y,
+            })
+            .and_then(PendingPick::wait)
+            .expect("pick")
+    }
+
+    fn bgra(frame: &FrameImage, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * SIZE + x) * 4) as usize;
+        frame.bgra[i..i + 4].try_into().unwrap()
+    }
+
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+    /// Renders one sphere and checks that it lands in the middle of the frame
+    /// and not in the corner, and that picking finds it there.
+    #[test]
+    fn renders_and_picks_a_sphere_at_center() {
+        let Some(mut renderer) = renderer() else {
+            return;
         };
-        let center = pixel(32, 32);
+        let radius = renderer.set_scene(&Scene {
+            spheres: vec![SphereInstance {
+                center_radius: [0.0, 0.0, 0.0, 1.0],
+                color: RED,
+            }],
+            ..Scene::default()
+        });
+        let camera = OrbitCamera::framing(radius).matrices(1.0);
+        let frame = frame(&mut renderer, camera);
+
+        assert_eq!(frame.bgra.len(), (SIZE * SIZE * 4) as usize);
+        let center = bgra(&frame, 32, 32);
         assert!(center[2] > 100 && center[0] < 60, "center BGRA {center:?}");
-        assert_eq!(pixel(0, 0), &[0, 0, 0, 255]);
+        assert_eq!(bgra(&frame, 0, 0), [0, 0, 0, 255]);
+
+        assert_eq!(pick(&mut renderer, camera, 32, 32), Some(Pick::Sphere(0)));
+        assert_eq!(pick(&mut renderer, camera, 0, 0), None);
+    }
+
+    /// A bond seen side-on: red on the start half, blue on the end half,
+    /// pickable along its length. The camera looks down −z.
+    #[test]
+    fn bonds_are_split_in_their_atoms_colors() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        renderer.set_scene(&Scene {
+            bonds: vec![BondInstance {
+                start_radius: [-2.0, 0.0, 0.0, 0.5],
+                end: [2.0, 0.0, 0.0, 0.0],
+                start_color: RED,
+                end_color: BLUE,
+            }],
+            ..Scene::default()
+        });
+        let camera = CameraMatrices {
+            view: glam::Mat4::look_at_rh(glam::Vec3::Z * 10.0, glam::Vec3::ZERO, glam::Vec3::Y),
+            proj: glam::Mat4::orthographic_rh(-2.5, 2.5, -2.5, 2.5, 0.1, 20.0),
+        };
+        let frame = frame(&mut renderer, camera);
+        let left = bgra(&frame, 16, 32);
+        let right = bgra(&frame, 48, 32);
+        assert!(left[2] > 100 && left[0] < 60, "left BGRA {left:?}");
+        assert!(right[0] > 100 && right[2] < 60, "right BGRA {right:?}");
+        // Above and below the cylinder: background.
+        assert_eq!(bgra(&frame, 32, 20), [0, 0, 0, 255]);
+
+        assert_eq!(pick(&mut renderer, camera, 20, 32), Some(Pick::Bond(0)));
+        assert_eq!(pick(&mut renderer, camera, 32, 5), None);
+    }
+
+    /// The nearer of two overlapping objects wins, in the image and the pick.
+    #[test]
+    fn nearer_spheres_hide_and_win_picks() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let near = SphereInstance {
+            center_radius: [0.0, 0.0, 1.0, 1.0],
+            color: BLUE,
+        };
+        let far = SphereInstance {
+            center_radius: [0.5, 0.0, -1.0, 1.5],
+            color: RED,
+        };
+        renderer.set_scene(&Scene {
+            spheres: vec![far, near],
+            ..Scene::default()
+        });
+        let camera = CameraMatrices {
+            view: glam::Mat4::look_at_rh(glam::Vec3::Z * 10.0, glam::Vec3::ZERO, glam::Vec3::Y),
+            proj: glam::Mat4::orthographic_rh(-2.5, 2.5, -2.5, 2.5, 0.1, 20.0),
+        };
+        let center = bgra(&frame(&mut renderer, camera), 32, 32);
+        assert!(center[0] > 100 && center[2] < 60, "center BGRA {center:?}");
+        assert_eq!(pick(&mut renderer, camera, 32, 32), Some(Pick::Sphere(1)));
+        // Right of the near sphere only the far one remains.
+        assert_eq!(pick(&mut renderer, camera, 60, 32), Some(Pick::Sphere(0)));
+
+        // A new scene invalidates the cached IDs.
+        renderer.set_scene(&Scene {
+            spheres: vec![near],
+            ..Scene::default()
+        });
+        assert_eq!(pick(&mut renderer, camera, 60, 32), None);
     }
 }

@@ -1,8 +1,9 @@
 //! The structure workspace: one open crystal structure with its 3D view,
 //! side panels, commands and dialogs (`docs/design/ui-shell.md` §4–§5).
 //!
-//! Editing is mocked: fields show the document's values and commands open
-//! their dialogs, but nothing changes the structure yet. Each mock says so
+//! Viewing, selecting and measuring are real. Editing is mocked: fields show
+//! the document's values and commands open their dialogs, but nothing
+//! changes the structure yet. Each mock says so
 //! where it happens (see `docs/architecture.md`, "Mocks").
 
 rust_i18n::i18n!("locales", fallback = "en");
@@ -20,16 +21,18 @@ mod dialogs;
 mod document;
 mod format;
 pub mod import;
+mod measure;
 mod overlays;
 mod panel;
 mod scene;
+mod selection;
 mod workspace;
 
 pub use actions::{
-    ConvertToP1, DeleteSelection, ExportStructure, KEY_CONTEXT, MakeSupercell, PaletteCommand,
-    ResetView, ShowBallAndStick, ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra,
-    ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling, ToggleMeasure, TogglePanel, bind_keys,
-    palette_commands,
+    ClearSelection, ConvertToP1, DeleteSelection, ExportStructure, KEY_CONTEXT, MakeSupercell,
+    PaletteCommand, ResetView, ShowBallAndStick, ShowDiagnosticsPanel, ShowMeasurementsPanel,
+    ShowPolyhedra, ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling, ToggleMeasure,
+    TogglePanel, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use workspace::StructureWorkspace;

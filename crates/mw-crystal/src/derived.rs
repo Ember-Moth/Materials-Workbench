@@ -1,7 +1,9 @@
 use crate::expand::{self, Orbit};
 use crate::site::Stabilizer;
 use crate::space_group::{self, DetectedSymmetry, SpaceGroupType};
-use crate::{SiteId, SiteSymmetry, Structure, constraints, element};
+use crate::{
+    AtomRef, Bond, BondRules, SiteId, SiteSymmetry, Structure, bonds, constraints, element,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrystalSystem {
@@ -105,7 +107,7 @@ pub enum CoordinateConstraint {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DisplayAtom {
-    pub site: SiteId,
+    pub atom: AtomRef,
     pub element: String,
     pub position: [f64; 3],
 }
@@ -175,6 +177,10 @@ pub struct Derived {
     pub orbits: Vec<Orbit>,
     /// Atoms in the displayed range, including boundary images.
     pub atoms: Vec<DisplayAtom>,
+    /// Bonds of the crystal, once per unit cell, under the default rules.
+    pub bonds: Vec<Bond>,
+    /// Bonds between displayed atoms, as index pairs into `atoms`.
+    pub display_bonds: Vec<[usize; 2]>,
     /// g/cm³; `None` when a species has no known atomic weight.
     pub density: Option<f64>,
 }
@@ -182,15 +188,19 @@ pub struct Derived {
 const AVOGADRO: f64 = 6.022_140_76e23;
 
 impl Derived {
-    /// Expands the structure and analyzes its symmetry.
+    /// Expands the structure, finds its bonds and analyzes its symmetry.
     pub fn compute(structure: &Structure) -> Self {
         let orbits = expand::orbits(structure);
         let atoms = expand::display_atoms(structure, &orbits);
+        let bonds = bonds::bonds(structure, &orbits, &BondRules::default());
+        let display_bonds = bonds::display_bonds(&atoms, &bonds);
         let density = density(structure, &orbits);
         Self {
             symmetry: SymmetryAnalysis::compute(structure, &orbits),
             orbits,
             atoms,
+            bonds,
+            display_bonds,
             density,
         }
     }
