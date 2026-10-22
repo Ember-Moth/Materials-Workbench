@@ -278,7 +278,7 @@ mod tests {
         for key in ALL {
             let sample = load(key);
             for atom in &sample.derived.atoms {
-                assert!(sample.structure.site(atom.site).is_some(), "{key:?}");
+                assert!(sample.structure.site(atom.atom.site).is_some(), "{key:?}");
             }
         }
     }

@@ -1,4 +1,5 @@
-//! The side panel and its four tabs (`docs/design/ui-shell.md` §4.3).
+//! The side panel and its four tabs (`docs/design/ui-shell.md` §4.3). The
+//! measurements tab lives in `measure.rs`.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -342,7 +343,7 @@ impl StructureWorkspace {
         let theme = cx.theme();
         let structure = &self.document.structure;
         let derived = &self.document.derived;
-        let selected = self.selected_site.and_then(|id| structure.site(id));
+        let selected = self.selected_site().and_then(|id| structure.site(id));
         let Some(site) = selected else {
             return v_flex()
                 .p_4()
@@ -463,7 +464,7 @@ impl StructureWorkspace {
             let occupancy = occupant.map_or(1.0, |o| o.occupancy.value());
             let coordinates = site.position.map(format::coordinate).join(", ");
             ListItem::new(("site", id.0 as usize))
-                .selected(self.selected_site == Some(id))
+                .selected(self.selection.touches_site(id))
                 .on_click(cx.listener(move |this, _, window, cx| this.select_site(id, window, cx)))
                 .child(
                     v_flex()
@@ -544,44 +545,6 @@ impl StructureWorkspace {
                         .child(tr!("panel.sites.symmetric_hint")),
                 )
             })
-    }
-
-    fn render_measurements(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let rows = self.document.measurements.iter().map(|m| {
-            h_flex()
-                .justify_between()
-                .px_2()
-                .py_1p5()
-                .text_sm()
-                .child(m.label.clone())
-                .child(
-                    div()
-                        .font_family(theme.mono_font_family.clone())
-                        .child(format!("{:.3} Å", m.distance())),
-                )
-        });
-        v_flex()
-            .p_2()
-            .gap_1()
-            .children(rows)
-            .when(self.document.measurements.is_empty(), |this| {
-                this.child(
-                    div()
-                        .p_2()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(tr!("panel.measurements.empty")),
-                )
-            })
-            .child(
-                div()
-                    .px_2()
-                    .pt_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(tr!("panel.measurements.hint")),
-            )
     }
 
     fn render_diagnostics(&self, cx: &mut Context<Self>) -> impl IntoElement {

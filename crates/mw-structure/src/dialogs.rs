@@ -21,7 +21,7 @@ pub(crate) fn not_implemented(feature: SharedString, window: &mut Window, cx: &m
 
 pub(crate) fn open_delete(workspace: &StructureWorkspace, window: &mut Window, cx: &mut App) {
     let structure = &workspace.document.structure;
-    let Some(site) = workspace.selected_site.and_then(|id| structure.site(id)) else {
+    let Some(site) = workspace.selected_site().and_then(|id| structure.site(id)) else {
         return;
     };
     let label = site.label().to_string();

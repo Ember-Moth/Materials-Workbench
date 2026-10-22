@@ -3,16 +3,17 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
+    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, Theme, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal::{CellParam, CoordinateConstraint, EditMode, SiteId};
+use mw_crystal::{AtomRef, CellParam, CoordinateConstraint, EditMode, SiteId};
 use mw_viewport::Viewport;
 
 use crate::actions::*;
 use crate::document::StructureDocument;
-use crate::scene::{self, DisplayModel};
+use crate::scene::{self, DisplayModel, LineColors};
+use crate::selection::Selection;
 use crate::{dialogs, format};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,8 +34,8 @@ impl PanelTab {
 }
 
 /// One open structure: header, 3D view with its overlays, and the side
-/// panel. Owns presentation state (panel, display model, selection) and the
-/// field editors.
+/// panel. Owns presentation state (panel, display model, selection,
+/// measurement in progress) and the field editors.
 ///
 /// Mock: the field editors accept input, but nothing is applied to the
 /// document yet.
@@ -46,7 +47,9 @@ pub struct StructureWorkspace {
     pub(crate) panel_open: bool,
     pub(crate) display_model: DisplayModel,
     pub(crate) measuring: bool,
-    pub(crate) selected_site: Option<SiteId>,
+    /// Atoms clicked for the measurement in progress.
+    pub(crate) measure_picks: Vec<AtomRef>,
+    pub(crate) selection: Selection,
     pub(crate) cell_inputs: Vec<(CellParam, Entity<InputState>)>,
     pub(crate) coordinate_inputs: [Entity<InputState>; 3],
     pub(crate) occupancy_input: Entity<InputState>,
@@ -56,8 +59,13 @@ pub struct StructureWorkspace {
 impl StructureWorkspace {
     pub fn new(document: StructureDocument, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let viewport = cx.new(|_| Viewport::new());
-        // Overlays (labels) follow the camera, so redraw with the viewport.
-        let subscriptions = vec![cx.observe(&viewport, |_, _, cx| cx.notify())];
+        let subscriptions = vec![
+            // Overlays (labels) follow the camera, so redraw with the viewport.
+            cx.observe(&viewport, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&viewport, window, Self::on_viewport_event),
+            // Line colors are part of the scene.
+            cx.observe_global::<Theme>(|this, cx| this.refresh_scene(cx)),
+        ];
 
         let params = *document.structure.lattice.params();
         let cell_inputs = CellParam::ALL
@@ -83,7 +91,7 @@ impl StructureWorkspace {
 
         // Start on the first site that has something to edit, which shows the
         // symmetry constraints best.
-        let selected_site = document
+        let selection = document
             .structure
             .sites
             .iter()
@@ -94,7 +102,7 @@ impl StructureWorkspace {
                     .is_some_and(|s| s.coordinates.contains(&CoordinateConstraint::Free))
             })
             .or(document.structure.sites.first())
-            .map(|site| site.id);
+            .map_or_else(Selection::default, |site| Selection::site(site.id));
 
         let mut this = Self {
             document,
@@ -104,7 +112,8 @@ impl StructureWorkspace {
             panel_open: true,
             display_model: DisplayModel::BallAndStick,
             measuring: false,
-            selected_site,
+            measure_picks: Vec::new(),
+            selection,
             cell_inputs,
             coordinate_inputs,
             occupancy_input,
@@ -125,13 +134,7 @@ impl StructureWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_site == Some(site) {
-            return;
-        }
-        self.selected_site = Some(site);
-        self.sync_site_inputs(window, cx);
-        self.refresh_scene(cx);
-        cx.notify();
+        self.set_selection(Selection::site(site), window, cx);
     }
 
     pub(crate) fn set_panel(&mut self, panel: PanelTab, cx: &mut Context<Self>) {
@@ -156,9 +159,9 @@ impl StructureWorkspace {
         }
     }
 
-    fn sync_site_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn sync_site_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self
-            .selected_site
+            .selected_site()
             .and_then(|id| self.document.structure.site(id))
         else {
             return;
@@ -175,15 +178,18 @@ impl StructureWorkspace {
         });
     }
 
-    fn refresh_scene(&mut self, cx: &mut Context<Self>) {
-        let spheres = scene::spheres(
-            &self.document,
-            self.selected_site,
-            self.display_model,
-            cx.theme().selection,
-        );
+    /// Rebuilds what the viewport draws, after the display model or the
+    /// measurements change.
+    pub(crate) fn refresh_scene(&mut self, cx: &mut Context<Self>) {
+        let theme = cx.theme();
+        let colors = LineColors {
+            cell: theme.muted_foreground,
+            measurement: theme.foreground,
+        };
+        let scene = scene::scene(&self.document, self.display_model, colors);
         self.viewport
-            .update(cx, |viewport, cx| viewport.set_scene(&spheres, cx));
+            .update(cx, |viewport, cx| viewport.set_scene(scene, cx));
+        self.sync_viewport_selection(cx);
     }
 
     // MARK: Actions
@@ -200,10 +206,22 @@ impl StructureWorkspace {
 
     fn toggle_measure(&mut self, _: &ToggleMeasure, _: &mut Window, cx: &mut Context<Self>) {
         self.measuring = !self.measuring;
+        self.measure_picks.clear();
         if self.measuring {
             self.set_panel(PanelTab::Measurements, cx);
         }
+        self.sync_viewport_selection(cx);
         cx.notify();
+    }
+
+    /// Esc: drops the atoms picked for a measurement first, then the
+    /// selection.
+    fn clear_selection(&mut self, _: &ClearSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if self.measuring && !self.measure_picks.is_empty() {
+            self.measure_pick(None, cx);
+        } else {
+            self.set_selection(Selection::default(), window, cx);
+        }
     }
 
     fn delete_selection(
@@ -383,6 +401,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::toggle_panel))
             .on_action(cx.listener(Self::reset_view))
             .on_action(cx.listener(Self::toggle_measure))
+            .on_action(cx.listener(Self::clear_selection))
             .on_action(cx.listener(Self::delete_selection))
             .on_action(cx.listener(Self::convert_to_p1))
             .on_action(cx.listener(Self::make_supercell))

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -7,55 +8,119 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal_render::{
-    CameraMatrices, FrameImage, OrbitCamera, RenderError, RenderRequest, Renderer, SphereInstance,
-    srgb_to_linear,
+    CameraMatrices, FrameImage, HighlightRing, OrbitCamera, Pick, PickRequest, RenderError,
+    RenderRequest, Renderer, Scene, srgb_to_linear,
 };
 
 /// Frames that may be rendering or reading back at the same time.
 const MAX_IN_FLIGHT: usize = 2;
 const DRAG_RADIANS_PER_PIXEL: f32 = 0.008;
 const ZOOM_PER_SCROLL_PIXEL: f32 = 0.004;
+/// A press that moves less than this is a click, not a drag.
+const CLICK_SLOP: Pixels = px(4.);
+/// Ring widths in logical pixels; the selection ring is the stronger mark.
+const SELECTION_RING_WIDTH: f32 = 2.5;
+const HOVER_RING_WIDTH: f32 = 2.0;
 
-/// The viewport's resolved size, captured during prepaint.
+/// The viewport's resolved bounds, captured during prepaint.
 #[derive(Clone, Copy, PartialEq)]
 struct Geometry {
-    size: Size<Pixels>,
+    bounds: Bounds<Pixels>,
     scale_factor: f32,
 }
 
 impl Geometry {
     fn physical(&self) -> (u32, u32) {
+        let size = self.bounds.size;
         let to_px = |v: Pixels| (f32::from(v) * self.scale_factor).round().max(0.0) as u32;
-        (to_px(self.size.width), to_px(self.size.height))
+        (to_px(size.width), to_px(size.height))
     }
 
     fn aspect(&self) -> f32 {
-        f32::from(self.size.width) / f32::from(self.size.height).max(1.0)
+        f32::from(self.bounds.size.width) / f32::from(self.bounds.size.height).max(1.0)
     }
+}
+
+/// Theme colors the frame depends on, captured during prepaint.
+#[derive(Clone, Copy, PartialEq)]
+struct Colors {
+    clear: Hsla,
+    selection: Hsla,
+}
+
+fn linear(color: Hsla) -> [f32; 3] {
+    let rgba = Rgba::from(color);
+    [rgba.r, rgba.g, rgba.b].map(srgb_to_linear)
+}
+
+/// A left-button press that may become a click or a drag.
+struct Press {
+    origin: Point<Pixels>,
+    last: Point<Pixels>,
+    dragging: bool,
+    modifiers: Modifiers,
+}
+
+/// Why a pick was requested.
+#[derive(Clone, Copy)]
+enum PickPurpose {
+    Hover,
+    Click(Modifiers),
+}
+
+/// What the viewport reports to its host.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ViewportEvent {
+    /// A press and release without dragging; `pick` is what was under the
+    /// pointer, indexing the host's scene.
+    Clicked {
+        pick: Option<Pick>,
+        modifiers: Modifiers,
+    },
+    /// The object under the pointer changed.
+    Hovered(Option<Pick>),
 }
 
 /// Owns the renderer, the camera and the frame pipeline. Render requests are
 /// coalesced; at most [`MAX_IN_FLIGHT`] frames are read back concurrently on
 /// the background executor, and each finished frame replaces the painted
 /// image.
+///
+/// Picking goes through the renderer's ID texture, also off the UI thread:
+/// one pick at a time, hover picks coalesced to the latest pointer position.
+/// Hovered spheres get a light ring; the host chooses which spheres show the
+/// selection ring.
 pub struct Viewport {
     renderer: Result<Renderer, SharedString>,
     camera: OrbitCamera,
     /// Subtracted from scene positions so the camera orbits the scene center.
     scene_center: Vec3,
     scene_radius: f32,
+    /// The scene as drawn, centered; rings are built from its spheres.
+    scene: Scene,
     /// Whether the camera has been framed on a scene yet.
     framed: bool,
     geometry: Option<Geometry>,
-    clear_color: Option<Hsla>,
+    colors: Option<Colors>,
     in_flight: usize,
     needs_render: bool,
     image: Option<Arc<RenderImage>>,
     /// Images replaced since the last paint; paint removes them from GPUI's
     /// sprite atlas so it does not grow by one image per frame.
     retired: Rc<RefCell<Vec<Arc<RenderImage>>>>,
-    drag_origin: Option<Point<Pixels>>,
+    press: Option<Press>,
+    /// The pointer relative to the viewport, while it is over the 3D view.
+    pointer: Option<Point<Pixels>>,
+    hovered: Option<Pick>,
+    selected: Vec<usize>,
+    pick_in_flight: bool,
+    /// Clicks waiting for the pick in flight to finish, in order.
+    queued_clicks: VecDeque<(Point<Pixels>, Modifiers)>,
+    /// Whether what lies under the pointer may have changed.
+    hover_stale: bool,
 }
+
+impl EventEmitter<ViewportEvent> for Viewport {}
 
 impl Viewport {
     pub fn new() -> Self {
@@ -68,43 +133,53 @@ impl Viewport {
             camera: OrbitCamera::framing(1.0),
             scene_center: Vec3::ZERO,
             scene_radius: 1.0,
+            scene: Scene::default(),
             framed: false,
             geometry: None,
-            clear_color: None,
+            colors: None,
             in_flight: 0,
             needs_render: false,
             image: None,
             retired: Rc::default(),
-            drag_origin: None,
+            press: None,
+            pointer: None,
+            hovered: None,
+            selected: Vec::new(),
+            pick_in_flight: false,
+            queued_clicks: VecDeque::new(),
+            hover_stale: false,
         }
     }
 
-    /// Replaces the drawn spheres (positions in Å). The first scene is framed;
-    /// later ones keep the current angle and zoom.
-    pub fn set_scene(&mut self, spheres: &[SphereInstance], cx: &mut Context<Self>) {
-        let center = if spheres.is_empty() {
-            Vec3::ZERO
-        } else {
-            spheres
-                .iter()
-                .map(|s| Vec3::from_slice(&s.center_radius[..3]))
-                .sum::<Vec3>()
-                / spheres.len() as f32
-        };
-        let centered: Vec<SphereInstance> = spheres
+    /// Replaces what is drawn (positions in Å) and clears the selection
+    /// rings. The first scene is framed; later ones keep the current angle
+    /// and zoom.
+    pub fn set_scene(&mut self, mut scene: Scene, cx: &mut Context<Self>) {
+        let points = scene
+            .spheres
             .iter()
-            .map(|s| {
-                let p = Vec3::from_slice(&s.center_radius[..3]) - center;
-                SphereInstance {
-                    center_radius: [p.x, p.y, p.z, s.center_radius[3]],
-                    color: s.color,
-                }
-            })
-            .collect();
+            .map(|s| &s.center_radius[..3])
+            .chain(scene.lines.iter().map(|l| &l.start_width[..3]))
+            .chain(scene.lines.iter().map(|l| &l.end_dash[..3]))
+            .map(Vec3::from_slice);
+        let (min, max) = points.fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(min, max), p| (min.min(p), max.max(p)),
+        );
+        let center = if min.x <= max.x {
+            (min + max) / 2.0
+        } else {
+            Vec3::ZERO
+        };
+        scene.translate(-center);
         self.scene_center = center;
         if let Ok(renderer) = &mut self.renderer {
-            self.scene_radius = renderer.set_spheres(&centered);
+            self.scene_radius = renderer.set_scene(&scene);
         }
+        self.scene = scene;
+        self.selected.clear();
+        self.hovered = None;
+        self.hover_stale = true;
         if self.framed {
             self.camera.set_scene_radius(self.scene_radius);
             self.request_frame(cx);
@@ -112,6 +187,19 @@ impl Viewport {
             self.framed = true;
             self.reset_camera(cx);
         }
+    }
+
+    /// Spheres of the current scene that show the selection ring.
+    pub fn set_selection(&mut self, spheres: Vec<usize>, cx: &mut Context<Self>) {
+        if self.selected != spheres {
+            self.selected = spheres;
+            self.update_highlights(cx);
+        }
+    }
+
+    /// What is under the pointer, as of the last hover pick.
+    pub fn hovered(&self) -> Option<Pick> {
+        self.hovered
     }
 
     /// Restores the default angle and zoom.
@@ -125,6 +213,11 @@ impl Viewport {
         self.renderer.as_ref().err()
     }
 
+    /// The viewport's bounds in the window, as of the last layout.
+    pub fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.geometry.map(|g| g.bounds)
+    }
+
     /// Where a scene point (Å) appears, relative to the viewport's top-left
     /// corner, under the current camera. `None` before the first layout.
     pub fn project(&self, position: [f64; 3]) -> Option<Point<Pixels>> {
@@ -134,45 +227,144 @@ impl Viewport {
             - self.scene_center;
         let clip = proj * view * world.extend(1.0);
         let ndc = clip.truncate() / clip.w;
+        let size = geometry.bounds.size;
         Some(point(
-            geometry.size.width * ((ndc.x + 1.0) * 0.5),
-            geometry.size.height * ((1.0 - ndc.y) * 0.5),
+            size.width * ((ndc.x + 1.0) * 0.5),
+            size.height * ((1.0 - ndc.y) * 0.5),
         ))
     }
 
     fn prepaint(
         &mut self,
-        size: Size<Pixels>,
+        bounds: Bounds<Pixels>,
         scale_factor: f32,
-        clear: Hsla,
+        colors: Colors,
         cx: &mut Context<Self>,
     ) {
-        let geometry = Geometry { size, scale_factor };
-        let changed = self.geometry != Some(geometry) || self.clear_color != Some(clear);
+        let geometry = Geometry {
+            bounds,
+            scale_factor,
+        };
+        let resized = self.geometry.map(|g| (g.bounds.size, g.scale_factor))
+            != Some((bounds.size, scale_factor));
+        let recolored = self.colors != Some(colors);
         self.geometry = Some(geometry);
-        self.clear_color = Some(clear);
-        if changed {
+        self.colors = Some(colors);
+        if recolored {
+            self.update_highlights(cx);
+        } else if resized {
             self.request_frame(cx);
         }
     }
 
-    fn begin_drag(&mut self, position: Point<Pixels>) {
-        self.drag_origin = Some(position);
-    }
-
-    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(origin) = self.drag_origin.replace(position) else {
+    /// Rebuilds the rings from the selection and the hovered sphere.
+    fn update_highlights(&mut self, cx: &mut Context<Self>) {
+        let Some(colors) = self.colors else {
             return;
         };
-        let dx = f32::from(position.x - origin.x);
-        let dy = f32::from(position.y - origin.y);
-        self.camera
-            .rotate(-dx * DRAG_RADIANS_PER_PIXEL, dy * DRAG_RADIANS_PER_PIXEL);
+        let selection = linear(colors.selection);
+        let clear = linear(colors.clear);
+        let hover: [f32; 3] = [0, 1, 2].map(|i| (selection[i] + clear[i]) / 2.0);
+        let ring = |index: usize, color: [f32; 3], width: f32| {
+            self.scene.spheres.get(index).map(|sphere| HighlightRing {
+                center_radius: sphere.center_radius,
+                color_width: [color[0], color[1], color[2], width],
+            })
+        };
+        let hovered = match self.hovered {
+            Some(Pick::Sphere(index)) if !self.selected.contains(&index) => Some(index),
+            _ => None,
+        };
+        let rings: Vec<HighlightRing> = hovered
+            .and_then(|index| ring(index, hover, HOVER_RING_WIDTH))
+            .into_iter()
+            .chain(
+                self.selected
+                    .iter()
+                    .filter_map(|&index| ring(index, selection, SELECTION_RING_WIDTH)),
+            )
+            .collect();
+        if let Ok(renderer) = &mut self.renderer {
+            renderer.set_highlights(&rings);
+        }
         self.request_frame(cx);
     }
 
-    fn end_drag(&mut self) {
-        self.drag_origin = None;
+    fn set_hovered(&mut self, pick: Option<Pick>, cx: &mut Context<Self>) {
+        if self.hovered != pick {
+            self.hovered = pick;
+            self.update_highlights(cx);
+            cx.emit(ViewportEvent::Hovered(pick));
+        }
+    }
+
+    // MARK: Pointer
+
+    fn press(&mut self, event: &MouseDownEvent) {
+        self.press = Some(Press {
+            origin: event.position,
+            last: event.position,
+            dragging: false,
+            modifiers: event.modifiers,
+        });
+    }
+
+    /// Any pointer move in the window: rotates while dragging.
+    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(press) = &mut self.press else {
+            return;
+        };
+        if !press.dragging {
+            let moved = position - press.origin;
+            if moved.x.abs().max(moved.y.abs()) < CLICK_SLOP {
+                return;
+            }
+            press.dragging = true;
+            self.pointer = None;
+            self.set_hovered(None, cx);
+        }
+        let Some(press) = &mut self.press else {
+            return;
+        };
+        let delta = position - std::mem::replace(&mut press.last, position);
+        self.camera.rotate(
+            -f32::from(delta.x) * DRAG_RADIANS_PER_PIXEL,
+            f32::from(delta.y) * DRAG_RADIANS_PER_PIXEL,
+        );
+        self.request_frame(cx);
+    }
+
+    /// A left-button release anywhere in the window.
+    fn release(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(press) = self.press.take() else {
+            return;
+        };
+        if !press.dragging
+            && let Some(geometry) = self.geometry
+        {
+            self.queued_clicks
+                .push_back((position - geometry.bounds.origin, press.modifiers));
+        }
+        self.hover_stale = true;
+        self.pump_picks(cx);
+    }
+
+    /// Pointer moves over the 3D view itself, not over overlays on it.
+    fn hover_at(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.press.as_ref().is_some_and(|p| p.dragging) {
+            return;
+        }
+        let Some(geometry) = self.geometry else {
+            return;
+        };
+        self.pointer = Some(position - geometry.bounds.origin);
+        self.hover_stale = true;
+        self.pump_picks(cx);
+    }
+
+    fn leave(&mut self, cx: &mut Context<Self>) {
+        self.pointer = None;
+        self.set_hovered(None, cx);
     }
 
     fn zoom_by_scroll(
@@ -183,8 +375,93 @@ impl Viewport {
     ) {
         let delta = f32::from(event.delta.pixel_delta(window.line_height()).y);
         self.camera.zoom((delta * ZOOM_PER_SCROLL_PIXEL).exp());
+        self.hover_stale = true;
         self.request_frame(cx);
+        self.pump_picks(cx);
     }
+
+    /// Submits the next pick if none is in flight: a queued click first,
+    /// then a hover pick if the pointer is over the view.
+    fn pump_picks(&mut self, cx: &mut Context<Self>) {
+        if self.pick_in_flight {
+            return;
+        }
+        let (purpose, position) =
+            if let Some((position, modifiers)) = self.queued_clicks.pop_front() {
+                (PickPurpose::Click(modifiers), position)
+            } else if self.hover_stale
+                && self.press.is_none()
+                && let Some(pointer) = self.pointer
+            {
+                self.hover_stale = false;
+                (PickPurpose::Hover, pointer)
+            } else {
+                return;
+            };
+        let Some(geometry) = self.geometry else {
+            return;
+        };
+        let (width, height) = geometry.physical();
+        let to_px = |v: Pixels, limit: u32| {
+            ((f32::from(v) * geometry.scale_factor).max(0.0) as u32).min(limit.saturating_sub(1))
+        };
+        let request = PickRequest {
+            width,
+            height,
+            camera: self.camera.matrices(geometry.aspect()),
+            x: to_px(position.x, width),
+            y: to_px(position.y, height),
+        };
+        let Ok(renderer) = &mut self.renderer else {
+            return;
+        };
+        match renderer.pick(&request) {
+            Ok(pending) => {
+                self.pick_in_flight = true;
+                cx.spawn(async move |this, cx| {
+                    let pick = cx.background_spawn(async move { pending.wait() }).await;
+                    this.update(cx, |viewport, cx| viewport.finish_pick(purpose, pick, cx))
+                        .ok();
+                })
+                .detach();
+            }
+            Err(e) => {
+                if !matches!(e, RenderError::EmptyViewport) {
+                    log::error!("viewport pick failed: {e}");
+                }
+                if let PickPurpose::Click(modifiers) = purpose {
+                    cx.emit(ViewportEvent::Clicked {
+                        pick: None,
+                        modifiers,
+                    });
+                }
+            }
+        }
+    }
+
+    fn finish_pick(
+        &mut self,
+        purpose: PickPurpose,
+        pick: Result<Option<Pick>, RenderError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pick_in_flight = false;
+        let pick = pick.unwrap_or_else(|e| {
+            log::error!("viewport pick failed: {e}");
+            None
+        });
+        match purpose {
+            PickPurpose::Click(modifiers) => cx.emit(ViewportEvent::Clicked { pick, modifiers }),
+            // The pointer may have left or started a drag meanwhile.
+            PickPurpose::Hover if self.pointer.is_some() && self.press.is_none() => {
+                self.set_hovered(pick, cx)
+            }
+            PickPurpose::Hover => {}
+        }
+        self.pump_picks(cx);
+    }
+
+    // MARK: Frames
 
     fn request_frame(&mut self, cx: &mut Context<Self>) {
         self.needs_render = true;
@@ -198,24 +475,20 @@ impl Viewport {
         if !self.needs_render || self.in_flight >= MAX_IN_FLIGHT {
             return;
         }
-        let (Some(geometry), Some(clear)) = (self.geometry, self.clear_color) else {
+        let (Some(geometry), Some(colors)) = (self.geometry, self.colors) else {
             return;
         };
         let (width, height) = geometry.physical();
         if width == 0 || height == 0 {
             return;
         }
-        let clear = Rgba::from(clear);
+        let [r, g, b] = linear(colors.clear).map(f64::from);
         let request = RenderRequest {
             width,
             height,
             camera: self.camera.matrices(geometry.aspect()),
-            clear_color: [
-                srgb_to_linear(clear.r) as f64,
-                srgb_to_linear(clear.g) as f64,
-                srgb_to_linear(clear.b) as f64,
-                1.0,
-            ],
+            clear_color: [r, g, b, 1.0],
+            scale_factor: geometry.scale_factor,
         };
         let Ok(renderer) = &mut self.renderer else {
             return;
@@ -278,9 +551,13 @@ impl Render for Viewport {
                 let view = view.clone();
                 move |bounds, window, cx| {
                     let scale_factor = window.scale_factor();
-                    let clear = cx.theme().muted;
+                    let theme = cx.theme();
+                    let colors = Colors {
+                        clear: theme.muted,
+                        selection: theme.selection,
+                    };
                     view.update(cx, |viewport, cx| {
-                        viewport.prepaint(bounds.size, scale_factor, clear, cx)
+                        viewport.prepaint(bounds, scale_factor, colors, cx)
                     });
                 }
             },
@@ -304,7 +581,7 @@ impl Render for Viewport {
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                        view.update(cx, |viewport, _| viewport.end_drag());
+                        view.update(cx, |viewport, cx| viewport.release(event.position, cx));
                     }
                 });
             },
@@ -317,10 +594,23 @@ impl Render for Viewport {
             .size_full()
             .overflow_hidden()
             .bg(theme.muted)
+            .when(matches!(self.hovered, Some(Pick::Sphere(_))), |this| {
+                this.cursor_pointer()
+            })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, _| this.begin_drag(event.position)),
+                cx.listener(|this, event: &MouseDownEvent, _, _| this.press(event)),
             )
+            .on_mouse_move(
+                cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                    this.hover_at(event.position, cx)
+                }),
+            )
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered {
+                    this.leave(cx);
+                }
+            }))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
                 this.zoom_by_scroll(event, window, cx)
             }))

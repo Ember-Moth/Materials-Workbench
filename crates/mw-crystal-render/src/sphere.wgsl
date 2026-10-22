@@ -1,13 +1,9 @@
 // Orthographic impostor spheres: each instance is a camera-facing quad, and
 // the fragment shader solves the sphere surface, writes its true depth, and
 // shades it. Edge coverage comes from alpha-to-coverage with MSAA.
-
-struct Camera {
-    view: mat4x4<f32>,
-    proj: mat4x4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> camera: Camera;
+//
+// The same quads draw highlight rings just outside a sphere's silhouette,
+// and write instance IDs for picking. Prefixed with common.wgsl.
 
 struct Instance {
     @location(0) center_radius: vec4<f32>,
@@ -16,14 +12,15 @@ struct Instance {
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
+    // Position on the quad in sphere radii.
     @location(0) local: vec2<f32>,
     @location(1) center_view: vec3<f32>,
     @location(2) radius: f32,
-    @location(3) color: vec3<f32>,
+    @location(3) color: vec4<f32>,
+    @location(4) @interpolate(flat) id: u32,
 };
 
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOut {
+fn quad(vertex_index: u32, instance: Instance, extent: f32, id: u32) -> VsOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -32,27 +29,33 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOu
         vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, 1.0),
     );
-    let corner = corners[vertex_index];
+    let local = corners[vertex_index] * extent;
     let radius = instance.center_radius.w;
     let center_view = (camera.view * vec4<f32>(instance.center_radius.xyz, 1.0)).xyz;
-    // Slightly larger than the sphere so the silhouette's partial-coverage
-    // band is not cut off by the quad edge.
-    let quad = corner * 1.05;
-    let position_view = center_view + vec3<f32>(quad * radius, 0.0);
+    let position_view = center_view + vec3<f32>(local * radius, 0.0);
 
     var out: VsOut;
     out.position = camera.proj * vec4<f32>(position_view, 1.0);
-    out.local = quad;
+    out.local = local;
     out.center_view = center_view;
     out.radius = radius;
-    out.color = instance.color.rgb;
+    out.color = instance.color;
+    out.id = id;
     return out;
 }
 
-struct FsOut {
-    @location(0) color: vec4<f32>,
-    @builtin(frag_depth) depth: f32,
-};
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+    instance: Instance,
+) -> VsOut {
+    // Room for the partial-coverage band, which ends half a pixel outside
+    // the silhouette. No more: for atoms a few pixels wide, padding is most
+    // of the quad.
+    let extent = 1.0 + 0.75 * camera.viewport.z / instance.center_radius.w;
+    return quad(vertex_index, instance, extent, SPHERE_ID | instance_index);
+}
 
 @fragment
 fn fs_main(in: VsOut) -> FsOut {
@@ -67,17 +70,55 @@ fn fs_main(in: VsOut) -> FsOut {
 
     let z = sqrt(max(1.0 - min(d2, 1.0), 0.0));
     let normal = vec3<f32>(in.local / max(d, 1.0), z);
-    let surface_view = in.center_view + normal * in.radius;
-    let clip = camera.proj * vec4<f32>(surface_view, 1.0);
-
-    let light = normalize(vec3<f32>(0.4, 0.6, 1.0));
-    let diffuse = max(dot(normal, light), 0.0);
-    let half_vector = normalize(light + vec3<f32>(0.0, 0.0, 1.0));
-    let specular = pow(max(dot(normal, half_vector), 0.0), 48.0) * 0.35;
-    let shaded = in.color * (0.22 + 0.78 * diffuse) + vec3<f32>(specular);
 
     var out: FsOut;
-    out.color = vec4<f32>(shaded, coverage);
-    out.depth = clip.z / clip.w;
+    out.color = vec4<f32>(shade(in.color.rgb, normal), coverage);
+    out.depth = depth_of(in.center_view + normal * in.radius);
+    return out;
+}
+
+@fragment
+fn fs_id(in: VsOut) -> IdOut {
+    let d2 = dot(in.local, in.local);
+    if d2 > 1.0 {
+        discard;
+    }
+    var out: IdOut;
+    out.id = in.id;
+    out.depth = depth_of(in.center_view + vec3<f32>(in.local, sqrt(1.0 - d2)) * in.radius);
+    return out;
+}
+
+// Highlight rings. The instance color's w is the ring width in logical
+// pixels.
+
+@vertex
+fn vs_ring(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOut {
+    let pixels = instance.color.w * camera.viewport.w + 0.75;
+    let extent = 1.0 + pixels * camera.viewport.z / instance.center_radius.w;
+    return quad(vertex_index, instance, extent, 0u);
+}
+
+@fragment
+fn fs_ring(in: VsOut) -> FsOut {
+    let d = length(in.local);
+    let pixel = camera.viewport.z / in.radius;
+    // Overlap the silhouette by half a pixel so no background shows between
+    // the sphere's soft edge and the ring.
+    let inner = 1.0 - 0.5 * pixel;
+    let outer = 1.0 + in.color.w * camera.viewport.w * pixel;
+    let edge = max(fwidth(d), 1e-4);
+    let coverage = min(
+        clamp((outer - d) / edge + 0.5, 0.0, 1.0),
+        clamp((d - inner) / edge + 0.5, 0.0, 1.0),
+    );
+    if coverage <= 0.0 {
+        discard;
+    }
+    var out: FsOut;
+    out.color = vec4<f32>(in.color.rgb, coverage);
+    // At the sphere's nearest point, so bonds leaving the sphere pass behind
+    // the ring while nearer atoms still cover it.
+    out.depth = depth_of(in.center_view + vec3<f32>(0.0, 0.0, in.radius));
     return out;
 }

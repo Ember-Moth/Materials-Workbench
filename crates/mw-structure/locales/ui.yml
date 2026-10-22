@@ -23,6 +23,17 @@ viewport:
   info:
     en: "%{atoms} atoms · 1 × 1 × 1 cell · orthographic"
     zh-CN: "%{atoms} 个原子 · 1 × 1 × 1 晶胞 · 正交投影"
+measure:
+  prompt:
+    first:
+      en: Click an atom to start measuring
+      zh-CN: 点选一个原子开始测量
+    second:
+      en: Click a second atom for the distance
+      zh-CN: 点选第 2 个原子测距离
+    third:
+      en: Click a third atom for the angle, or empty space to start over
+      zh-CN: 点选第 3 个原子测键角，或点空白处重新开始
 toolbar:
   ball_and_stick:
     en: Ball and stick
@@ -170,8 +181,14 @@ panel:
       en: No measurements yet.
       zh-CN: 还没有测量。
     hint:
-      en: Turn on Measure, then pick two atoms for a distance or three for an angle.
-      zh-CN: 打开"测量"后，依次点选 2 个原子得到距离，点选 3 个得到键角。
+      en: Turn on Measure and click two atoms for their distance, then a third for the angle at the second. Click empty space to start over.
+      zh-CN: 打开"测量"后，依次点选 2 个原子得到距离，再点第 3 个得到以第 2 个原子为顶点的键角。点空白处重新开始。
+    stale:
+      en: Stale
+      zh-CN: 已失效
+    remove:
+      en: Remove measurement
+      zh-CN: 删除测量
   diagnostics:
     empty:
       en: No diagnostics.
@@ -267,6 +284,9 @@ command:
   toggle_measure:
     en: Measure
     zh-CN: 测量
+  clear_selection:
+    en: Clear selection
+    zh-CN: 清除选择
   ball_and_stick:
     en: Ball and stick
     zh-CN: 球棍模型

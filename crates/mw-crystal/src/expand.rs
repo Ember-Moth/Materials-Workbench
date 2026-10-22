@@ -6,7 +6,7 @@
 //! That is exact for distances below half the smallest spacing between
 //! lattice planes, which holds for the tolerances used here in any real cell.
 
-use crate::{DisplayAtom, SiteId, Structure};
+use crate::{AtomRef, DisplayAtom, SiteId, Structure};
 
 /// One site's equivalent atoms in the unit cell.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,7 +113,7 @@ pub fn display_atoms(structure: &Structure, orbits: &[Orbit]) -> Vec<DisplayAtom
         let Some(site) = structure.site(orbit.site) else {
             continue;
         };
-        for position in &orbit.positions {
+        for (member, position) in orbit.positions.iter().enumerate() {
             let images = |axis: usize| {
                 let v = position[axis];
                 if v < tolerance[axis] {
@@ -127,8 +127,9 @@ pub fn display_atoms(structure: &Structure, orbits: &[Orbit]) -> Vec<DisplayAtom
             for x in images(0) {
                 for y in images(1) {
                     for z in images(2) {
+                        let cell = [x, y, z].map(|v: f64| v.floor() as i32);
                         atoms.push(DisplayAtom {
-                            site: site.id,
+                            atom: AtomRef::new(site.id, member as u16, cell),
                             element: site.element().to_string(),
                             position: structure.lattice.to_cartesian([x, y, z]),
                         });
