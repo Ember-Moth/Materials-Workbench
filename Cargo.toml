@@ -24,6 +24,17 @@ log = "0.4"
 env_logger = "0.11"
 rust-i18n = "4.2"
 
+# Model provider clients for the built-in assistant (mw-llm), see
+# docs/design/ai-integration.md §6.2. HTTP runs on a dedicated tokio runtime
+# thread; callers poll the returned futures streams on any executor.
+mw-llm = { path = "crates/mw-llm" }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream", "system-proxy"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+futures = "0.3"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 # GPUI and the component library are slow in unoptimized builds; this follows
 # the GPUI Kit installation guide.
 [profile.dev.package]

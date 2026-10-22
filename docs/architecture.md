@@ -1,7 +1,7 @@
 # 架构
 
 > 状态：v0.1 框架已搭好，M1 CIF 导入已实现，其余功能以模拟（mock）为主 · 2026-10-22
-> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md)
+> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md) · [AI 集成](design/ai-integration.md)
 > 开发流程与约定见 [开发指南](development.md)；版本规划见 [产品路线图](roadmap.md)。
 
 ## 1. 目标
@@ -25,7 +25,8 @@ materials-workbench/
 │   ├── mw-crystal-render/    wgpu 离屏渲染器（不依赖 GPUI）
 │   ├── mw-viewport/          3D 视口组件（GPUI + 渲染器）
 │   ├── mw-project/           项目：项目目录与左侧边栏
-│   └── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
+│   ├── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
+│   └── mw-llm/               内置助手的模型服务客户端（纯 Rust，无界面）
 └── docs/
     ├── architecture.md       本文
     ├── roadmap.md            产品路线图
@@ -49,7 +50,7 @@ apps/workbench ─────────┬───────────�
                     mw-crystal          mw-crystal-render
 ```
 
-`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
@@ -60,6 +61,7 @@ apps/workbench ─────────┬───────────�
 | `mw-project` | 项目目录模型和左侧边栏视图 | 是 |
 | `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令；打开文件后的通知与错误列表 | 是 |
 | `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言 | 是 |
+| `mw-llm` | 内置助手的模型服务客户端：`ChatProvider` 接口和项目自己的对话类型；Anthropic Messages、OpenAI Chat Completions（含兼容服务和本地模型）、OpenAI Responses 三个后端；工具 Schema 子集检查与参数校验；能力声明与厂商档案。HTTP 跑在专用线程的 tokio runtime 上，流可以由任何执行器轮询 | 否 |
 
 **规则**：
 
