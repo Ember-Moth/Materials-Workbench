@@ -30,6 +30,8 @@ pub(crate) struct Setting {
     /// choice (`1`, `2`) or hexagonal / rhombohedral axes (`H`, `R`); empty
     /// for types with one setting.
     pub code: &'static str,
+    /// Hall symbol of this setting, e.g. `-P 4n 2n`.
+    pub hall_symbol: &'static str,
     /// The operations of the conventional cell, centering included.
     pub symmetry: Symmetry,
 }
@@ -84,6 +86,7 @@ fn load_setting(hall_number: u16) -> Setting {
         hm_short: entry.hm_short,
         hm_full: entry.hm_full,
         code: entry.setting,
+        hall_symbol: entry.hall_symbol,
         symmetry: Symmetry::from_group(operations(&hall).expect("tabulated translations")),
     }
 }

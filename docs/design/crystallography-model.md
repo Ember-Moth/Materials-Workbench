@@ -105,6 +105,7 @@ SymOp { rot: 3×3 整数矩阵, trans: 3 个有理数（模 1） }
 Site
 ├── id:        SiteId                 // 文档内单调递增、永不复用，与标签无关
 ├── position:  [f64; 3]               // 分数坐标，即不对称单元中的代表点
+├── position_su: [Option<f64>; 3]     // 坐标的标准不确定度，只为导出保留；编辑过的坐标没有
 ├── occupants: Vec<Occupant>          // ≥ 1；混合占位 = 多个 occupant
 └── disorder:  Option<{ assembly, group }>
 
@@ -206,6 +207,13 @@ CrystalDocument
 | 描述性 | 出版信息、作者、实验条件 | 原样导出 |
 | 由结构派生 | `_cell_volume`、`_chemical_formula_sum`、`_exptl_crystal_density_diffrn`、`_atom_site_Wyckoff_symbol`、`_geom_*` | 丢弃，由模型重新生成 |
 | 未识别 | 其余字段 | 结构未修改时原样导出；修改后丢弃，并在导出报告中列出 |
+
+M5 的实现（`mw-crystal-io/src/kept.rs`）：
+
+- 导入时按标签把每个字段归入四类之一：模型读取的（晶胞、对称操作、空间群名称、位点、ADP、无序）、派生的（上表，外加 `_symmetry_cell_setting`、`_atom_site_cartn_*`、`_exptl_crystal_F_000` 等）、描述性的（`_audit_`、`_publ_`、`_journal_`、`_citation_`、`_database_`、`_cod_`、`_chemical_name_`、`_cell_measurement_`、`_exptl_`、`_diffrn_`、`_reflns_`、`_refine_`、`_computing_`、`_pd_` 开头）和未识别的。后两类按文件顺序保存在 `ImportedBlock.fields`（`CifFields`）里，标签保留文件里的大小写，值保留"是否带引号"（只在 `?`、`.` 这类需要时）。
+- 一个 loop 只要有一列是模型读取或派生的，就整个由模型重新生成，其余列不保留；只有原子位点的两个 loop 例外：`_atom_site_` 和 `_atom_site_aniso_` 里模型不读的列（如 `_atom_site_calc_flag`、`_atom_site_attached_hydrogens`）按原子标签保存，导出时写回对应的行。导入时跳过的行（哑原子、重复列出的行）的值不保留。
+- "结构是否修改过"由调用方给出；`ImportedBlock::write_options` 把当前结构与导入时的结构比较。修改过时，未识别的字段和列不写，标签列在 `Written.dropped` 里，界面用通知告诉用户。
+- 文档层（第 6 节的 `provenance`）还没有实现，`StructureDocument` 暂时直接持有导入的数据块；M6 的来源记录接手。
 
 ## 7. 编辑语义
 
@@ -353,6 +361,11 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 
 导入时产生的诊断带源文件行号，UI 可以直接跳到对应行。
 
+导出不改变结构，所以不产生诊断，只有两种结果需要告诉用户：
+
+- **格式装不下结构**：POSCAR 和 XYZ 每个位置只能写一种原子，部分占位、混合占位和未知元素（`X`）都会让导出失败，返回 `ExportError`，列出涉及的位点标签。界面在选格式时就把这样的格式置灰并写明原因，不等到写文件。
+- **CIF 少写了字段**：结构修改过后，源文件里未识别的字段不再写出（第 6 节），文件照常写出，并在通知里列出这些字段。
+
 ## 9. 导入与导出
 
 ### 9.1 CIF 导入流水线
@@ -398,6 +411,17 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 - 派生字段由模型重新生成；带 `su` 的值写出括号。
 - **回归测试**：导入 → 导出 → 再导入，结构在容差内一致。用 COD 语料批量跑。
 
+**M5 的实现**（`mw-crystal-io/src/cif_write.rs`，`cif::write` 返回文本，供 MCP 的 `structure.export` 直接使用）：
+
+- **顺序**：`data_` 块名（取源数据块的名字，没有时由调用方给出，CIF 1.1 不允许的字符换成 `_`）→ 保留的描述性与未识别字段（第 6 节）→ 晶胞 → 空间群 → 对称操作 loop → 原子位点 loop → 各向异性 ADP loop。
+- **空间群名称**：只写当前名字（`_space_group_*`），不写旧名字。操作集正是某个表列设定时，写 `_space_group_IT_number`、`_space_group_name_H-M_alt` 和 `_space_group_name_Hall`；H-M 符号在标准设定下用简写，非标准设定里有原点选择或菱方 / 六方轴之分的加 `:1`、`:2`、`:H`、`:R`，单斜的非标准设定用完整符号（如 `P 1 1 21/a`），其余用该设定的简写（正交的简写本身区分设定，如 `P b n m`）。只能经变换识别的设定（5.4 节）只写 IT 号：表列符号描述的是另一组操作。
+- **派生字段**：`_cell_volume`、`_cell_formula_units_Z`、`_chemical_formula_sum`（Hill 顺序；各元素原子数都是整数时 Z 取它们的最大公约数，否则取各轨道大小的最大公约数，部分占位保留小数，如 `Ba0.5 O3 Sr0.5 Ti`）、`_space_group_crystal_system`、`_atom_site_symmetry_multiplicity`、`_atom_site_Wyckoff_symbol`（只在表列设定下写）。各向异性原子的 `_atom_site_U_iso_or_equiv` 写 Ueq，由写出的 Uij 计算，位数与 Uij 相同、最多 6 位小数。
+- **数值**：
+  - 从文件读来的数和不确定度按原来的小数位数写回，例如 `3.9475(3)`；判断方法是找最少的小数位数，使值和不确定度都是整数（最多 10 位）。
+  - 不是有限小数的值（由 B 换算的 U、吸附后的 1/3）：带不确定度的按"19 规则"写，不确定度 10–19 写两位，其余写一位，值舍入到同一位；`(10)` 写成 `(1)`，因为它读回来就是这个意思。不带不确定度的写 10 位小数。
+  - 位点对称性固定的坐标不写不确定度，跟随其他坐标的照常写。不确定度为 0 写成 `(0)`。
+- **往返结果**：`tests/export.rs` 对每个测试文件做"导入 → 导出 → 再导入"，比较结构（数值在不确定度的一半以内，没有不确定度的在 10⁻⁹ 以内）、保留的字段，并要求第二次导出的文本与第一次相同、再导入没有新的错误或警告。`tests/cod_roundtrip.rs` 在 COD 语料上做同样的检查（默认忽略）。2026-10-22 的本地语料：237 308 个文件、235 591 个结构，235 582 个往返一致，结构比较全部通过；剩下 9 个的第二次导出与第一次差在末位：位点的几个坐标不确定度不同（一个坐标给得比与它相关的坐标更精确），按各自精度舍入后再吸附，平均值变了约 3×10⁻⁵。另有 17 个文件在导入时就因 moyo 解析旧式 Hall 符号（如 `R 3 2"`）而 panic，与导出无关。
+
 ### 9.3 POSCAR
 
 **导入**：
@@ -413,10 +437,19 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 - 原子按元素分组，顺序稳定；使用 Direct 坐标。
 - 晶格按 orientation 输出；注释行写入标题和来源。
 
+M5 的实现（`mw-crystal-io/src/poscar.rs`）：
+
+- 混合占位、占位率之和低于 0.99 的位点和未知元素都阻止导出（`ExportError`，见第 8 节）。
+- 元素按在位点列表里第一次出现的顺序分组，组内按位点、轨道成员的顺序；坐标归一化到 [0, 1)，写 10 位小数。缩放因子写 `1.0`。
+- 目前只有标准朝向（4.2 节），晶格矩阵由晶胞参数算出。
+- 注释行由调用方给出，界面写"结构名 · 项目名"。界面建议的文件名用 `.vasp` 扩展名：VASP 要求的文件名是 `POSCAR`，但同一个目录里常要放多个结构，VESTA、ASE 和 pymatgen 都按 `.vasp` 识别。
+
 ### 9.4 XYZ
 
 - 支持扩展 XYZ（带 `Lattice="..."`）的导入和导出。
 - 普通 XYZ 没有晶胞信息，只支持导出：笛卡尔坐标，P1 展开。
+
+M5 实现了扩展 XYZ 的导出（`mw-crystal-io/src/xyz.rs`）：一帧，第二行是 `Lattice="a₁ a₂ a₃ b₁ b₂ b₃ c₁ c₂ c₃" Properties=species:S:1:pos:R:3 pbc="T T T"`，原子顺序和 POSCAR 相同，笛卡尔坐标（Å）写 10 位小数。和 POSCAR 一样拒绝部分占位和未知元素。普通 XYZ 和扩展 XYZ 的导入还没有做。
 
 ## 10. 版本划分
 

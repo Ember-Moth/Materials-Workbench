@@ -1,19 +1,31 @@
-//! Reading crystal structure files, independent of any UI.
+//! Reading and writing crystal structure files, independent of any UI.
 //!
 //! [`cif::read`] imports the CIF 1.1 subset described in
 //! `docs/design/crystallography-model.md` §9.1: one [`ImportedBlock`] per
 //! data block, each with its structure (unless it has errors) and the
 //! [`Diagnostic`]s found in it, every one tied to a source line. Structures
 //! come out normalized: sites snapped onto special positions, mixed
-//! occupancy merged into one site, repeated rows dropped.
+//! occupancy merged into one site, repeated rows dropped. The block also
+//! keeps the fields the structure does not hold ([`CifFields`]).
+//!
+//! [`cif::write`], [`poscar::write`] and [`xyz::write`] export a structure
+//! as text (design §9.2–9.4). POSCAR and XYZ list atoms one by one, so they
+//! refuse structures with partially occupied sites ([`ExportError`]).
 
+mod atoms;
+mod cif_write;
 mod diagnostic;
 mod import;
+mod kept;
 mod normalize;
 mod number;
+pub mod poscar;
 mod syntax;
+pub mod xyz;
 
+pub use atoms::ExportError;
 pub use diagnostic::{Diagnostic, DiagnosticKind, Severity};
+pub use kept::CifFields;
 
 use mw_crystal::Structure;
 
@@ -39,6 +51,8 @@ pub struct ImportedBlock {
     pub structure: Option<Structure>,
     /// Sorted by line.
     pub diagnostics: Vec<Diagnostic>,
+    /// The fields the structure does not hold, for writing the block back.
+    pub fields: CifFields,
 }
 
 impl ImportReport {
@@ -68,15 +82,24 @@ impl ImportedBlock {
             .iter()
             .any(|d| d.severity() == Severity::Error)
     }
+
+    /// Options for writing `structure`, read from this block and possibly
+    /// edited since, back to CIF: the block's name and its kept fields,
+    /// the unrecognized ones only while the structure is unchanged.
+    pub fn write_options(&self, structure: &Structure) -> cif::WriteOptions<'_> {
+        let changed = self.structure.as_ref() != Some(structure);
+        cif::WriteOptions::new(&self.name).kept(&self.fields, changed)
+    }
 }
 
 pub mod cif {
-    //! CIF 1.1 import.
+    //! CIF 1.1 import and export.
 
     use std::borrow::Cow;
 
+    pub use crate::cif_write::{WriteOptions, Written, write};
     use crate::diagnostic::{Diagnostic, DiagnosticKind};
-    use crate::{ImportReport, ImportedBlock, import, syntax};
+    use crate::{ImportReport, ImportedBlock, import, kept, syntax};
 
     /// Reads a CIF file's bytes. Invalid UTF-8 is replaced and reported.
     pub fn read(bytes: &[u8]) -> ImportReport {
@@ -97,6 +120,7 @@ pub mod cif {
     pub fn read_str(text: &str) -> ImportReport {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let document = syntax::parse(text);
+        let lines: Vec<&str> = text.lines().collect();
         let mut diagnostics = document.diagnostics;
         if text.starts_with("#\\#CIF_2.0") {
             diagnostics.insert(0, Diagnostic::new(DiagnosticKind::Cif2, Some(1)));
@@ -106,11 +130,16 @@ pub mod cif {
             .iter()
             .map(|block| {
                 let (structure, diagnostics) = import::interpret(block);
+                let mut fields = kept::collect(block, &lines);
+                if let Some(structure) = &structure {
+                    fields.retain_atoms(structure);
+                }
                 ImportedBlock {
                     name: block.name.clone(),
                     line: block.line,
                     structure,
                     diagnostics,
+                    fields,
                 }
             })
             .collect();

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gpui_kit::SharedString;
 use mw_crystal::sample::{self, SampleKey};
 use mw_crystal::{Derived, Measurement, Structure};
@@ -35,6 +37,9 @@ pub struct StructureDocument {
     /// Distances and angles measured in this session, in the order taken.
     pub(crate) measurements: Vec<Measurement>,
     pub(crate) diagnostics: Vec<DocumentDiagnostic>,
+    /// The data block the structure was read from; a CIF export writes its
+    /// kept fields back.
+    pub(crate) source: Option<Arc<ImportedBlock>>,
 }
 
 impl StructureDocument {
@@ -57,6 +62,7 @@ impl StructureDocument {
             derived: sample.derived,
             measurements: Vec::new(),
             diagnostics,
+            source: None,
         }
     }
 
@@ -71,7 +77,7 @@ impl StructureDocument {
     pub fn from_import(
         project_name: impl Into<SharedString>,
         name: impl Into<SharedString>,
-        block: &ImportedBlock,
+        block: &Arc<ImportedBlock>,
     ) -> Option<Self> {
         let structure = block.structure.clone()?;
         Some(Self {
@@ -86,6 +92,7 @@ impl StructureDocument {
                 .cloned()
                 .map(DocumentDiagnostic::Import)
                 .collect(),
+            source: Some(block.clone()),
         })
     }
 }
@@ -102,8 +109,8 @@ mod tests {
              loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
              Na1 0 0 0\n",
         );
-        let document =
-            StructureDocument::from_import("p", "x", &report.blocks[0]).expect("structure");
+        let block = Arc::new(report.blocks[0].clone());
+        let document = StructureDocument::from_import("p", "x", &block).expect("structure");
         assert_eq!(document.derived.atoms.len(), 8);
         // Three defaulted angles and one element taken from its label.
         assert_eq!(document.diagnostics.len(), 4);

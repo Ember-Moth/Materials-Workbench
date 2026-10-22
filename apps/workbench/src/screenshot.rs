@@ -208,8 +208,17 @@ const TOUR: &[(&str, Step)] = &[
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    ("21-empty", |workbench, window, cx| {
+    // The structure from step 15 shares a site between Ti and V, so the
+    // formats that list atoms are unavailable and say why.
+    ("21-export-dialog", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
+        if let Some(workspace) = workbench.workspace() {
+            workspace.focus_handle(cx).focus(window, cx);
+        }
+        window.dispatch_action(Box::new(mw_structure::ExportStructure), cx);
+    }),
+    ("22-empty", |workbench, window, cx| {
+        window.close_dialog(cx);
         workbench.close_structure(window, cx);
     }),
 ];

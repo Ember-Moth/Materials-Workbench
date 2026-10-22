@@ -89,6 +89,10 @@ impl Disorder {
 pub struct Site {
     pub id: SiteId,
     pub position: [f64; 3],
+    /// Standard uncertainty of each coordinate, as CIF `0.3048(2)`; `None`
+    /// for coordinates given without one. Kept for export only (design
+    /// §4.3): an edited coordinate has none.
+    pub position_su: [Option<f64>; 3],
     pub occupants: Vec<Occupant>,
     pub disorder: Option<Disorder>,
 }
@@ -98,6 +102,7 @@ impl Site {
         Self {
             id,
             position,
+            position_su: [None; 3],
             occupants,
             disorder: None,
         }
@@ -105,6 +110,11 @@ impl Site {
 
     pub fn with_disorder(mut self, disorder: Disorder) -> Self {
         self.disorder = Some(disorder);
+        self
+    }
+
+    pub fn with_position_su(mut self, su: [Option<f64>; 3]) -> Self {
+        self.position_su = su;
         self
     }
 

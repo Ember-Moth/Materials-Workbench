@@ -40,10 +40,11 @@ cargo fmt --all
 - **无窗口渲染一帧**：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000`
 - **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 1 分钟后自动退出；包括带键的负载和拾取延迟。窗口失去焦点的档位（输出里 `window_lost_focus=true`）数据作废。
 - **模型服务示例**：`cargo run -p mw-llm --example chat -- "问题"` 发一轮对话并打印流式事件，配置全部来自 `MW_LLM_*` 环境变量（见 `docs/development.md` 第 2 节）。它会发真实请求并计费，运行前先问用户；本机的 Ollama 不花钱（`MW_LLM_PROVIDER=ollama`）。
-- **COD 语料统计**：测试默认忽略，需要本地语料，不随仓库提交。
+- **COD 语料统计**：测试默认忽略，需要本地语料，不随仓库提交。`cod_corpus` 统计导入诊断，`cod_roundtrip` 统计 CIF 往返（导入 → 导出 → 再导入）是否一致。
 
   ```bash
   MW_COD_DIR=~/cod/cif cargo test -p mw-crystal-io --release --test cod_corpus -- --ignored --nocapture
+  MW_COD_DIR=~/cod/cif cargo test -p mw-crystal-io --release --test cod_roundtrip -- --ignored --nocapture
   ```
 
 工具链：Rust 1.92 或更新（本仓库在 1.97 上开发），edition 2024；macOS 需要 Xcode。debug 构建里 GPUI 和 wgpu 以 `opt-level = 3` 编译（见根 `Cargo.toml`）。
@@ -63,7 +64,7 @@ cargo fmt --all
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
   - `mw-crystal`：模型、对称操作、原子展开、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`）、`AtomRef` 与测量的几何、元素表、内置示例；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
-  - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断；
+  - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
   - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"；
   - `mw-llm`：内置助手的模型服务客户端。`ChatProvider` 接口下有 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 三个后端；HTTP 跑在专用线程的 tokio runtime 上，返回的流可以由 GPUI 的执行器直接轮询。目前还没有使用者，以后由 `mw-assistant` 依赖（`ai-integration.md` 6.2 节）。它的测试只用手写的 SSE 数据和本机回环服务器，不访问外网。
 
@@ -101,6 +102,11 @@ cargo fmt --all
 - 在后台任务里用 `mw_structure::import::OpenedFile::read` 读取文件，再交给 `mw_crystal_io::cif::read` 解析。
 - 成功的数据块加入"导入的文件"项目（`ProjectCatalog::add_imported`）。
 - 诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字由 `mw-structure/src/diagnostics.rs` 按当前语言翻译。
+
+### 导出
+
+- ⌘E、顶栏按钮和命令面板都走 `ExportStructure`，打开 `mw-structure/src/export.rs` 的对话框；结构装不进的格式（部分占位、未知元素，`ExportError`）置灰并说明原因。
+- 确认后用 `prompt_for_new_path` 选文件，在后台任务里生成文本并写入，结果用通知告诉用户。导入的结构通过 `ImportedBlock::write_options` 把源数据块交给 CIF 写出。
 
 ## 必须遵守的约定
 
