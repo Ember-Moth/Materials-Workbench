@@ -52,7 +52,8 @@
 |---|---|---|
 | `mw-automation` | 能力注册表：每个能力有名称、说明、输入输出 JSON Schema、副作用等级和处理函数。各领域 crate 注册自己的能力。Python 绑定和命令行也从这里取能力 | 否 |
 | `mw-mcp` | 把注册表映射成 MCP 的 tools、resources、prompts；处理传输、会话、权限和审计 | 否 |
-| `mw-assistant` | 内置助手：模型服务接口、Agent 循环、上下文组装 | 否 |
+| `mw-assistant` | 内置助手：Agent 循环、上下文组装 | 否 |
+| `mw-llm` | 模型服务客户端：`ChatProvider` 接口，Anthropic、OpenAI Chat Completions、OpenAI Responses 三个后端（第 6.2 节） | 否 |
 | 助手面板 | 对话界面、工具调用卡片、确认交互 | 是（放在外壳或单独的界面 crate） |
 
 **关键约束**：
@@ -166,21 +167,138 @@ Capability
 
 ### 6.2 模型服务
 
-通过一个与模型服务无关的接口接入，第一方支持 Anthropic Claude：
+助手通过一层与模型服务无关的接口（provider 层，crate `mw-llm`）调用模型。第一方支持 Anthropic Claude，同时支持 OpenAI 的两套接口，以及兼容 OpenAI 接口的服务和本地模型。
 
-- **调用方式**：Claude 的 Messages API 加工具调用（tool use）。Rust 没有官方 Anthropic SDK，用 HTTP 直接调用，并把请求和响应封装成类型；这部分实现前要对照最新的 API 文档。
-- **默认模型**：Claude Opus 5.5（`claude-opus-5-5`）。用户可以在设置里换成更便宜的模型，例如 Claude Sonnet 5.5（`claude-sonnet-5-5`）、Claude Haiku 5.5（`claude-haiku-5-5`），用于简单问答或批量任务。
+#### 6.2.1 选型
+
+2026-10 查过 crates.io 上的社区实现：
+
+| 类别 | 代表 | 情况 |
+|---|---|---|
+| 多厂商 Agent 框架 | rig-core 0.45 | 活跃、下载量大，但自带 Agent 循环、工具和 RAG 抽象 |
+| 多厂商薄客户端 | genai 0.7 | 活跃；只保留各家共有的能力 |
+| OpenAI 专用 | async-openai 0.42 | 成熟活跃；同时覆盖 Chat Completions 和 Responses，支持自定义请求和响应类型 |
+| Anthropic 专用 | claudius、anthropic-ai-sdk、async-anthropic、clust 等 | 都是个人项目；最活跃的一个已四个多月未发版，其余基本停更 |
+
+**结论**：
+
+- **不依赖 Anthropic 专用的社区 crate。** 助手依赖的是较新的 API 能力（6.2.3 节），发版落后几个月就用不上。强类型枚举遇到不认识的新内容块时，要么反序列化失败，要么直接丢掉；而 thinking 块必须原样传回。
+- **不用多厂商框架。** 多厂商抽象只保留各家共有的能力，Claude 特有的能力会被抹平。rig 这类框架还自带 Agent 循环和工具抽象，会和我们的循环（直接调用能力注册表、经过副作用等级和确认）冲突。
+- **不做通用 SDK。** 覆盖全部端点、跟着官方每次发版同步是长期负担，与材料软件的目标无关。
+- **自己写薄客户端，只实现助手用到的部分。** Anthropic 后端原生实现；OpenAI 侧用 async-openai。
+- **参考实现**：Zed 也是这么做的，给 anthropic、open_ai、ollama 各写了一个薄 crate，主要依赖只有 serde、futures 和它自己的 HTTP 客户端。这些 crate 的许可证是 GPL-3.0-or-later，本项目的许可证确定之前，只参考结构，不复制代码。
+
+#### 6.2.2 分层
+
+```text
+mw-assistant：Agent 循环、上下文组装、确认交互
+        │ ChatProvider trait，对话内容用项目自己的类型
+        ▼
+mw-llm
+├── anthropic          Messages API，原生薄客户端（reqwest + serde + SSE 解析）
+├── openai_chat        Chat Completions：OpenAI 及所有兼容服务、本地模型
+└── openai_responses   Responses：OpenAI 官方与 Azure OpenAI
+```
+
+- **对话类型属于项目**：文本、图像、工具调用（ID、名称、解析后的参数和原始参数字符串）、工具结果、推理内容、停止原因、用量。推理内容对上层是不透明的，只记录来自哪个 provider 和模型。
+- **原样保留厂商原始数据**：每一轮模型输出同时保存厂商返回的原始 JSON。发回同一个 provider 时按原样回放，不认识的内容块也不会丢。中途换了 provider 或模型时，只带上文本、工具调用和工具结果，丢弃对方无法验证的推理内容。
+- **Agent 循环只面向接口**：`mw-assistant` 的测试用一个按脚本回放的假 provider，不联网。
+- **异步运行时**：GPUI 的执行器不是 tokio，而 reqwest 需要 tokio。`mw-llm` 在专用线程上运行一个 tokio runtime，请求和流式事件通过 channel 与 GPUI 交换。用户点"停止"时丢弃流，并取消对应的任务。
+- **不依赖 GPUI**，与第 3 节的约束一致。
+
+#### 6.2.3 Anthropic 后端
+
+- **只实现 `POST /v1/messages`**，需要时再加 token 计数端点（用于发送前预览用量）。
+- **类型**：只为用到的字段写 serde 类型；不认识的内容块保留为原始 JSON。
+- **流式解析**：处理 `message_start`、`content_block_start` / `content_block_delta` / `content_block_stop`、`message_delta`、`message_stop`、`ping`、`error` 事件，以及文本、工具参数、thinking、签名四种增量。
+- **重试**：429 和 529（过载）按 `retry-after` 退避重试，其他 4xx 不重试；流中途的 `error` 事件按同样的规则处理。
 - **需要遵守的 API 要点**：
-  - 使用流式响应；
-  - 用自适应思考，用 effort 控制深度和成本；
+  - 使用流式响应；工具开启参数流式（eager input streaming）后，由客户端负责校验参数（6.2.6 节）；
+  - 用自适应思考，用 effort 控制深度和成本；thinking 块原样传回；
   - 工具定义开启严格模式（`strict`），保证参数符合 Schema；
   - 按"工具定义 → 系统提示 → 消息"的稳定顺序组织请求，以便提示缓存命中；
   - 会话中途的操作员指令用对话中的系统消息传递，而不是修改顶层系统提示——这同时是防提示注入的通道；
-  - 处理 `refusal` 等停止原因；
+  - 默认模型上，强制 `tool_choice`（any 或指定工具）会被拒绝，所以 Agent 循环不依赖强制工具选择；
+  - 处理 `refusal`、`max_tokens` 等停止原因；
   - 长会话使用服务端上下文压缩。
-- **其他模型服务**：兼容 OpenAI 接口的服务，以及本地模型（如通过 Ollama 运行的模型），满足离线和隐私需求。本地模型的工具调用能力参差不齐，界面上要提示用户。
-- **凭据**：API 密钥由用户提供，存放在系统钥匙串里，不写进项目文件或日志。
-- **成本**：界面显示每次会话的用量和估算费用；可以设置单次会话上限。
+- **规模**：估计 1,500–2,500 行；测试用录制下来的 SSE 数据，不联网。
+
+#### 6.2.4 OpenAI 后端
+
+OpenAI 有两套接口，分成两个后端：
+
+| 后端 | 接口 | 用于 | 要点 |
+|---|---|---|---|
+| `openai_chat` | Chat Completions（`/v1/chat/completions`） | OpenAI；兼容服务，如 DeepSeek、通义千问（DashScope 兼容模式）、Kimi、智谱 GLM、硅基流动、OpenRouter；本地的 Ollama、vLLM、LM Studio | 只需配置 base URL、API 密钥和模型名。各服务的非标准字段（例如有的服务用额外字段返回推理内容）由厂商档案适配（6.2.7 节） |
+| `openai_responses` | Responses（`/v1/responses`） | OpenAI 官方和 Azure OpenAI，尤其是推理模型 | 用无状态模式：`store: false`，并请求加密的推理内容，按原样传回。不使用服务端保存的会话状态，对话历史仍保存在项目里，与 6.4 节的可复现和第 2 节的数据最小化一致 |
+
+- **实现用 async-openai**：
+  - Responses 接口在 `responses` feature 后面；
+  - `byot` feature 提供可传入自定义请求和响应类型的方法，用来保留兼容服务的非标准字段，以及未知字段；
+  - 也可以只开 `types` feature，用它的类型定义、自己发 HTTP 请求。
+- **底层同样是 reqwest + tokio**，与 Anthropic 后端共用同一个 tokio 线程。
+- **Ollama 走它的 OpenAI 兼容端点**，不单独引入 ollama-rs。
+- **模型名由用户配置**，代码里不写死 OpenAI 或兼容服务的模型 ID。
+
+#### 6.2.5 接口差异
+
+provider 层负责把下面这些差异转换成项目自己的对话类型：
+
+| | Anthropic Messages | OpenAI Chat Completions | OpenAI Responses |
+|---|---|---|---|
+| 系统提示 | 顶层 `system` | `system` / `developer` 消息 | `instructions` |
+| 工具调用参数 | `tool_use.input`，JSON 对象 | `tool_calls[].function.arguments`，JSON 字符串 | `function_call.arguments`，JSON 字符串 |
+| 工具结果 | user 消息里的 `tool_result` 块 | `role: "tool"` 消息 | `function_call_output` 条目 |
+| 推理内容 | thinking 块带签名，原样传回 | 官方不返回；部分兼容服务用非标准字段返回，规则各不相同 | reasoning 条目，取加密内容传回 |
+| 缓存 | 显式 `cache_control` 断点 | 自动前缀缓存 | 自动前缀缓存 |
+| 流式 | 带类型的 SSE 事件 | `data:` 增量块，以 `[DONE]` 结束 | 带类型的 SSE 事件 |
+| 停止原因 | `stop_reason`：`end_turn`、`tool_use`、`max_tokens`、`refusal` 等 | `finish_reason`：`stop`、`tool_calls`、`length`、`content_filter` | `status`；未完成时看 `incomplete_details.reason` |
+| 用量字段 | `input_tokens`、`output_tokens`，另有缓存读写字段 | `prompt_tokens`、`completion_tokens` | `input_tokens`、`output_tokens` |
+
+停止原因统一映射为：完成、调用工具、达到输出上限、拒绝或被过滤、其他。
+
+#### 6.2.6 工具 Schema 与参数校验
+
+- **Schema 按最严格的子集生成**：能力注册表（第 4 节）由 Rust 类型生成 Schema 时：
+  - 每个对象都写 `additionalProperties: false`；
+  - 所有字段都列进 `required`，可选字段改用可空类型表示（例如 `"type": ["number", "null"]`）；
+  - 只用各家严格模式都支持的关键字，具体清单按附录复核；
+  - 数值范围、单位等约束写进说明，并由处理函数自己校验。
+- **Schema 测试**：
+  - 单元测试检查每个能力的 Schema 都在这个子集内；
+  - 改动 Schema 后，在 Anthropic 和 OpenAI 上各发一次只含工具定义的请求，确认能被接受。这一步会产生少量费用，手动或每日运行。
+- **执行前必须校验参数**：
+  - OpenAI 返回的参数是字符串，不一定是合法 JSON，非严格模式和兼容服务更容易出问题；Anthropic 开启参数流式后，也由客户端负责校验；
+  - 先检查停止原因：达到输出上限或拒绝时，不执行这一轮的工具调用；
+  - 再解析参数，并按输入 Schema 校验；
+  - 失败时不执行，把错误作为工具结果交回模型，让它修正（与第 4 节"错误可恢复"一致）；
+  - 不支持严格模式的服务，本地校验是唯一的保证。
+
+#### 6.2.7 能力声明
+
+不假装各家都一样。每个 provider 和模型的组合声明自己支持什么，助手据此调整行为：
+
+| 能力 | 不支持时的做法 |
+|---|---|
+| 推理内容传回 | 不传回推理内容；Agent 循环本来就不依赖它 |
+| 显式缓存断点 | 仍按稳定前缀的顺序组织请求，依靠自动前缀缓存 |
+| 严格模式工具 | 只靠本地校验；助手面板提示"工具调用可能不稳定" |
+| 并行工具调用 | 每轮只执行一个工具调用。支持时，只读调用可以并发执行，写操作始终按顺序执行并逐个确认 |
+| 图像输入 | 不发送视口截图，改用文字摘要 |
+| 对话中途的系统消息 | 把操作员指令并入下一轮请求的系统提示末尾（会使缓存失效） |
+| 服务端上下文压缩 | 由 `mw-assistant` 自己摘要较早的轮次 |
+| 上下文长度与最大输出 | 用于上下文组装和触发压缩的阈值 |
+
+- **厂商档案**：已知服务和模型内置一份档案，包括默认 base URL、上述能力和非标准字段的处理方式。
+- **用户自定义端点**：自己添加的兼容端点默认按最保守的能力处理，用户可以在设置里逐项打开。
+- **设置界面**：每个模型旁边显示能力摘要；本地模型和能力较弱的模型，在助手面板里给出提示。
+
+#### 6.2.8 配置、凭据与成本
+
+- **默认模型**：Claude Opus 5.5（`claude-opus-5-5`）。用户可以在设置里换成更便宜的模型，例如 Claude Sonnet 5.5（`claude-sonnet-5-5`）、Claude Haiku 5.5（`claude-haiku-5-5`），用于简单问答或批量任务；也可以换成 OpenAI 或兼容服务的模型。
+- **provider 配置**：每个 provider 一条配置，包括后端类型（`anthropic`、`openai_chat`、`openai_responses`）、base URL、模型名、密钥引用和能力覆盖项。
+- **凭据**：API 密钥由用户提供，每个 provider 各一份，存放在系统钥匙串里，不写进项目文件或日志。
+- **成本**：各家用量字段不同（6.2.5 节），费用按 provider 维护价格表计算——已知模型内置价格，用户可以修改，本地模型计为零。界面显示每次会话的用量和估算费用；可以设置单次会话上限。
 
 ### 6.3 Agent 循环
 
@@ -235,6 +353,7 @@ Capability
 | 工具质量 | 建立一组固定的任务评测（例如 30–50 个典型请求），用模型自动跑并统计成功率；每次修改能力说明或 Schema 后重跑，防止退化 |
 | 安全 | 不可逆操作必弹确认；带恶意指令的文件不能触发未经确认的写操作；HTTP 模式拒绝非本机来源 |
 | 内置助手 | 第 6.1 节的典型任务都能完成，数值结论能追溯到工具调用；断网或未配置模型时，界面给出明确提示，不影响其他功能 |
+| 模型服务 | 评测集分别在 Claude、OpenAI 和至少一个兼容服务上运行，按 provider 统计成功率；三个后端都有基于录制数据的流式解析回归测试 |
 
 ## 9. 前置条件与版本
 
@@ -243,9 +362,9 @@ Capability
 | v0.1（随 M4） | 建立能力注册表的基本结构；领域命令可序列化，GPUI 动作改为调用领域命令 | M4 命令层 |
 | v0.2 | 实验性 MCP Server：项目与结构的只读工具、导出 CIF / POSCAR 文本、结构资源；支持无界面和连接应用两种模式 | M1、M2 |
 | v0.3 | 完整 MCP：编辑工具、写文件、视图工具、权限设置、审计日志、elicitation；与 Python 绑定、命令行一同发布 | M4–M6 |
-| v0.4 | 内置助手第一版：Claude 支持、工具调用卡片、确认交互、会话撤销；首个重点场景是 XRD 物相分析与结构问答 | v0.3 的权限与审计 |
+| v0.4 | 内置助手第一版：Claude 与 OpenAI 两类接口（含兼容服务）、工具调用卡片、确认交互、会话撤销；首个重点场景是 XRD 物相分析与结构问答。本地端点可以连接，但标为实验性 | v0.3 的权限与审计 |
 | v0.5–v0.6 | 热力学、显微组织模块发布时一并提供各自的能力（"完成"的定义里包含 MCP 工具和评测任务） | 各模块 |
-| v1.x | 挂载外部 MCP Server、本地模型、实验室数据管线的能力、仪器插件（受第 7.1 节最高等级约束） | v1.0 扩展接口 |
+| v1.x | 挂载外部 MCP Server、本地模型的正式支持（经过评测的模型清单与离线体验）、实验室数据管线的能力、仪器插件（受第 7.1 节最高等级约束） | v1.0 扩展接口 |
 
 ## 10. 风险
 
@@ -255,12 +374,17 @@ Capability
 | 模型在科学问题上的错误 | 错误结论误导用户 | 数值只来自引擎；结论必须引用工具结果；评测集里包含科学正确性检查 |
 | 提示注入 | 越权操作或数据外泄 | 第 7.4 节的措施；权限在注册表强制执行 |
 | 成本与隐私 | 用户不敢用或费用失控 | 本地优先；发送前可预览；用量显示与上限；支持本地模型 |
-| Rust 没有官方 Anthropic SDK | 自己维护 HTTP 调用，API 变更需要跟进 | 封装在模型服务接口之后；按附录复核 |
+| 自己维护模型服务客户端（Rust 没有官方 Anthropic 和 OpenAI SDK） | API 变更需要自己跟进 | 只实现用到的端点；不认识的字段原样保留；用录制数据做回归测试；封装在 `ChatProvider` 之后；按附录复核 |
+| 兼容服务的行为差异 | 工具调用失败、非标准字段、推理内容规则不一 | 厂商档案与保守的默认能力；本地参数校验；评测集按 provider 分别运行 |
 | 能力说明写得不好 | 模型调用出错率高 | 评测集驱动地迭代能力说明和 Schema |
 
 ## 附录：实现时的复核清单
 
 - MCP 当前规范版本：传输方式（stdio、Streamable HTTP）、工具注解、结构化输出、elicitation、资源订阅、授权方式。
 - 所选 MCP Rust SDK 对上述能力的支持情况。
-- Claude API：可用模型与价格、工具定义格式与 `strict`、流式响应与工具参数流式、思考与 effort 参数、提示缓存规则、对话中的系统消息、停止原因、上下文压缩。
+- Claude API：可用模型与价格、工具定义格式与 `strict`、流式响应与工具参数流式、思考与 effort 参数、thinking 块的回传规则、`tool_choice` 的限制、提示缓存规则、对话中的系统消息、停止原因、上下文压缩。
+- OpenAI API：Chat Completions 与 Responses 的工具定义格式、严格模式支持的 Schema 关键字、推理条目与加密推理内容、流式事件、停止原因与用量字段；async-openai 当前版本对 Responses 和自定义类型的支持。
+- 6.2.6 节 Schema 子集的关键字清单：两家严格模式都接受。
+- 内置厂商档案涉及的兼容服务：base URL、非标准字段、推理内容的回传规则、工具调用和图像输入的支持情况。
+- 本项目确定许可证后，再确认参考 Zed 相关 crate 的方式是否合适。
 - Claude Desktop 和 Claude Code 当前的 MCP Server 配置方式。
