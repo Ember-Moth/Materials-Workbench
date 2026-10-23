@@ -138,12 +138,86 @@ pub(crate) fn match_operations(symmetry: &Symmetry) -> Option<&'static Setting> 
     Some(setting(*hall_number))
 }
 
-/// Operations from a Hall symbol such as `-P 2ybc`; `None` if moyo cannot
-/// parse it (it does not read change-of-basis suffixes such as
+/// Operations from a Hall symbol such as `-P 2ybc` or `-R 3 2"c`; `None` if
+/// moyo cannot parse it (it does not read change-of-basis suffixes such as
 /// `(x,y,-x+z)`) or it generates no valid operation set.
 pub(crate) fn hall_operations(symbol: &str) -> Option<Symmetry> {
-    let hall = HallSymbol::new(symbol.trim())?;
+    let hall = HallSymbol::new(&moyo_hall_symbol(symbol)?)?;
+    if !generates_point_group(&hall) {
+        return None;
+    }
     Symmetry::new(operations(&hall)?).ok()
+}
+
+/// Whether the rotations of the generators close into a crystallographic
+/// point group (at most 48 elements). With explicit axes a Hall symbol can
+/// combine rotations of no common lattice, e.g. `P 3 4x`, whose group is
+/// infinite; `HallSymbol::traverse` would then never return. Every element
+/// is a product of at most 48 generators with row sums ≤ 2, so `i64`
+/// cannot overflow.
+fn generates_point_group(hall: &HallSymbol) -> bool {
+    let generators: Vec<Matrix3<i64>> = hall
+        .generators
+        .iter()
+        .map(|op| op.rotation.map(i64::from))
+        .collect();
+    let mut group = vec![Matrix3::identity()];
+    let mut next = 0;
+    while let Some(element) = group.get(next).copied() {
+        for generator in &generators {
+            let product = element * generator;
+            if !group.contains(&product) {
+                if group.len() == 48 {
+                    return false;
+                }
+                group.push(product);
+            }
+        }
+        next += 1;
+    }
+    true
+}
+
+/// A Hall symbol in moyo's spelling, checked against the grammar moyo's
+/// parser assumes: it indexes and asserts rather than returning `None` on
+/// an empty symbol, a lone `-`, an unknown character in an operator or a
+/// non-numeric origin shift. moyo writes the axis symbols `'` and `"` of
+/// International Tables B as `^` and `=`, so `R 3 2"` becomes `R 3 2=`.
+fn moyo_hall_symbol(symbol: &str) -> Option<String> {
+    let symbol = symbol.trim().replace('\'', "^").replace('"', "=");
+    // moyo's tokens: the lattice, the operators, and from the first token
+    // that opens with `(` on, the origin shift.
+    let tokens: Vec<&str> = symbol.split_whitespace().collect();
+    let shift_start = tokens
+        .iter()
+        .position(|t| t.starts_with('('))
+        .unwrap_or(tokens.len());
+    let (lattice, operators) = tokens[..shift_start].split_first()?;
+    let lattice = lattice.strip_prefix('-').unwrap_or(lattice);
+    if operators.is_empty() || !matches!(lattice, "P" | "A" | "B" | "C" | "I" | "R" | "F") {
+        return None;
+    }
+    for token in operators {
+        // <N> := "-"? <nfold> <A>? <T>?, with the axis symbol before the
+        // axis, e.g. `-2^x` or `61`.
+        let token = token.strip_prefix('-').unwrap_or(token);
+        let token = token.strip_prefix(['1', '2', '3', '4', '6'])?;
+        let token = token.strip_prefix(['^', '=']).unwrap_or(token);
+        let token = token.strip_prefix(['x', 'y', 'z', '*']).unwrap_or(token);
+        if !token.chars().all(|c| "123456abcnuvwd".contains(c)) {
+            return None;
+        }
+    }
+    if shift_start < tokens.len() {
+        // <V> := "(" vx vy vz ")", in twelfths.
+        let shift = tokens[shift_start..].join(" ");
+        let shift = shift.strip_prefix('(')?.strip_suffix(')')?;
+        let components: Vec<&str> = shift.split_whitespace().collect();
+        if components.len() != 3 || components.iter().any(|c| c.parse::<i32>().is_err()) {
+            return None;
+        }
+    }
+    Some(symbol)
 }
 
 /// For comparing Hermann–Mauguin symbols: `P 42/m n m`, `P4_2/mnm` and
@@ -367,5 +441,53 @@ mod tests {
         assert_eq!(ops("-F 4 2 3"), Some(192));
         assert_eq!(ops("P 31 2 (0 0 4)"), Some(6));
         assert_eq!(ops("not a Hall symbol"), None);
+        for hall_number in 1..=530 {
+            let entry = hall_symbol_entry(i32::from(hall_number)).unwrap();
+            assert_eq!(
+                hall_operations(entry.hall_symbol).as_ref(),
+                Some(&setting(hall_number).symmetry),
+                "{}",
+                entry.hall_symbol
+            );
+        }
+    }
+
+    #[test]
+    fn reads_axis_symbols_of_international_tables() {
+        // COD writes `"` where moyo's table has `=` (No. 155 and 167,
+        // hexagonal axes).
+        let r32 = hall_operations("R 3 2\"").expect("R 3 2\"");
+        assert_eq!(r32, setting(444).symmetry);
+        let r3c = hall_operations("-R 3 2\"c").expect("-R 3 2\"c");
+        assert_eq!(match_operations(&r3c).map(|s| s.number), Some(167));
+        assert_eq!(
+            hall_operations("P 3 2'").map(|s| s.operations().len()),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_hall_symbols() {
+        // moyo panics on these...
+        for symbol in [
+            "",
+            "-",
+            "P -",
+            "P 2#",
+            "P 2 2\"#",
+            "P 2′",
+            "P 2(0 0 1)",
+            "-P 2ybc (x, y, z)",
+            "P 2 (0 0 x)",
+            // ...and reads these in part, ignoring the rest.
+            "P",
+            "P1",
+            "P 2 (0 0 1",
+        ] {
+            assert_eq!(hall_operations(symbol), None, "{symbol:?}");
+        }
+        // Parses, but 3z of a hexagonal cell and 4x of a square one
+        // generate an infinite group.
+        assert_eq!(hall_operations("P 3 4x"), None);
     }
 }
