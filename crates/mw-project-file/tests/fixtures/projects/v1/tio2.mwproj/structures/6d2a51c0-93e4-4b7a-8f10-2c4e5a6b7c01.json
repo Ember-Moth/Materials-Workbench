@@ -1,0 +1,45 @@
+{
+  "structure": {
+    "cell": {
+      "a": {"value": 4.594},
+      "b": {"value": 4.594},
+      "c": {"value": 2.959},
+      "alpha": {"value": 90.0},
+      "beta": {"value": 90.0},
+      "gamma": {"value": 90.0}
+    },
+    "operations": [
+      "x,y,z",
+      "-y+1/2,x+1/2,z+1/2",
+      "-x+1/2,y+1/2,-z+1/2",
+      "-x,-y,-z",
+      "-x,-y,z",
+      "y,x,-z",
+      "y+1/2,-x+1/2,-z+1/2",
+      "-y,-x,-z",
+      "x+1/2,-y+1/2,z+1/2",
+      "y+1/2,-x+1/2,z+1/2",
+      "x+1/2,-y+1/2,-z+1/2",
+      "x,y,-z",
+      "-y,-x,z",
+      "y,x,z",
+      "-y+1/2,x+1/2,-z+1/2",
+      "-x+1/2,y+1/2,z+1/2"
+    ],
+    "space_group": {
+      "hm_symbol": "P 42/m n m",
+      "it_number": 136
+    },
+    "sites": [
+      {"id": 1, "position": [0.0, 0.0, 0.0], "occupants": [{"label": "Ti1", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 2, "position": [0.3048, 0.3048, 0.0], "occupants": [{"label": "O1", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]}
+    ],
+    "tolerances": {
+      "position": 0.01,
+      "symprec": 0.01,
+      "short_contact": 0.5
+    }
+  },
+  "measurements": [],
+  "edits": []
+}

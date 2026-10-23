@@ -129,6 +129,12 @@ panel:
     system_unknown:
       en: Crystal system unknown
       zh-CN: 晶系未知
+    oriented:
+      en: The cell axes keep the directions they were given, not the standard orientation with a along x.
+      zh-CN: 晶胞轴保持给定的方向，不是 a 沿 x 轴的标准朝向。
+    left_handed:
+      en: The cell axes keep the directions they were given; a, b and c form a left-handed set.
+      zh-CN: 晶胞轴保持给定的方向，a、b、c 构成左手系。
   symmetry:
     title:
       en: Symmetry
@@ -759,6 +765,49 @@ diagnostic:
     short_contact:
       en: "Atoms of %{a} and %{b} are only %{distance} Å apart."
       zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance} Å。"
+  poscar:
+    truncated:
+      en: The file ends before the atom coordinates; it is not a complete POSCAR.
+      zh-CN: 文件在原子坐标之前就结束了，不是完整的 POSCAR。
+    invalid_scale:
+      en: "The scaling factor “%{text}” must be one positive number, or a negative one giving the cell volume in Å³."
+      zh-CN: "缩放因子“%{text}”应是一个正数，或是表示晶胞体积（Å³）的负数。"
+    unequal_scale_factors:
+      en: "Three different scaling factors (%{factors}) are not supported yet; give one factor."
+      zh-CN: "暂不支持三个不同的缩放因子（%{factors}），请只写一个缩放因子。"
+    invalid_lattice_vector:
+      en: "A lattice vector needs three numbers: “%{text}”."
+      zh-CN: "晶格矢量应有三个数：“%{text}”。"
+    degenerate_lattice:
+      en: The lattice vectors form no cell; one of them is zero, or they lie in one plane.
+      zh-CN: 三个晶格矢量构不成晶胞：有的长度为零，或者三者共面。
+    left_handed:
+      en: The lattice vectors form a left-handed set and are kept as given. CIF export writes the same crystal on −a, −b, −c.
+      zh-CN: 晶格矢量构成左手系，按文件原样保留；导出 CIF 时改写为 −a、−b、−c，晶体不变。
+    missing_elements:
+      en: "The file has no element line (VASP 4), so the elements of its %{count} atom types are unknown. Add an element line before the atom counts."
+      zh-CN: "文件没有元素行（VASP 4 格式），无法确定 %{count} 种原子各是什么元素。请在原子数目行之前加上元素行。"
+    invalid_counts:
+      en: "The atom counts line “%{text}” holds no counts."
+      zh-CN: "原子数目行“%{text}”中没有原子数目。"
+    species_count_mismatch:
+      en: "%{elements} elements are named, but %{counts} atom counts are given."
+      zh-CN: "给出了 %{elements} 种元素，却有 %{counts} 个原子数目。"
+    selective_dynamics_ignored:
+      en: Selective dynamics flags were not imported.
+      zh-CN: 未导入 selective dynamics 的固定标志。
+    invalid_coordinate_mode:
+      en: "This line should say Direct or Cartesian, but it reads “%{text}”."
+      zh-CN: "这一行应为 Direct 或 Cartesian，实际是“%{text}”。"
+    invalid_coordinates:
+      en: "Atom coordinates need three numbers: “%{text}”."
+      zh-CN: "原子坐标应有三个数：“%{text}”。"
+    missing_coordinates:
+      en: "The atom counts add up to %{expected} atoms, but the file ends after %{found} coordinate lines."
+      zh-CN: "按原子数目应有 %{expected} 行坐标，文件只有 %{found} 行就结束了。"
+    trailing_content:
+      en: The content after the coordinates (velocities, predictor-corrector data) was not imported.
+      zh-CN: 坐标之后的内容（速度、预测-校正数据等）未导入。
 export:
   title:
     en: "Export “%{name}”"
@@ -824,8 +873,8 @@ export:
     zh-CN: 在文件夹中显示
 import:
   unsupported:
-    en: "Couldn't open %{file}: only CIF files are supported so far."
-    zh-CN: "无法打开 %{file}：目前只支持 CIF 文件。"
+    en: "Couldn't open %{file}: only CIF and POSCAR files are supported so far (.cif, .vasp, POSCAR, CONTCAR)."
+    zh-CN: "无法打开 %{file}：目前只支持 CIF 和 POSCAR 文件（.cif、.vasp、POSCAR、CONTCAR）。"
   unreadable:
     en: "Couldn't read %{file}: %{reason}"
     zh-CN: "无法读取 %{file}：%{reason}"

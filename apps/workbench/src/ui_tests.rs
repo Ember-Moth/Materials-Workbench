@@ -13,7 +13,7 @@ use gpui_kit::{
     WindowBounds, WindowOptions, px, size,
 };
 use mw_crystal::{CellParam, CellValues, Command, CrystalDocument, Edit, Measurement};
-use mw_project_file::{Camera, DisplayModel, EntryView, PanelTab, Provenance};
+use mw_project_file::{Camera, DisplayModel, EntryView, PanelTab, Provenance, SourceFormat};
 use mw_structure::StructureWorkspace;
 
 use crate::actions::CloseProject;
@@ -291,6 +291,82 @@ fn imported_files_are_saved_with_their_copy(cx: &mut TestAppContext) {
     );
     let file = dir.read_structure(entry.id).unwrap();
     assert_eq!(block.structure, Some(file.structure));
+}
+
+#[gpui_kit::test]
+fn poscar_files_are_imported_and_saved_with_their_copy(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let projects = install_samples(temp.path());
+    let (workbench, mut cx) = start_with(cx, temp.path(), &projects[1..]);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/mw-crystal-io/tests/fixtures/poscar");
+    // A CONTCAR as a VASP run leaves it, named after its folder.
+    let run = temp.path().join("TiO2-relax");
+    std::fs::create_dir_all(&run).unwrap();
+    std::fs::copy(fixtures.join("CONTCAR"), run.join("CONTCAR")).unwrap();
+    let notes = temp.path().join("notes.txt");
+    std::fs::write(&notes, "not a structure").unwrap();
+    let notifications =
+        |cx: &mut VisualTestContext| cx.update(|window, cx| window.notifications(cx).len());
+    let before = notifications(&mut cx);
+    cx.update(|window, cx| {
+        workbench.update(cx, |workbench, cx| {
+            workbench.import_paths(
+                vec![
+                    run.join("CONTCAR"),
+                    fixtures.join("gaas_primitive_cartesian.vasp"),
+                    notes,
+                ],
+                window,
+                cx,
+            )
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(
+        shown(&workbench, &mut cx),
+        Some(("钙钛矿氧化物".into(), "TiO2-relax · CONTCAR".into()))
+    );
+    // The CONTCAR's warning and the text file each get a notification.
+    assert_eq!(notifications(&mut cx), before + 2);
+
+    focus(&workspace(&workbench, &mut cx), &mut cx);
+    cx.simulate_keystrokes("cmd-s");
+    draw(&mut cx);
+    assert!(!unsaved(&workbench, &mut cx));
+
+    let (dir, manifest) = mw_project_file::read_manifest(&projects[1]).unwrap();
+    let names: Vec<&str> = manifest.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["SrTiO₃", "TiO2-relax · CONTCAR", "gaas_primitive_cartesian"]
+    );
+    for entry in &manifest.entries[1..] {
+        let Provenance::Import(import) = &entry.provenance else {
+            panic!("imported");
+        };
+        assert_eq!(import.format, SourceFormat::Poscar);
+        assert!(import.copy_path().ends_with(".vasp"));
+        let bytes = dir.read_source(import).unwrap();
+        let block = import.read_block(&bytes).unwrap();
+        let file = dir.read_structure(entry.id).unwrap();
+        assert_eq!(block.structure.as_ref(), Some(&file.structure));
+        let codes: Vec<&str> = block.diagnostics.iter().map(|d| d.code()).collect();
+        if entry.name.ends_with("CONTCAR") {
+            assert_eq!(
+                codes,
+                [
+                    "poscar.selective_dynamics_ignored",
+                    "poscar.trailing_content"
+                ]
+            );
+            assert!(file.structure.lattice.orientation().rotation().is_none());
+        } else {
+            assert!(codes.is_empty(), "{codes:?}");
+            // The fcc primitive vectors keep their orientation on disk.
+            assert!(file.structure.lattice.orientation().rotation().is_some());
+        }
+    }
 }
 
 #[gpui_kit::test]

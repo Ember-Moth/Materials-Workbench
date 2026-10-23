@@ -135,8 +135,7 @@ fn alternatives(a: &Site, b: &Site) -> bool {
 
 /// Every bond of the crystal, once per unit cell, ordered by first atom.
 pub fn bonds(structure: &Structure, orbits: &[Orbit], rules: &BondRules) -> Vec<Bond> {
-    let params = structure.lattice.params();
-    let matrix = params.matrix();
+    let matrix = structure.lattice.matrix();
     let atoms: Vec<Bondable> = orbits
         .iter()
         .filter_map(|orbit| Some((orbit, structure.site(orbit.site)?)))
@@ -162,7 +161,7 @@ pub fn bonds(structure: &Structure, orbits: &[Orbit], rules: &BondRules) -> Vec<
         return Vec::new();
     };
     let cutoff = 2.0 * max_radius + rules.tolerance;
-    let volume = params.volume();
+    let volume = structure.lattice.params().volume();
     // A degenerate cell has no lattice planes to bound the search by.
     if !volume.is_finite() || volume <= 0.0 {
         return Vec::new();

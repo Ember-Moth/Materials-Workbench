@@ -363,6 +363,7 @@ impl Workbench {
                         Some(ImportedEntry::new(
                             name,
                             file.path().to_path_buf(),
+                            file.format()?,
                             bytes.clone()?,
                             block,
                         ))

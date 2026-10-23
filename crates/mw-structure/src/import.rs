@@ -12,22 +12,39 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Sizable, StyledExt, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal_io::{Diagnostic, ImportReport, ImportedBlock, Severity, cif};
+use mw_crystal_io::{Diagnostic, ImportReport, ImportedBlock, Severity, cif, poscar};
+use mw_project_file::SourceFormat;
 
 use crate::diagnostics::DiagnosticRow;
 
 /// Why a file yielded no report at all.
 #[derive(Clone, Debug)]
 enum ReadError {
-    /// Not a format the importer reads; only CIF so far.
+    /// Not a format the importer reads.
     Unsupported,
     Io(String),
+}
+
+/// The format a file is read as, from its name: `.cif` is CIF; `.vasp`,
+/// `.poscar` and names that start with POSCAR or CONTCAR (`POSCAR`,
+/// `CONTCAR`, `POSCAR-001`, `CONTCAR.relax`) are POSCAR.
+pub fn format_of(path: &std::path::Path) -> Option<SourceFormat> {
+    let extension = path.extension().and_then(|e| e.to_str());
+    let is =
+        |names: &[&str]| extension.is_some_and(|e| names.iter().any(|n| e.eq_ignore_ascii_case(n)));
+    if is(&["cif"]) {
+        return Some(SourceFormat::Cif);
+    }
+    let name = path.file_name()?.to_str()?.to_ascii_uppercase();
+    (is(&["vasp", "poscar"]) || name.starts_with("POSCAR") || name.starts_with("CONTCAR"))
+        .then_some(SourceFormat::Poscar)
 }
 
 /// One file the user asked to open, read and parsed.
 #[derive(Clone, Debug)]
 pub struct OpenedFile {
     path: PathBuf,
+    format: Option<SourceFormat>,
     /// The file's bytes, for the project's copy.
     bytes: Option<Arc<[u8]>>,
     result: Result<ImportReport, ReadError>,
@@ -37,27 +54,33 @@ impl OpenedFile {
     /// Reads and parses the file. Blocks on file I/O; run it in a background
     /// task.
     pub fn read(path: PathBuf) -> Self {
-        let supported = path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("cif"));
-        let read = if supported {
-            std::fs::read(&path).map_err(|e| ReadError::Io(e.to_string()))
-        } else {
-            Err(ReadError::Unsupported)
-        };
+        let format = format_of(&path);
+        let read = format.ok_or(ReadError::Unsupported).and_then(|format| {
+            let bytes: Arc<[u8]> = std::fs::read(&path)
+                .map_err(|e| ReadError::Io(e.to_string()))?
+                .into();
+            let report = match format {
+                SourceFormat::Cif => cif::read(&bytes),
+                SourceFormat::Poscar => poscar::read(&bytes),
+            };
+            Ok((bytes, report))
+        });
         let (bytes, result) = match read {
-            Ok(bytes) => {
-                let bytes: Arc<[u8]> = bytes.into();
-                let report = cif::read(&bytes);
-                (Some(bytes), Ok(report))
-            }
+            Ok((bytes, report)) => (Some(bytes), Ok(report)),
             Err(error) => (None, Err(error)),
         };
         Self {
             path,
+            format,
             bytes,
             result,
         }
+    }
+
+    /// The format the file was read as; `None` for one the importer does
+    /// not read.
+    pub fn format(&self) -> Option<SourceFormat> {
+        self.format
     }
 
     pub fn path(&self) -> &std::path::Path {
@@ -77,16 +100,15 @@ impl OpenedFile {
 
     /// The structures in the file, each named for the project: the file name
     /// without extension, plus the data block name when there are several.
-    /// Problems that belong to the whole file are added to each structure's
-    /// own diagnostics.
+    /// A file named just POSCAR or CONTCAR, as every VASP run names its
+    /// files, is named after its folder too: `Si-relax · CONTCAR`. Problems
+    /// that belong to the whole file are added to each structure's own
+    /// diagnostics.
     pub fn structures(&self) -> Vec<(String, Arc<ImportedBlock>)> {
         let Ok(report) = &self.result else {
             return Vec::new();
         };
-        let stem = self
-            .path
-            .file_stem()
-            .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+        let stem = self.name();
         let several = report.structures().count() > 1;
         report
             .structures()
@@ -103,6 +125,27 @@ impl OpenedFile {
                 (name, Arc::new(block))
             })
             .collect()
+    }
+
+    /// The file's name without extension, with the folder for a bare POSCAR
+    /// or CONTCAR.
+    fn name(&self) -> String {
+        let stem = self
+            .path
+            .file_stem()
+            .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+        let bare = ["POSCAR", "CONTCAR"]
+            .iter()
+            .any(|n| self.file_name().eq_ignore_ascii_case(n));
+        let folder = self
+            .path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|f| f.to_string_lossy().into_owned());
+        match folder {
+            Some(folder) if bare => format!("{folder} · {stem}"),
+            _ => stem,
+        }
     }
 
     /// Tells the user how the import went, unless it went cleanly.
@@ -241,4 +284,52 @@ fn open_errors(file: String, report: ImportReport, window: &mut Window, cx: &mut
                 ),
             )
     });
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI's glob would shadow the `test` attribute.
+    use std::path::Path;
+
+    use mw_project_file::SourceFormat;
+
+    use super::{OpenedFile, format_of};
+
+    #[test]
+    fn formats_come_from_file_names() {
+        let format = |name: &str| format_of(Path::new(name));
+        assert_eq!(format("/a/rutile.cif"), Some(SourceFormat::Cif));
+        assert_eq!(format("/a/RUTILE.CIF"), Some(SourceFormat::Cif));
+        for name in [
+            "/a/POSCAR",
+            "/a/CONTCAR",
+            "/a/contcar",
+            "/a/POSCAR-001",
+            "/a/CONTCAR.relax",
+            "/a/si.vasp",
+            "/a/si.VASP",
+            "/a/si.poscar",
+        ] {
+            assert_eq!(format(name), Some(SourceFormat::Poscar), "{name}");
+        }
+        assert_eq!(format("/a/POSCAR.cif"), Some(SourceFormat::Cif));
+        assert_eq!(format("/a/notes.txt"), None);
+        assert_eq!(format("/a/OUTCAR"), None);
+    }
+
+    #[test]
+    fn bare_vasp_names_take_their_folder() {
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../mw-crystal-io/tests/fixtures/poscar");
+        let contcar = OpenedFile::read(fixtures.join("CONTCAR"));
+        assert_eq!(contcar.format(), Some(SourceFormat::Poscar));
+        let names: Vec<String> = contcar.structures().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["poscar · CONTCAR"]);
+        let gaas = OpenedFile::read(fixtures.join("gaas_primitive_cartesian.vasp"));
+        let names: Vec<String> = gaas.structures().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["gaas_primitive_cartesian"]);
+        // A VASP 4 file imports nothing; its error is in the report.
+        let vasp4 = OpenedFile::read(fixtures.join("gaas_vasp4.vasp"));
+        assert!(vasp4.structures().is_empty());
+    }
 }

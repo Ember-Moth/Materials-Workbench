@@ -36,7 +36,7 @@ struct Metric([[f64; 3]; 3]);
 
 impl Metric {
     fn new(structure: &Structure) -> Self {
-        Self(structure.lattice.params().matrix())
+        Self(structure.lattice.matrix())
     }
 
     fn length(&self, fractional: [f64; 3]) -> f64 {

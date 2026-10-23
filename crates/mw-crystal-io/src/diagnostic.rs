@@ -253,6 +253,62 @@ pub enum DiagnosticKind {
         b: String,
         distance: f64,
     },
+
+    // POSCAR (design §9.3)
+    /// The file ends before the atom coordinates.
+    PoscarTruncated,
+    /// The second line is not one scaling factor (a negative one is the
+    /// cell volume), nor three equal positive ones.
+    InvalidScale {
+        text: String,
+    },
+    /// Three different scaling factors, which are not supported.
+    UnequalScaleFactors {
+        factors: [f64; 3],
+    },
+    /// A lattice vector line without three numbers.
+    InvalidLatticeVector {
+        text: String,
+    },
+    /// The lattice vectors span no cell: one is zero, or they lie in a
+    /// plane.
+    DegenerateLattice,
+    /// The lattice vectors form a left-handed set; they are kept as they
+    /// are (crystallography design §4.2).
+    LeftHandedLattice,
+    /// A VASP 4 file names no elements; the user has to give one for each
+    /// of the `species` counts.
+    MissingElements {
+        species: usize,
+    },
+    /// The atom counts line has no counts.
+    InvalidAtomCounts {
+        text: String,
+    },
+    /// The element line and the counts line differ in length.
+    SpeciesCountMismatch {
+        elements: usize,
+        counts: usize,
+    },
+    /// Selective dynamics flags are not imported (v0.x).
+    SelectiveDynamicsIgnored,
+    /// The line that should say Direct or Cartesian holds a number: the
+    /// coordinate type line is missing.
+    InvalidCoordinateMode {
+        text: String,
+    },
+    /// A coordinate line without three numbers.
+    InvalidCoordinates {
+        text: String,
+    },
+    /// The file ends after `found` of the `expected` coordinate lines.
+    MissingCoordinates {
+        expected: usize,
+        found: usize,
+    },
+    /// Content after the coordinates (velocities, predictor-corrector data)
+    /// is not imported.
+    TrailingContentIgnored,
 }
 
 impl DiagnosticKind {
@@ -276,7 +332,18 @@ impl DiagnosticKind {
             | MissingAtomSites
             | MissingAtomTag { .. }
             | CartesianOnly
-            | MissingAtomValue { .. } => Severity::Error,
+            | MissingAtomValue { .. }
+            | PoscarTruncated
+            | InvalidScale { .. }
+            | UnequalScaleFactors { .. }
+            | InvalidLatticeVector { .. }
+            | DegenerateLattice
+            | MissingElements { .. }
+            | InvalidAtomCounts { .. }
+            | SpeciesCountMismatch { .. }
+            | InvalidCoordinateMode { .. }
+            | InvalidCoordinates { .. }
+            | MissingCoordinates { .. } => Severity::Error,
             NotUtf8
             | Cif2
             | ContentOutsideBlock
@@ -299,7 +366,8 @@ impl DiagnosticKind {
             | CloseImages { .. }
             | MultiplicityMismatch { .. }
             | OverlappingSites { .. }
-            | ShortContact { .. } => Severity::Warning,
+            | ShortContact { .. }
+            | SelectiveDynamicsIgnored => Severity::Warning,
             NoStructure
             | AngleDefaulted { .. }
             | SymopsFromName { .. }
@@ -311,7 +379,9 @@ impl DiagnosticKind {
             | SnappedToSpecialPosition { .. }
             | MergedOccupancy { .. }
             | RedundantSite { .. }
-            | SharedPosition { .. } => Severity::Info,
+            | SharedPosition { .. }
+            | LeftHandedLattice
+            | TrailingContentIgnored => Severity::Info,
         }
     }
 
@@ -373,6 +443,20 @@ impl DiagnosticKind {
             OverlappingSites { .. } => "atom.overlapping_sites",
             SharedPosition { .. } => "atom.shared_position",
             ShortContact { .. } => "atom.short_contact",
+            PoscarTruncated => "poscar.truncated",
+            InvalidScale { .. } => "poscar.invalid_scale",
+            UnequalScaleFactors { .. } => "poscar.unequal_scale_factors",
+            InvalidLatticeVector { .. } => "poscar.invalid_lattice_vector",
+            DegenerateLattice => "poscar.degenerate_lattice",
+            LeftHandedLattice => "poscar.left_handed",
+            MissingElements { .. } => "poscar.missing_elements",
+            InvalidAtomCounts { .. } => "poscar.invalid_counts",
+            SpeciesCountMismatch { .. } => "poscar.species_count_mismatch",
+            SelectiveDynamicsIgnored => "poscar.selective_dynamics_ignored",
+            InvalidCoordinateMode { .. } => "poscar.invalid_coordinate_mode",
+            InvalidCoordinates { .. } => "poscar.invalid_coordinates",
+            MissingCoordinates { .. } => "poscar.missing_coordinates",
+            TrailingContentIgnored => "poscar.trailing_content",
         }
     }
 }

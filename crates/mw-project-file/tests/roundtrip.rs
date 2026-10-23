@@ -7,11 +7,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mw_crystal::sample::{self, SampleKey};
-use mw_crystal::{Command, CrystalDocument, Edit, Measurement, Structure};
+use mw_crystal::{
+    Command, CrystalDocument, Edit, Lattice, Measurement, Orientation, Rotation, Structure,
+};
 use mw_project_file::{
     Camera, Derived, DisplayModel, Entry, EntryId, EntryKind, EntryView, Import, Manifest,
     Operation, PanelTab, Provenance, ReadError, Save, SaveError, Sha256, Source, SourceFormat,
-    StructureFile, Timestamp, ViewState, read_manifest, save, structure_sha256, write_view,
+    StructureFile, Timestamp, VERSION, ViewState, read_manifest, save, structure_sha256,
+    write_view,
 };
 
 /// The import fixtures of `mw-crystal-io`.
@@ -48,7 +51,19 @@ struct Built {
     files: Vec<(EntryId, StructureFile)>,
 }
 
-/// One project holding the samples and every structure of the fixtures.
+/// Rutile on left-handed basis vectors turned about z, as a POSCAR can give
+/// them (crystallography design §4.2).
+fn oriented_rutile() -> Structure {
+    let mut rutile = sample::load(SampleKey::Rutile).structure;
+    let (s, c) = 0.4f64.sin_cos();
+    let rotation = Rotation::new([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, -1.0]]).unwrap();
+    rutile.lattice =
+        Lattice::with_orientation(*rutile.lattice.params(), Orientation::new(rotation));
+    rutile
+}
+
+/// One project holding the samples, every structure of the fixtures and a
+/// structure with an explicit orientation.
 fn build() -> Built {
     let mut manifest = Manifest::new("测试项目");
     let mut files = Vec::new();
@@ -125,6 +140,48 @@ fn build() -> Built {
             }
         }
     }
+    // POSCAR files, some with an explicit orientation, one left-handed.
+    let mut names: Vec<_> = fs::read_dir(fixtures().join("poscar"))
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| p.extension().is_none_or(|e| e == "vasp"))
+        .collect();
+    names.sort();
+    for path in names {
+        let bytes: Arc<[u8]> = fs::read(&path).unwrap().into();
+        let report = mw_crystal_io::poscar::read(&bytes);
+        let Some((block, structure)) = report.structures().next() else {
+            continue;
+        };
+        let sha = Sha256::of(&bytes);
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let import = Import::new(
+            SourceFormat::Poscar,
+            file_name.clone(),
+            Some(path.display().to_string()),
+            sha.clone(),
+            block.name.clone(),
+            now.clone(),
+            structure_sha256(structure),
+        );
+        add(
+            &mut manifest,
+            file_name,
+            Provenance::Import(import),
+            structure.clone(),
+        );
+        sources.push(Source {
+            sha256: sha,
+            format: SourceFormat::Poscar,
+            bytes,
+        });
+    }
+    add(
+        &mut manifest,
+        "金红石（左手系）".into(),
+        Provenance::Created(mw_project_file::Created::new(now.clone())),
+        oriented_rutile(),
+    );
     let mut view = ViewState::default();
     view.open = Some(rutile_id);
     view.entries.insert(
@@ -196,6 +253,7 @@ fn everything_reads_back_exactly() {
         .filter(|a| a.stale)
         .count();
     assert!(stale > 10, "{stale}");
+    let mut poscar = 0;
     for entry in &manifest.entries {
         let Some(import) = entry.provenance.import() else {
             continue;
@@ -204,7 +262,14 @@ fn everything_reads_back_exactly() {
         let block = import.read_block(&bytes).expect("the block is there");
         let structure = block.structure.expect("it has a structure");
         assert_eq!(structure_sha256(&structure), import.structure_sha256);
+        if import.format == SourceFormat::Poscar {
+            assert!(import.copy_path().ends_with(".vasp"));
+            assert!(path.join(import.copy_path()).exists());
+            poscar += 1;
+        }
     }
+    // Every POSCAR fixture but the VASP 4 one, which needs its elements.
+    assert_eq!(poscar, 5);
     assert_eq!(dir.read_view(), built.save.view);
 
     // The same content gives the same bytes.
@@ -220,9 +285,9 @@ fn files_are_written_one_item_per_line() {
     let built = build();
     save(&path, &built.save).unwrap();
     let manifest = fs::read_to_string(path.join("project.json")).unwrap();
-    assert!(manifest.starts_with(
-        "{\n  \"format\": \"materials-workbench/project\",\n  \"version\": 1,\n  \"writer\": \"Materials Workbench "
-    ));
+    assert!(manifest.starts_with(&format!(
+        "{{\n  \"format\": \"materials-workbench/project\",\n  \"version\": {VERSION},\n  \"writer\": \"Materials Workbench "
+    )));
     let entries = manifest.lines().filter(|l| l.contains("\"kind\"")).count();
     assert_eq!(entries, built.files.len());
     let (supercell, _) = &built.files[1];
@@ -233,6 +298,17 @@ fn files_are_written_one_item_per_line() {
         text.contains("\n      \"a\": {\"value\": 9.188},\n"),
         "{text}"
     );
+    // An explicit orientation follows the cell parameters on one line; the
+    // standard one is not written.
+    assert!(!text.contains("orientation"));
+    let (oriented, _) = built.files.last().unwrap();
+    let text = fs::read_to_string(path.join(format!("structures/{oriented}.json"))).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.contains("\"orientation\""))
+        .expect("an orientation");
+    assert!(line.starts_with("      \"orientation\": [["), "{line}");
+    assert!(line.ends_with("-1.0]]"), "{line}");
 }
 
 #[test]
@@ -351,6 +427,14 @@ fn unreadable_projects_and_parts_are_reported() {
         dir.read_structure(broken),
         Err(ReadError::Invalid { .. })
     ));
+    // An orientation that is not orthogonal.
+    let (oriented, _) = built.files.last().unwrap();
+    let oriented_path = path.join(format!("structures/{oriented}.json"));
+    let text = fs::read_to_string(&oriented_path).unwrap();
+    fs::write(&oriented_path, text.replacen("-1.0]]", "-2.0]]", 1)).unwrap();
+    let error = dir.read_structure(*oriented).unwrap_err();
+    assert!(matches!(error, ReadError::Corrupt { .. }), "{error}");
+    assert!(error.to_string().contains("orthogonal"), "{error}");
 
     // A changed or missing copy of an imported file.
     let (_, manifest) = read_manifest(&path).unwrap();
@@ -376,7 +460,7 @@ fn unreadable_projects_and_parts_are_reported() {
     let text = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
         &manifest_path,
-        text.replace("\"version\": 1,", "\"version\": 7,"),
+        text.replace(&format!("\"version\": {VERSION},"), "\"version\": 7,"),
     )
     .unwrap();
     assert!(matches!(

@@ -27,7 +27,8 @@ const POLL: Duration = Duration::from_millis(50);
 
 type Step = fn(&mut Workbench, &mut Window, &mut Context<Workbench>);
 
-/// A CIF from the importer's test fixtures.
+/// A file from the importer's test fixtures: CIF at the top, POSCAR under
+/// `poscar/`.
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../crates/mw-crystal-io/tests/fixtures")
@@ -505,6 +506,26 @@ const TOUR: &[(&str, Step)] = &[
     // A new project is untitled and empty until files are opened into it.
     ("47-new-project", |workbench, window, cx| {
         workbench.new_project(&crate::actions::NewProject, window, cx);
+    }),
+    // A POSCAR joins the new project. Its fcc primitive vectors are not in
+    // the standard orientation, so the cell keeps their directions and the
+    // properties panel says so under the cell parameters.
+    ("48-import-poscar", |workbench, window, cx| {
+        // The failed import's notification from step 27 would cover the
+        // cell parameters.
+        window.clear_notifications(cx);
+        let file = fixture("poscar/gaas_primitive_cartesian.vasp");
+        workbench.import_paths(vec![file], window, cx);
+    }),
+    // A CONTCAR: selective dynamics flags and velocities are not imported,
+    // and a notification says there are diagnostics.
+    ("49-import-contcar", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("poscar/CONTCAR")], window, cx);
+    }),
+    // Both rows, which the notification would cover.
+    ("50-contcar-diagnostics", |_, window, cx| {
+        window.clear_notifications(cx);
+        window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
 ];
 

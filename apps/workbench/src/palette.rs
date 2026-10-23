@@ -63,7 +63,15 @@ fn shell_entries() -> Vec<Entry> {
         ),
         entry(
             tr!("command.open_file"),
-            &["open file", "import", "cif", "dakai"],
+            &[
+                "open file",
+                "import",
+                "cif",
+                "poscar",
+                "vasp",
+                "contcar",
+                "dakai",
+            ],
             Lucide::FolderOpen,
             Box::new(OpenFile),
         ),

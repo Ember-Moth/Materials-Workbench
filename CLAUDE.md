@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12；M7（对称模式下的几何编辑）已实现，剩下的模拟（mock）属于之后的里程碑和版本。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12；M7（对称模式下的几何编辑）和 M10（POSCAR 导入与晶格朝向）已实现，剩下的模拟（mock）属于之后的里程碑和版本。
 
 ## 文档是设计的依据
 
@@ -72,11 +72,11 @@ cargo fmt --all
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。宿主用 `set_sphere_dragging` 打开后，按在球上的拖动报告屏幕平面内的位移（`SphereDragged` / `SphereDropped`，Å）而不转相机；预览用 `preview_scene`，它保持相机绕的中心，画面不平移。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型、对称操作、原子展开、转为 P1 与超胞（`src/transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
-  - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
+  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1 与超胞（`src/transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；POSCAR / CONTCAR 导入（`src/poscar_read.rs`，P1 结构）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
   - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"；
   - `mw-automation`：能力注册表（`ai-integration.md` 第 4 节）。每个能力有英文说明、输入输出 Schema、副作用等级和处理函数，调用的是 `mw-crystal` 的领域命令，导入诊断和导出文本用 `mw-crystal-io`（`src/files.rs`）；Schema 由 `schema_struct!` 从 Rust 类型和字段文档注释生成，测试用 `mw-llm` 的检查函数确认它们在严格子集内。`StructureEntryId` 定义在这里，`mw-project` 重新导出；
-  - `mw-project-file`：项目文件（`docs/design/project-format.md`）。`.mwproj` 目录里有清单 `project.json`、`structures/<uuid>.json`、`sources/<sha256>.cif`（导入文件的原样副本）和 `view.json`；`read_manifest` 打开项目并按需读取各部分，`save` 原子地写出、清单最后写、再清理不再引用的文件。结构直接用 `mw-crystal` 类型的 serde 形式，改了这些类型的字段要升格式版本、写迁移。示例项目在 `samples/`，由 `tests/samples.rs` 生成并嵌进可执行文件；
+  - `mw-project-file`：项目文件（`docs/design/project-format.md`）。`.mwproj` 目录里有清单 `project.json`、`structures/<uuid>.json`、`sources/<sha256>.cif`（导入文件的原样副本，POSCAR 为 `.vasp`）和 `view.json`；`read_manifest` 打开项目并按需读取各部分，`save` 原子地写出、清单最后写、再清理不再引用的文件。结构直接用 `mw-crystal` 类型的 serde 形式，改了这些类型的字段要升格式版本（`VERSION`，现为 2）、在 `store.rs` 的 `UPGRADES` 里写迁移，并先把当前示例复制成旧版本的测试项目（`tests/fixtures/projects/v<n>/`）再重新生成示例。示例项目在 `samples/`，由 `tests/samples.rs` 生成并嵌进可执行文件；
   - `mw-mcp`：实验性只读 MCP Server（`ai-integration.md` 第 5 节），可执行文件 `mw-mcp`，走 stdio。把注册表里只读、无界面可用的能力映射成工具（名称里的 `.` 换成 `_`，带只读注解和输出 Schema），加上自己的 `file_open`（只能打开 `--allow` 目录里的 CIF 文件，结构留在进程里）；每个打开的结构的 CIF 文本是资源 `mw://project/session/structure/{id}.cif`；结果和资源的 `_meta` 带 `materials-workbench/untrusted`。SDK 是官方的 `rmcp`，同时支持 `initialize` 和 2026-07-28 的无状态生命周期。集成测试用 rmcp 的客户端驱动这个可执行文件；
   - `mw-llm`：内置助手的模型服务客户端。`ChatProvider` 接口下有 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 三个后端；HTTP 跑在专用线程的 tokio runtime 上，返回的流可以由 GPUI 的执行器直接轮询。目前还没有使用者，以后由 `mw-assistant` 依赖（`ai-integration.md` 6.2 节）。它的测试只用手写的 SSE 数据和本机回环服务器，不访问外网。
 
@@ -86,6 +86,7 @@ cargo fmt --all
 ### 晶体学模型
 
 - **真源**是不对称单元加对称操作：整数矩阵加有理平移，并做群封闭检查。
+- **晶格**是晶胞参数加朝向（`crystallography-model.md` 4.2 节）：基矢 `A = R·A_std(params)`，`Orientation::Standard` 即 R = I，POSCAR 这类给出基矢的文件得到 `Explicit(Rotation)`，左手系时 det R = −1。笛卡尔坐标和笛卡尔 ↔ 分数换算一律用 `Lattice::matrix` / `to_cartesian` / `to_fractional`；`CellParams::standard_matrix` 只给不关心朝向的计算（moyo 搜索）。超胞保持原子的笛卡尔位置；CIF 只能写右手基，左手系经 `right_handed` 写成 −a、−b、−c。
 - **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性、键（共价半径之和 + 容差，跨周期边界，金属之间默认不成键）。
 - 能力、选区和测量都引用稳定 ID（`StructureEntryId`、`SiteId`、`AtomRef`），不用列表下标。
 - 编辑分对称模式和 P1 模式，都是可序列化的命令（`mw_crystal::Edit`），带精确的逆命令，进入 `CrystalDocument` 的撤销栈（M4）。转为 P1 是命令 `ExpandToP1`（逆命令恢复整个结构，`IdMap` 的 `Split` / `Merged` 让选区和测量跟着原子走）；超胞是 `make_supercell` 生成的新结构，由外壳作为派生结构加进项目。命令只指向整个位点；指向单个原子的请求先经 `target_sites` 换算，对称模式下只改部分等效原子会被拒绝并给出引导。对称模式下的几何编辑（M7）：`MoveSite` 把被拖原子的分数位移经 `W_k⁻¹` 换算到代表点，再用 `P_s` 投影（可选择脱离特殊位置）；`SetCoordinate` 按行最简形参数化改主元或只依赖一个主元的跟随坐标；`AddSite` 吸附到位点对称群的平均位置，与已有轨道重合时拒绝并引导为混合占位；落到更高对称的特殊位置附近时吸附。吸附和多重度变化作为 `EditInfo` 随结果返回，界面显示为通知。界面、能力注册表（`mw-automation`）和以后的脚本调用的是同一批命令。
@@ -112,9 +113,9 @@ cargo fmt --all
 ### 打开文件
 
 - 对话框、⌘O 和拖放都走 `OpenFile`。
-- 在后台任务里用 `mw_structure::import::OpenedFile::read` 读取文件，再交给 `mw_crystal_io::cif::read` 解析。
+- 在后台任务里用 `mw_structure::import::OpenedFile::read` 读取文件：按文件名认格式（`import::format_of`：`.cif` 是 CIF；`.vasp`、`.poscar` 和以 POSCAR、CONTCAR 开头的是 POSCAR），交给 `mw_crystal_io::cif::read` 或 `poscar::read` 解析。只叫 POSCAR 或 CONTCAR 的文件，结构名前加文件夹名。
 - 成功的数据块连同文件字节加入当前项目（`ProjectCatalog::add_imported`），没有当前项目时新建未命名项目；保存时文件原样复制进项目。拖进窗口的 `.mwproj` 文件夹按项目打开。
-- 诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字由 `mw-structure/src/diagnostics.rs` 按当前语言翻译。
+- 诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字由 `mw-structure/src/diagnostics.rs` 按当前语言翻译，给模型的英文说明在 `mw-automation/src/files.rs`。两处都有兜底分支，新增种类时漏写不会编译出错，要自己补上（POSCAR 的诊断各有一个测试检查）。
 
 ### 项目与保存
 

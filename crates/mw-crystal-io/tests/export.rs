@@ -7,7 +7,8 @@ mod common;
 use std::path::Path;
 
 use mw_crystal::{
-    CellParams, Lattice, Measured, Occupant, Site, SiteId, Species, Structure, SymOp, Symmetry,
+    CellParams, Lattice, Measured, Occupant, Orientation, Rotation, Site, SiteId, Species,
+    Structure, SymOp, Symmetry,
 };
 use mw_crystal_io::{ExportError, ImportReport, cif, poscar, xyz};
 
@@ -524,4 +525,96 @@ fn coordinates_that_round_to_one_are_written_as_zero() {
         xyz.lines().last(),
         Some("Na    0.0000000000    2.0000000000    0.0000000000")
     );
+}
+
+#[test]
+fn oriented_lattices_are_written_as_their_vectors() {
+    // Rutile turned by a quarter turn about z: a along y, b along -x.
+    let mut rutile = structure("rutile.cif");
+    let quarter_turn = Rotation::new([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]).unwrap();
+    rutile.lattice =
+        Lattice::with_orientation(*rutile.lattice.params(), Orientation::new(quarter_turn));
+    let text = poscar::write(&rutile, "rutile").unwrap();
+    let lattice: Vec<&str> = text.lines().skip(2).take(3).collect();
+    assert_eq!(
+        lattice,
+        [
+            "        0.0000000000        4.5940000000        0.0000000000",
+            "       -4.5940000000        0.0000000000        0.0000000000",
+            "        0.0000000000        0.0000000000        2.9590000000",
+        ]
+    );
+    // The direct coordinates are those of the standard orientation.
+    assert_eq!(
+        text.lines().skip(8).collect::<Vec<_>>(),
+        RUTILE_POSCAR.lines().skip(8).collect::<Vec<_>>()
+    );
+    let xyz = xyz::write(&rutile).unwrap();
+    assert!(
+        xyz.contains(
+            "Lattice=\"0.0000000000 4.5940000000 0.0000000000 \
+             -4.5940000000 0.0000000000 0.0000000000 \
+             0.0000000000 0.0000000000 2.9590000000\""
+        ),
+        "{xyz}"
+    );
+    assert_eq!(
+        xyz.lines().nth(3),
+        Some("Ti   -2.2970000000    2.2970000000    1.4795000000")
+    );
+}
+
+/// The signed volume of the tetrahedron of the first four sites: its sign
+/// is the handedness of their arrangement.
+fn handedness(structure: &Structure) -> f64 {
+    let r: Vec<[f64; 3]> = structure
+        .sites
+        .iter()
+        .take(4)
+        .map(|site| structure.lattice.to_cartesian(site.position))
+        .collect();
+    let d = |i: usize| [0, 1, 2].map(|k| r[i][k] - r[0][k]);
+    let (u, v, w) = (d(1), d(2), d(3));
+    u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+        + u[2] * (v[0] * w[1] - v[1] * w[0])
+}
+
+#[test]
+fn left_handed_lattices_are_written_to_cif_without_mirroring() {
+    let site = |id: u32, element: &str, position: [f64; 3]| {
+        let label = format!("{element}1");
+        let occupant = Occupant::new(&label, Species::element(element), Measured::exact(1.0));
+        Site::new(SiteId(id), position, vec![occupant])
+    };
+    // A chiral arrangement of four atoms in a cell whose c points down.
+    let mirror = Rotation::new([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]).unwrap();
+    let params = CellParams::new(6.0, 7.0, 8.0, 90.0, 95.0, 90.0);
+    let sites = vec![
+        site(1, "C", [0.4, 0.4, 0.4]),
+        site(2, "N", [0.6, 0.4, 0.45]),
+        site(3, "O", [0.45, 0.6, 0.4]),
+        site(4, "F", [0.45, 0.45, 0.6]),
+    ];
+    let left = Structure::new(
+        Lattice::with_orientation(params, Orientation::new(mirror)),
+        Symmetry::p1(),
+        sites.clone(),
+    );
+    assert!(left.lattice.is_left_handed());
+    let text = cif::write(&left, &cif::WriteOptions::new("x")).text;
+    let report = cif::read_str(&text);
+    let read = report.structures().next().unwrap().1;
+    let labels: Vec<&str> = read.sites.iter().map(Site::label).collect();
+    assert_eq!(labels, ["C1", "N1", "O1", "F1"]);
+    assert_eq!(read.lattice.params(), &params);
+    let expected = handedness(&left);
+    assert!(expected.abs() > 0.1);
+    assert!(
+        (handedness(read) - expected).abs() < 1e-6,
+        "{} vs {expected}",
+        handedness(read)
+    );
+    // The same coordinates on the parameters alone are the mirror image.
+    let mirrored = Structure::new(Lattice::new(params), Symmetry::p1(), sites);
+    assert!((handedness(&mirrored) + expected).abs() < 1e-9);
 }

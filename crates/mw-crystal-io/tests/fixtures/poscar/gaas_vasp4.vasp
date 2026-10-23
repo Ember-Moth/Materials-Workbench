@@ -1,0 +1,9 @@
+GaAs, zincblende, VASP 4 layout without an element line; hand-written test fixture for Materials Workbench, a = 5.653 A
+5.653
+     0.0000000000     0.5000000000     0.5000000000
+     0.5000000000     0.0000000000     0.5000000000
+     0.5000000000     0.5000000000     0.0000000000
+    1    1
+Direct
+  0.0000000000  0.0000000000  0.0000000000
+  0.2500000000  0.2500000000  0.2500000000

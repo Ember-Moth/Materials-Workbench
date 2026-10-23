@@ -8,6 +8,10 @@
 //! occupancy merged into one site, repeated rows dropped. The block also
 //! keeps the fields the structure does not hold ([`CifFields`]).
 //!
+//! [`poscar::read`] imports a VASP POSCAR or CONTCAR file (design §9.3) as
+//! one block holding a P1 structure, whose lattice keeps the orientation of
+//! the file's vectors.
+//!
 //! [`cif::write`], [`poscar::write`] and [`xyz::write`] export a structure
 //! as text (design §9.2–9.4). POSCAR and XYZ list atoms one by one, so they
 //! refuse structures with partially occupied sites ([`ExportError`]).
@@ -20,6 +24,7 @@ mod kept;
 mod normalize;
 mod number;
 pub mod poscar;
+mod poscar_read;
 mod syntax;
 pub mod xyz;
 

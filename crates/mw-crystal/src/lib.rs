@@ -53,7 +53,7 @@ pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
 pub use formula::Formula;
 pub use id_map::{AtomFate, IdMap, SiteFate};
-pub use lattice::{CellParams, Lattice};
+pub use lattice::{CellParams, Lattice, Orientation, Rotation};
 pub use measured::Measured;
 pub use neighbors::Neighbor;
 pub use site::{CoordinateForm, SiteSymmetry, SpecialPosition, special_position};
@@ -65,4 +65,4 @@ pub use structure::{
     StructureError, Tolerances,
 };
 pub use symmetry::{Rational, SymOp, SymOpError, Symmetry, SymmetryError};
-pub use transform::{SupercellError, make_supercell};
+pub use transform::{SupercellError, make_supercell, right_handed};
