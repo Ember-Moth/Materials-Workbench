@@ -3,6 +3,7 @@ name = "mw-project"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 mw-automation.workspace = true

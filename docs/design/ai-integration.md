@@ -206,7 +206,7 @@ Capability
 - **不用多厂商框架。** 多厂商抽象只保留各家共有的能力，Claude 特有的能力会被抹平。rig 这类框架还自带 Agent 循环和工具抽象，会和我们的循环（直接调用能力注册表、经过副作用等级和确认）冲突。
 - **不做通用 SDK。** 覆盖全部端点、跟着官方每次发版同步是长期负担，与材料软件的目标无关。
 - **自己写薄客户端，只实现助手用到的部分。** 三个后端都原生实现，共用同一个 SSE 解析器和同一套 reqwest 请求、重试代码；OpenAI 侧也不用 async-openai，理由见 6.2.4 节。依赖只有 reqwest（rustls）、tokio、futures、serde、serde_json、bytes、log。
-- **参考实现**：Zed 也是这么做的，给 anthropic、open_ai、ollama 各写了一个薄 crate，主要依赖只有 serde、futures 和它自己的 HTTP 客户端。这些 crate 的许可证是 GPL-3.0-or-later，本项目的许可证确定之前，只参考结构，不复制代码。
+- **参考实现**：Zed 也是这么做的，给 anthropic、open_ai、ollama 各写了一个薄 crate，主要依赖只有 serde、futures 和它自己的 HTTP 客户端。这些 crate 的许可证是 GPL-3.0-or-later，与本项目的 MIT OR Apache-2.0 双许可不兼容，所以只参考结构，不复制代码。
 
 #### 6.2.2 分层
 
@@ -511,5 +511,4 @@ provider 层负责把下面这些差异转换成项目自己的对话类型：
 - OpenAI API：Chat Completions 与 Responses 的工具定义格式、严格模式支持的 Schema 关键字、推理条目与加密推理内容、流式事件、停止原因与用量字段；async-openai 当前版本对 Responses 和自定义类型的支持。（2026-10-22 已核对，见 6.2.4 节；最终没有用 async-openai。）
 - 6.2.6 节 Schema 子集的关键字清单：两家严格模式都接受。（2026-10-22 已确定。）
 - 内置厂商档案涉及的兼容服务：base URL、非标准字段、推理内容的回传规则、工具调用和图像输入的支持情况。（待复核：目前一律按最保守的能力，见 6.2.7 节。）
-- 本项目确定许可证后，再确认参考 Zed 相关 crate 的方式是否合适。
 - Claude Desktop 和 Claude Code 当前的 MCP Server 配置方式。

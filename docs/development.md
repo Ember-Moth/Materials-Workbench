@@ -117,7 +117,8 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 ### 3.2 放在哪里
 
-- 一个新能力（例如 XRD）是一个新 crate，包含它的模型、视图、命令和对话框。
+- 一个新能力（例如 XRD）是一个新 crate，包含它的模型、视图、命令和对话框。新 crate 的 `[package]` 里写 `edition.workspace = true`、`publish.workspace = true` 和 `license.workspace = true`，从工作区继承版本、发布设置和许可证。
+- 新增依赖前确认它的许可证与 MIT OR Apache-2.0 兼容（MIT、Apache-2.0、BSD、ISC、Zlib 等宽松许可）；不引入 GPL 类许可的依赖，也不复制 GPL 代码。
 - 纯计算（解析、对称性、物理量）放在不依赖 GPUI 的 crate 里，并在那里写单元测试。
 - `apps/workbench` 只做组装：创建实体、转接事件、注册全局命令，不放业务逻辑。
 

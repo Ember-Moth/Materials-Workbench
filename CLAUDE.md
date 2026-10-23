@@ -54,7 +54,7 @@ cargo fmt --all
 
 ### crate 分层
 
-工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。依赖只能从上往下：
+工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。新 crate 的 `[package]` 要写 `edition.workspace = true`、`publish.workspace = true`、`license.workspace = true`。项目按 MIT OR Apache-2.0 双许可发布，不引入 GPL 类许可的依赖，也不复制 GPL 代码。依赖只能从上往下：
 
 - **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源。
 - **能力 crate（依赖 GPUI）**：

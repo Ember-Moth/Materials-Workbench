@@ -3,6 +3,7 @@ name = "mw-crystal-render"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 wgpu.workspace = true

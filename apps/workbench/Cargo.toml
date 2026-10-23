@@ -3,6 +3,7 @@ name = "workbench"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "materials-workbench"

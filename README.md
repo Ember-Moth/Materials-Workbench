@@ -37,3 +37,9 @@ cargo run --bin materials-workbench
 - [架构](docs/architecture.md)：模块划分、依赖方向、模拟清单与当前里程碑
 - [开发指南](docs/development.md)：环境、命令、代码约定、测试与提交
 - 设计稿：[界面外壳](docs/design/ui-shell.md) · [晶体学数据模型](docs/design/crystallography-model.md) · [3D 视口](docs/design/viewport-rendering.md) · [AI 集成](docs/design/ai-integration.md)
+
+## 许可证
+
+按 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 许可证发布，由你任选其一。
+
+除非你明确声明，否则你有意提交并被纳入本项目的贡献（按 Apache-2.0 许可证的定义）都按上述双许可授权，不附加其他条款或条件。
