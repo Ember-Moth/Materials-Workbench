@@ -12,19 +12,21 @@ macro_rules! tr {
 
 mod actions;
 mod assets;
+mod config;
 mod palette;
+mod projects;
 #[cfg(feature = "screenshot")]
 mod screenshot;
 mod settings;
+#[cfg(test)]
+mod ui_tests;
 mod workbench;
 
-use gpui_kit::component::{TitleBar, set_locale};
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
+use config::AppPaths;
 use workbench::Workbench;
-
-/// The interface language until there is a saved preference.
-const DEFAULT_LOCALE: &str = "zh-CN";
 
 fn main() {
     env_logger::init();
@@ -36,11 +38,17 @@ fn main() {
                 rust_i18n::extend!(gpui_component);
             }
             gpui_kit::init(cx);
-            set_locale(DEFAULT_LOCALE);
+            // The screenshot tour starts from scratch in a directory of its
+            // own, never from the user's projects and settings.
+            #[cfg(feature = "screenshot")]
+            let paths = screenshot::paths().unwrap_or_else(AppPaths::from_environment);
+            #[cfg(not(feature = "screenshot"))]
+            let paths = AppPaths::from_environment();
+            cx.set_global(paths);
+            settings::apply_saved(cx);
 
             actions::bind_keys(cx);
             mw_structure::bind_keys(cx);
-            cx.on_action(|_: &actions::Quit, cx| cx.quit());
             cx.on_window_closed(|cx, _| cx.quit()).detach();
 
             let titlebar = TitlebarOptions {
@@ -54,12 +62,34 @@ fn main() {
                 titlebar: Some(titlebar),
                 ..Default::default()
             };
-            let (_window, _workbench) = gpui_kit::open_window(options, cx, |window, cx| {
+            let (window, workbench) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| Workbench::new(window, cx))
             })
             .expect("failed to open the main window");
+            // Quitting and closing the window ask first when projects have
+            // unsaved changes. ⌘Q is handled here rather than on the
+            // workbench, so that it is not lost while focus is in a dialog.
+            let quitting = workbench.clone();
+            cx.on_action(move |_: &actions::Quit, cx| {
+                let workbench = quitting.clone();
+                window
+                    .update(cx, |_, window, cx| {
+                        if workbench.update(cx, |w, cx| w.request_quit(window, cx)) {
+                            cx.quit();
+                        }
+                    })
+                    .ok();
+            });
+            let closing = workbench.clone();
+            window
+                .update(cx, |_, window, cx| {
+                    window.on_window_should_close(cx, move |window, cx| {
+                        closing.update(cx, |w, cx| w.request_quit(window, cx))
+                    });
+                })
+                .ok();
             cx.activate(true);
             #[cfg(feature = "screenshot")]
-            screenshot::start(_window, _workbench, cx);
+            screenshot::start(window, workbench, cx);
         });
 }

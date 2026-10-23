@@ -7,6 +7,28 @@ pub struct CameraMatrices {
     pub proj: Mat4,
 }
 
+/// A camera's angles in radians, its zoom as half the visible height, and
+/// the point it orbits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CameraPose {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub half_height: f32,
+    pub target: [f32; 3],
+}
+
+impl CameraPose {
+    pub fn new(yaw: f32, pitch: f32, half_height: f32, target: [f32; 3]) -> Self {
+        Self {
+            yaw,
+            pitch,
+            half_height,
+            target,
+        }
+    }
+}
+
 /// Orthographic camera orbiting a target point.
 ///
 /// The crystal viewport defaults to an orthographic projection, so zoom is
@@ -39,6 +61,35 @@ impl OrbitCamera {
     /// the current angle and zoom.
     pub fn set_scene_radius(&mut self, scene_radius: f32) {
         self.scene_radius = scene_radius.max(1.0);
+    }
+
+    /// Where the camera looks from and how far it is zoomed, to save a view.
+    pub fn pose(&self) -> CameraPose {
+        CameraPose {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            half_height: self.half_height,
+            target: self.target.to_array(),
+        }
+    }
+
+    /// Returns to a saved pose. The scene size stays; the angles and zoom
+    /// are limited as when moving the camera, and values that are not
+    /// numbers are ignored.
+    pub fn set_pose(&mut self, pose: CameraPose) {
+        let finite = [pose.yaw, pose.pitch, pose.half_height]
+            .iter()
+            .chain(&pose.target)
+            .all(|v| v.is_finite());
+        if !finite {
+            return;
+        }
+        self.yaw = pose.yaw % std::f32::consts::TAU;
+        self.pitch = pose.pitch.clamp(-MAX_PITCH, MAX_PITCH);
+        self.half_height = pose
+            .half_height
+            .clamp(self.scene_radius * 0.02, self.scene_radius * 10.0);
+        self.target = Vec3::from_array(pose.target);
     }
 
     /// Rotates by the given angles in radians.
@@ -107,6 +158,22 @@ mod tests {
                 assert!((0.0..=1.0).contains(&z), "depth {z}");
             }
         }
+    }
+
+    #[test]
+    fn poses_come_back_within_limits() {
+        let mut camera = OrbitCamera::framing(10.0);
+        camera.rotate(0.4, -0.2);
+        camera.zoom(2.0);
+        let pose = camera.pose();
+        let mut other = OrbitCamera::framing(10.0);
+        other.set_pose(pose);
+        assert_eq!(other.pose(), pose);
+        other.set_pose(CameraPose::new(0.1, 9.0, 1e6, [0.0; 3]));
+        assert_eq!(other.pose().pitch, MAX_PITCH);
+        assert_eq!(other.pose().half_height, 100.0);
+        other.set_pose(CameraPose::new(f32::NAN, 0.0, 1.0, [0.0; 3]));
+        assert_eq!(other.pose().pitch, MAX_PITCH);
     }
 
     #[test]

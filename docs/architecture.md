@@ -1,6 +1,6 @@
 # 架构
 
-> 状态：v0.1 框架已搭好，M1 CIF 导入、M2 对称性、M3 渲染（键、晶胞边框、拾取、测量）、M4 基础编辑与能力注册表、M5 中的导出（CIF、POSCAR、扩展 XYZ）已实现，其余功能以模拟（mock）为主 · 2026-10-22
+> 状态：v0.1 框架已搭好，M1 CIF 导入、M2 对称性、M3 渲染（键、晶胞边框、拾取、测量）、M4 基础编辑与能力注册表、M5 中的导出（CIF、POSCAR、扩展 XYZ）、M6 持久化（项目文件、最近项目、设置）已实现，剩下转为 P1 和超胞（M5b） · 2026-10-22
 > 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [项目文件](design/project-format.md) · [3D 视口](design/viewport-rendering.md) · [AI 集成](design/ai-integration.md)
 > 开发流程与约定见 [开发指南](development.md)；版本规划见 [产品路线图](roadmap.md)。
 
@@ -8,7 +8,7 @@
 
 Materials Workbench 是一个用 Rust 编写的现代化、开源、跨平台的材料科学桌面工作台。第一阶段做晶体学：查看、测量、编辑晶体结构，再导出给下游计算。之后逐步加入 XRD、相图和显微组织分析。
 
-当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集、原子展开、成键和对称性分析（空间群识别、位点对称性与坐标约束、Wyckoff 位置、晶胞约束，导入时吸附到特殊位置并合并混合占位，M2）是真实计算的；视口画出原子、键和晶胞边框，可以点选原子、测量距离和键角（M3）。晶胞参数、元素、占位率与混合占位、删除位点、P1 下的坐标可以编辑并撤销，同一批命令也注册在能力注册表里（M4）；结构可以导出为 CIF、POSCAR 和扩展 XYZ，CIF 会写回源文件里模型不保存的字段（M5）。转为 P1、超胞和项目文件仍是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
+当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集、原子展开、成键和对称性分析（空间群识别、位点对称性与坐标约束、Wyckoff 位置、晶胞约束，导入时吸附到特殊位置并合并混合占位，M2）是真实计算的；视口画出原子、键和晶胞边框，可以点选原子、测量距离和键角（M3）。晶胞参数、元素、占位率与混合占位、删除位点、P1 下的坐标可以编辑并撤销，同一批命令也注册在能力注册表里（M4）；结构可以导出为 CIF、POSCAR 和扩展 XYZ，CIF 会写回源文件里模型不保存的字段（M5）。项目是磁盘上的 `.mwproj` 目录，保存结构、测量、来源记录、编辑记录和视图状态，关闭再打开完整恢复；最近项目和设置跨重启保存（M6）。转为 P1 和超胞仍是模拟。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
 
 架构上为后续模块预留的位置：XRD、热力学、显微组织各自是"计算 crate（无界面）+ 界面能力 crate"的组合，与晶体学模块并列，共享项目系统、命令与撤销、视口与图表、国际化。计划中的 crate 见[产品路线图](roadmap.md)第 8–10 节。
 
@@ -52,7 +52,7 @@ apps/workbench ─────────┬───────────�
                     mw-crystal          mw-crystal-render
 ```
 
-`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-project-file`（项目文件的读写）依赖 `mw-crystal` 和 `mw-crystal-io`，以后由 `mw-project`、`mw-structure` 和 MCP 的无界面模式使用。`mw-automation`（能力注册表）只依赖 `mw-crystal`；`mw-project` 依赖它，只为重新导出 `StructureEntryId`，以后 MCP Server 和内置助手也从它取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-project-file`（项目文件的读写）依赖 `mw-crystal` 和 `mw-crystal-io`，`mw-project`、`mw-structure` 和外壳使用它，以后 MCP 的无界面模式也用它读写项目。`mw-automation`（能力注册表）只依赖 `mw-crystal`；`mw-project` 依赖它，只为重新导出 `StructureEntryId`，以后 MCP Server 和内置助手也从它取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
@@ -62,9 +62,9 @@ apps/workbench ─────────┬───────────�
 | `mw-crystal-render` | 离屏渲染球、键、线段和高亮圈并回读像素；按需渲染 ID 纹理回答"鼠标下是什么"；只依赖 wgpu | 否 |
 | `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧与拾取、悬停高亮、3D 坐标投影到屏幕 | 是 |
 | `mw-project-file` | 项目文件（[项目文件设计稿](design/project-format.md)）：清单、结构文件、来源记录、视图状态的类型；读写 `.mwproj` 目录（原子写入、清单最后写、清理不再引用的文件、旧格式迁移）；导入文件的副本与哈希；随应用附带的示例项目 | 否 |
-| `mw-project` | 项目目录模型和左侧边栏视图 | 是 |
-| `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令；选区与测量；打开文件后的通知与错误列表；导出对话框与写文件 | 是 |
-| `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言 | 是 |
+| `mw-project` | 打开着的项目（清单、目录、导入或派生后还没保存的结构、保存进度）和左侧边栏视图 | 是 |
+| `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令；选区与测量；打开文件后的通知与错误列表；导出对话框与写文件；给出要保存的内容和视图状态 | 是 |
+| `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言；项目的新建、打开、保存、关闭与未保存时的提示；最近项目、设置和会话的持久化 | 是 |
 | `mw-llm` | 内置助手的模型服务客户端：`ChatProvider` 接口和项目自己的对话类型；Anthropic Messages、OpenAI Chat Completions（含兼容服务和本地模型）、OpenAI Responses 三个后端；工具 Schema 子集检查与参数校验；能力声明与厂商档案。HTTP 跑在专用线程的 tokio runtime 上，流可以由任何执行器轮询 | 否 |
 
 **规则**：
@@ -78,27 +78,41 @@ apps/workbench ─────────┬───────────�
 ## 4. 运行时结构
 
 ```text
-Workbench（窗口根视图，apps/workbench）
-├── ProjectSidebar（mw-project）
+Workbench（窗口根视图，apps/workbench）：打开着的工作区、当前项目、会话（最近项目）
+├── ProjectSidebar（mw-project）：ProjectCatalog（打开着的项目，每个项目的清单、目录、尚未保存的结构）
 ├── StructureWorkspace（mw-structure），没有打开结构时为空状态
-│   ├── StructureDocument：CrystalDocument（结构、派生数据、测量、撤销栈）+ 名称 + 导入诊断
+│   ├── StructureDocument：CrystalDocument（结构、派生数据、测量、撤销栈）+ 名称 + 来源记录 + 导入诊断 + 以前的编辑记录
 │   ├── Selection：位点列表和视口共用的选区
 │   ├── Viewport（mw-viewport）：渲染器、相机、出帧与拾取流水线、悬停高亮
 │   └── 各字段的 InputState
 └── CommandState：命令面板的查询与选择状态
 ```
 
+**打开项目的流程**（[项目文件设计稿](design/project-format.md)）：
+
+1. 启动时读配置目录里的 `state.json`，在后台按顺序读上次打开着的项目的清单和视图状态（`mw_project_file::read_manifest`）；第一次启动先把随应用附带的示例项目装到数据目录。`打开项目…`（⇧⌘O）、最近项目和拖进窗口的 `.mwproj` 文件夹走同一条路。
+2. 每个项目加入 `ProjectCatalog`，会话里的 `StructureEntryId` 这时分配；已经打开着的（同一路径或同一项目 ID）不重复打开。
+3. 显示该项目上次打开的结构。
+
 **打开结构的流程**：
 
 1. 用户点击边栏里的结构，`ProjectSidebar` 发出 `ProjectSidebarEvent::OpenStructure(id)`。
-2. `Workbench` 在项目目录里查到这个结构，按它的 `StructureSource` 构造 `StructureDocument`：内置示例，或本次会话导入的数据块。
-3. `Workbench` 新建一个 `StructureWorkspace`，把焦点交给它，并告诉边栏选中项变了。
+2. 本次会话打开过的直接切换回去（编辑、撤销历史和视角都在）。否则：导入或派生后还没保存的结构直接用内存里的内容；已经在磁盘上的，在后台读 `structures/<id>.json`，导入的结构再读源文件副本、重新解析出数据块（诊断和 CIF 保留字段）。
+3. `Workbench` 用这些构造 `StructureDocument` 和 `StructureWorkspace`，应用项目里保存的视图状态（相机、显示模型、面板），把焦点交给它，并观察它的变化来更新保存状态。
+
+**保存的流程**（⌘S、右键菜单、命令面板）：
+
+1. 未命名项目和"另存为"先用系统保存面板选位置；已存在的路径不覆盖。
+2. 界面线程上收集要写的内容：有编辑的工作区给出 `StructureFile` 和此刻的 `Checkpoint`，还没写到磁盘的结构和源文件副本来自项目目录模型，视图状态来自所有打开的工作区。
+3. 后台任务里 `mw_project_file::save` 写目录：源文件副本、改过的结构、最后清单，再清理不再引用的文件。
+4. 回到界面线程：项目目录模型记下保存（写的过程中又新增的结构仍是未保存），各工作区按各自的 `Checkpoint` 标记保存点，最近项目更新，顶栏和边栏的状态随之刷新。
+5. 关闭项目、退出应用（⌘Q、关窗口）时有未保存的更改就先问；退出时写各项目的 `view.json` 和配置目录里的 `state.json`。
 
 **打开文件的流程**：
 
 1. 边栏、⌘O、命令面板和空状态里的"打开文件…"都派发 `OpenFile`；`Workbench` 用 `prompt_for_paths` 弹出系统文件对话框。拖进窗口的文件由根视图的 `on_drop::<ExternalPaths>` 接收，走同一条路。
 2. 后台任务里，`mw_structure::import::OpenedFile::read` 读文件，用 `mw_crystal_io::cif::read` 解析。
-3. 回到界面线程，每个成功的数据块加入项目目录里的"导入的文件"项目（`ProjectCatalog::add_imported`），然后打开第一个。
+3. 回到界面线程，每个成功的数据块连同文件的字节加入当前项目（`ProjectCatalog::add_imported`，记下来源：文件名、路径、SHA-256、数据块），没有当前项目时新建一个未命名项目，然后打开第一个。保存项目时文件原样复制进项目的 `sources/`。
 4. `OpenedFile::notify` 告诉用户结果：顺利导入时不提示（打开的结构本身就是反馈）；有诊断时发通知，诊断在"诊断"标签页里；导入失败时发错误通知，通知上的"查看错误…"打开带行号的错误列表。
 
 **导出的流程**（`mw-structure/src/export.rs`）：
@@ -115,7 +129,7 @@ Workbench（窗口根视图，apps/workbench）
 1. 属性面板的字段按回车或离开时提交，元素选择器选中即提交；Delete、撤销、重做和"添加混合占位…"是动作。它们都交给 `StructureWorkspace::execute`，由它调用 `CrystalDocument::execute` 执行一条领域命令（`mw_crystal::Edit` 或测量的增删）。
 2. 被拒绝时（如只删一个等效原子会破坏对称性），文档不变；界面按错误的引导弹对话框或通知。
 3. 成功后得到 ID 映射和警告：选区和测量中途点选的原子按映射更新，警告变成通知，字段、场景和浮层重新同步。撤销和重做走同一条路。
-4. 外壳为本次会话打开过的每个结构保留工作区，切换回来时编辑、撤销历史和视角都在；保存到项目文件属于 M6。
+4. 外壳为本次会话打开过的每个结构保留工作区（直到它的项目关闭），切换回来时编辑、撤销历史和视角都在；⌘S 把它们写进项目文件（M6）。
 
 **点选与测量**：
 
@@ -162,17 +176,12 @@ Workbench（窗口根视图，apps/workbench）
 
 | 模拟 | 位置 | 代替的是 | 由哪一步替换 |
 |---|---|---|---|
-| 内置示例结构（金红石、2×2×2 超胞、SrTiO₃）；操作集、展开和对称性分析是真实的 | `mw-crystal/src/sample.rs` | 项目文件里保存的结构 | M6 项目与设置持久化 |
-| 项目目录；打开的文件只留在内存里，统一放进"导入的文件"项目 | `mw-project` 的 `ProjectCatalog` | 项目文件、新建项目 | M6 项目与设置持久化 |
-| 超胞的诊断 | `mw-structure/src/document.rs` | 派生结构的来源记录 | M5b |
 | 显示固定为一个晶胞，面、棱、角上的原子在对面补一份 | `mw-crystal/src/expand.rs` 的 `display_atoms` | 视图层的显示范围 | v0.3 |
-| 编辑只留在本次会话里：切换到别的结构再回来仍在，退出应用即丢失；顶栏的保存状态只表示有没有编辑 | `apps/workbench` 的 `Workbench::opened`、`mw-structure` 的顶栏 | 项目文件 | M6 持久化 |
 | 对称模式下移动位点：自由坐标可以输入，提交时提示尚未实现（P1 模式下是真实的） | `mw-structure/src/editing.rs` | 沿特殊位置移动与吸附（晶体学设计稿 7.4、7.5 节） | v0.2 |
 | 转为 P1（含删除对话框里的"转为 P1 后删除这一个"）、生成超胞：对话框齐全，确认后只提示"尚未实现" | `mw-structure/src/dialogs.rs`、`workspace.rs` | 对应的命令 | M5b |
-| 新建项目、显示范围、多面体、添加位点 | 各处的 `not_implemented` | 对应功能 | 见第 10 节；添加位点属于 v0.2 |
+| 显示范围、多面体、添加位点 | 各处的 `not_implemented` | 对应功能 | 见第 10 节；添加位点属于 v0.2 |
 | P1 结构检测到更高对称性后的"对称化…"只提示尚未实现（检测本身是真实的） | `mw-structure/src/panel.rs` | `Symmetrize` 命令（晶体学设计稿 7.10 节） | v0.2 |
 | "多面体"显示模型画成球棍 | `mw-structure/src/scene.rs` 的 `DisplayModel` | 半透明多面体管线 | v0.3 |
-| 设置不保存 | `apps/workbench/src/settings.rs` | 设置持久化 | M6 |
 
 ## 10. 路线图
 
@@ -187,7 +196,7 @@ Workbench（窗口根视图，apps/workbench）
 | M3 渲染 | 键（impostor 圆柱）、晶胞边框、ID 纹理拾取；点选原子与测量模式 | `mw-crystal-render`、`mw-viewport` | 已实现。成键规则固定为默认值（共价半径之和 + 0.45 Å，金属之间不成键），还没有按元素对调整的设置；10 万原子 + 30 万键在全分辨率下约 30 fps（视口设计稿 8.2 节） |
 | M4 基础编辑 | 命令与撤销栈：晶胞参数（按对称约束联动）、元素、占位率、删除位点；P1 模式下自由编辑；能力注册表 | `mw-crystal`、新增 `mw-automation`、`mw-structure` | 已实现。命令是可序列化的数据，每条都有精确的逆命令（晶体学设计稿 7.2、7.12 节）；对称模式下只改部分等效原子会被拒绝，引导为改整个位点或转为 P1（转为 P1 属于 M5b，届时接上）。能力注册表注册了 17 个结构查询与编辑能力，Schema 都在严格子集内（AI 集成设计稿第 4 节）。界面集成测试从这一步开始（`mw-structure/src/ui_tests.rs`）。对称模式下移动、添加位点仍属 v0.2 |
 | M5 变换与导出 | 转为 P1、生成超胞、导出 CIF / POSCAR / 扩展 XYZ | `mw-crystal`、`mw-crystal-io` | 部分完成：导出已实现（晶体学设计稿 6、9.2–9.4 节）。CIF 写出对称操作、空间群名称、位点（含占位率、ADP 和不确定度）和派生字段，并写回源文件里模型不保存的字段；POSCAR（VASP 5，直接坐标）和扩展 XYZ 先展开为 P1，遇到部分占位或未知元素时拒绝并说明原因。导出对话框用系统保存面板写文件。往返测试覆盖全部测试文件；本地 COD 语料的 235 591 个结构里，235 582 个往返一致（晶体学设计稿 9.2 节）。转为 P1 和生成超胞移到 M5b |
-| M5b 转为 P1 与超胞 | `ExpandToP1`、`MakeSupercell`（新文档，记录来源） | `mw-crystal`、`mw-structure` | 未开始；M4 的命令层已经就绪，还要等 M6 的来源记录 |
-| M6 持久化 | 项目文件、最近项目、设置保存；示例结构改为从项目文件读 | `mw-project`、外壳 | 未开始 |
+| M5b 转为 P1 与超胞 | `ExpandToP1`（原结构上执行、可撤销）、`MakeSupercell`（新文档，记录来源） | `mw-crystal`、`mw-structure` | 未开始；M4 的命令层和 M6 的来源记录已经就绪 |
+| M6 持久化 | 项目文件、最近项目、设置保存；示例结构改为从项目文件读 | 新增 `mw-project-file`；`mw-project`、`mw-structure`、外壳 | 已实现（[项目文件设计稿](design/project-format.md)）。项目是 `.mwproj` 目录：清单、每个结构一个文件（结构、测量、编辑记录）、导入文件的原样副本（按 SHA-256 命名，导入诊断和 CIF 保留字段由它重新解析）、视图状态；格式版本 1，旧格式在内存里迁移，第一次保存前备份。新建、打开、保存、另存为、关闭项目，未保存时先问；最近项目、退出时打开着的项目和设置存在系统配置目录里。示例项目由 fixture 真实导入生成，随应用附带，第一次启动装到数据目录。验收：全部示例和每个 fixture 结构写成项目再读回逐项相同；界面集成测试编辑、测量、换视角后 ⌘S、关闭、再打开，状态完整恢复（`apps/workbench/src/ui_tests.rs`） |
 
 对称模式下移动、添加原子（特殊位置吸附）、对称性检测与对称化、晶胞变换属于 v0.2。

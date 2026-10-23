@@ -1,6 +1,8 @@
 //! The command palette (⌘K): every command of the window and of the open
-//! structure, searchable in Chinese, English or pinyin.
+//! structure, and the recent projects, searchable in Chinese, English or
+//! pinyin.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName as Lucide;
@@ -14,8 +16,27 @@ struct Entry {
     label: SharedString,
     keywords: Vec<SharedString>,
     icon: Icon,
-    action: Box<dyn Action>,
+    run: Run,
 }
+
+/// What confirming an entry does.
+enum Run {
+    Action(Box<dyn Action>),
+    /// Opens a recent project.
+    Recent(PathBuf),
+}
+
+impl Run {
+    fn boxed_clone(&self) -> Self {
+        match self {
+            Self::Action(action) => Self::Action(action.boxed_clone()),
+            Self::Recent(path) => Self::Recent(path.clone()),
+        }
+    }
+}
+
+/// Opens a recent project, for the palette's entries.
+pub type OpenRecent = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 
 fn shell_entries() -> Vec<Entry> {
     let entry = |label, keywords: &[&str], icon: Lucide, action: Box<dyn Action>| Entry {
@@ -25,9 +46,21 @@ fn shell_entries() -> Vec<Entry> {
             .map(|k| SharedString::from(k.to_string()))
             .collect(),
         icon: Icon::new(icon),
-        action,
+        run: Run::Action(action),
     };
     vec![
+        entry(
+            tr!("command.save"),
+            &["save", "baocun"],
+            Lucide::Save,
+            Box::new(SaveProject),
+        ),
+        entry(
+            tr!("command.save_as"),
+            &["save as", "lingcunwei"],
+            Lucide::Save,
+            Box::new(SaveProjectAs),
+        ),
         entry(
             tr!("command.open_file"),
             &["open file", "import", "cif", "dakai"],
@@ -35,10 +68,28 @@ fn shell_entries() -> Vec<Entry> {
             Box::new(OpenFile),
         ),
         entry(
+            tr!("command.open_project"),
+            &["open project", "dakai xiangmu"],
+            Lucide::Folder,
+            Box::new(OpenProject),
+        ),
+        entry(
             tr!("command.new_project"),
-            &["new project", "xinjian"],
+            &["new project", "xinjian xiangmu"],
             Lucide::Plus,
             Box::new(NewProject),
+        ),
+        entry(
+            tr!("command.close_project"),
+            &["close project", "guanbi xiangmu"],
+            Lucide::FolderX,
+            Box::new(CloseProject),
+        ),
+        entry(
+            tr!("command.open_samples"),
+            &["sample projects", "examples", "shili"],
+            Lucide::BookOpen,
+            Box::new(OpenSampleProjects),
         ),
         entry(
             tr!("command.toggle_sidebar"),
@@ -73,6 +124,8 @@ fn shell_entries() -> Vec<Entry> {
 pub fn open(
     state: Entity<CommandState>,
     include_structure: bool,
+    recent: Vec<(SharedString, PathBuf)>,
+    open_recent: OpenRecent,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -85,17 +138,33 @@ pub fn open(
                 label: c.label,
                 keywords: c.keywords,
                 icon: c.icon,
-                action: c.action,
+                run: Run::Action(c.action),
             })
             .collect();
         groups.push((tr!("command.group.structure"), structure));
     }
     groups.push((tr!("command.group.app"), shell_entries()));
+    if !recent.is_empty() {
+        let recent = recent
+            .into_iter()
+            .map(|(name, path)| Entry {
+                label: tr!("command.open_recent", name = name.to_string()),
+                keywords: vec![
+                    "recent".into(),
+                    "zuijin".into(),
+                    path.display().to_string().into(),
+                ],
+                icon: Icon::new(Lucide::Clock),
+                run: Run::Recent(path),
+            })
+            .collect();
+        groups.push((tr!("command.group.recent"), recent));
+    }
 
-    let actions: Rc<Vec<Vec<Box<dyn Action>>>> = Rc::new(
+    let actions: Rc<Vec<Vec<Run>>> = Rc::new(
         groups
             .iter()
-            .map(|(_, entries)| entries.iter().map(|e| e.action.boxed_clone()).collect())
+            .map(|(_, entries)| entries.iter().map(|e| e.run.boxed_clone()).collect())
             .collect(),
     );
     let groups = Rc::new(groups);
@@ -105,6 +174,7 @@ pub fn open(
         let groups = groups.clone();
         let actions = actions.clone();
         let previous_focus = previous_focus.clone();
+        let open_recent = open_recent.clone();
         dialog
             .close_button(false)
             .p_0()
@@ -114,26 +184,30 @@ pub fn open(
                     .placeholder(tr!("command.placeholder"));
                 for (label, entries) in groups.iter() {
                     let items = entries.iter().map(|e| {
-                        CommandItem::new()
+                        let item = CommandItem::new()
                             .label(e.label.clone())
                             .icon(e.icon.clone())
-                            .keywords(e.keywords.clone())
-                            // Supplies the shortcut hint; the dispatch from inside
-                            // the dialog reaches no handler, `on_confirm` below
-                            // delivers it.
-                            .action(e.action.boxed_clone())
+                            .keywords(e.keywords.clone());
+                        match &e.run {
+                            // Supplies the shortcut hint; the dispatch from
+                            // inside the dialog reaches no handler,
+                            // `on_confirm` below delivers it.
+                            Run::Action(action) => item.action(action.boxed_clone()),
+                            Run::Recent(_) => item,
+                        }
                     });
                     command = command.group(CommandGroup::new().label(label.clone()).items(items));
                 }
                 let actions = actions.clone();
                 let previous_focus = previous_focus.clone();
+                let open_recent = open_recent.clone();
                 content.child(
                     command
                         .on_confirm(move |ix, window, cx| {
-                            let Some(action) = actions
+                            let Some(run) = actions
                                 .get(ix.section)
                                 .and_then(|group| group.get(ix.row))
-                                .map(|a| a.boxed_clone())
+                                .map(Run::boxed_clone)
                             else {
                                 return;
                             };
@@ -141,7 +215,11 @@ pub fn open(
                             if let Some(focus) = &previous_focus {
                                 focus.focus(window, cx);
                             }
-                            window.defer(cx, move |window, cx| window.dispatch_action(action, cx));
+                            let open_recent = open_recent.clone();
+                            window.defer(cx, move |window, cx| match run {
+                                Run::Action(action) => window.dispatch_action(action, cx),
+                                Run::Recent(path) => open_recent(path, window, cx),
+                            });
                         })
                         .footer(|_, _, cx| {
                             h_flex()

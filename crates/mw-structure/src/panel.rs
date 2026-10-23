@@ -15,6 +15,8 @@ use mw_crystal::{
     SpaceGroupType,
 };
 
+use mw_project_file::{Operation, Provenance};
+
 use crate::actions::{AddMixedOccupant, ConvertToP1};
 use crate::workspace::{PanelTab, StructureWorkspace};
 use crate::{dialogs, format};
@@ -377,10 +379,49 @@ impl StructureWorkspace {
                 }),
         );
 
+        let source = section(tr!("panel.source.title"), None, cx)
+            .child(div().text_sm().child(self.source_text()));
+
         v_flex()
             .child(cell)
             .child(symmetry)
             .child(self.render_selected_site(cx))
+            .child(source)
+    }
+
+    /// Where the structure came from (`docs/design/project-format.md` §7).
+    fn source_text(&self) -> SharedString {
+        match &self.document.provenance {
+            Provenance::Import(import) => {
+                tr!("panel.source.import", file = import.file_name.clone())
+            }
+            Provenance::Derived(derived) => match derived.operation {
+                Operation::MakeSupercell { matrix } => {
+                    let diagonal = (0..3).all(|i| (0..3).all(|j| i == j || matrix[i][j] == 0));
+                    if diagonal {
+                        tr!(
+                            "panel.source.supercell",
+                            name = derived.from_name.clone(),
+                            a = matrix[0][0],
+                            b = matrix[1][1],
+                            c = matrix[2][2]
+                        )
+                    } else {
+                        let rows: Vec<String> = matrix
+                            .iter()
+                            .map(|row| format!("{} {} {}", row[0], row[1], row[2]))
+                            .collect();
+                        tr!(
+                            "panel.source.supercell_matrix",
+                            name = derived.from_name.clone(),
+                            matrix = rows.join(" / ")
+                        )
+                    }
+                }
+                _ => tr!("panel.source.derived", name = derived.from_name.clone()),
+            },
+            _ => tr!("panel.source.created"),
+        }
     }
 
     fn render_selected_site(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -391,6 +432,8 @@ impl StructureWorkspace {
         let Some(site) = selected else {
             return v_flex()
                 .p_4()
+                .border_b_1()
+                .border_color(theme.border)
                 .text_sm()
                 .text_color(theme.muted_foreground)
                 .child(tr!("panel.site.none"));

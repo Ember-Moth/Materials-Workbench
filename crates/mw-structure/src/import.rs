@@ -28,6 +28,8 @@ enum ReadError {
 #[derive(Clone, Debug)]
 pub struct OpenedFile {
     path: PathBuf,
+    /// The file's bytes, for the project's copy.
+    bytes: Option<Arc<[u8]>>,
     result: Result<ImportReport, ReadError>,
 }
 
@@ -38,14 +40,33 @@ impl OpenedFile {
         let supported = path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("cif"));
-        let result = if supported {
-            std::fs::read(&path)
-                .map(|bytes| cif::read(&bytes))
-                .map_err(|e| ReadError::Io(e.to_string()))
+        let read = if supported {
+            std::fs::read(&path).map_err(|e| ReadError::Io(e.to_string()))
         } else {
             Err(ReadError::Unsupported)
         };
-        Self { path, result }
+        let (bytes, result) = match read {
+            Ok(bytes) => {
+                let bytes: Arc<[u8]> = bytes.into();
+                let report = cif::read(&bytes);
+                (Some(bytes), Ok(report))
+            }
+            Err(error) => (None, Err(error)),
+        };
+        Self {
+            path,
+            bytes,
+            result,
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// The file's bytes, if it could be read.
+    pub fn bytes(&self) -> Option<Arc<[u8]>> {
+        self.bytes.clone()
     }
 
     pub fn file_name(&self) -> String {

@@ -26,12 +26,13 @@ cargo run --bin materials-workbench          # 运行应用
 cargo test --workspace                       # 全部测试
 cargo test -p mw-crystal-io --test fixtures  # 单个集成测试文件
 cargo test -p mw-structure rutile_apical_bond_and_angle   # 单个测试（按名称过滤）
-cargo test -p mw-structure ui_tests                       # 界面集成测试
+cargo test -p mw-structure ui_tests                       # 结构工作区的界面集成测试
+cargo test -p workbench ui_tests                          # 外壳的界面集成测试（项目的保存与恢复）
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里；点选、测量和选中要删除的原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
+- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量和选中要删除的原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
   ```bash
   MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -63,7 +64,7 @@ cargo fmt --all
 
 - **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源。
 - **能力 crate（依赖 GPUI）**：
-  - `mw-project`：项目目录和左侧边栏；
+  - `mw-project`：打开着的项目（`ProjectCatalog`：清单、目录、导入或派生后还没保存的结构）和左侧边栏；
   - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区。
 
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
@@ -109,8 +110,15 @@ cargo fmt --all
 
 - 对话框、⌘O 和拖放都走 `OpenFile`。
 - 在后台任务里用 `mw_structure::import::OpenedFile::read` 读取文件，再交给 `mw_crystal_io::cif::read` 解析。
-- 成功的数据块加入"导入的文件"项目（`ProjectCatalog::add_imported`）。
+- 成功的数据块连同文件字节加入当前项目（`ProjectCatalog::add_imported`），没有当前项目时新建未命名项目；保存时文件原样复制进项目。拖进窗口的 `.mwproj` 文件夹按项目打开。
 - 诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字由 `mw-structure/src/diagnostics.rs` 按当前语言翻译。
+
+### 项目与保存
+
+- 设计在 `docs/design/project-format.md`。读写在 `mw-project-file`（纯 Rust），流程在 `apps/workbench/src/projects.rs`：打开项目在后台读清单，结构点开时才读；⌘S 保存当前项目，未命名项目和另存为先弹保存面板，已存在的路径不覆盖。
+- 保存时界面线程收集各工作区的 `file_to_save()`（内容和 `Checkpoint`），后台写目录，完成后 `ProjectCatalog::saved` 和各工作区的 `mark_saved(checkpoint)`；写的过程中的新改动仍算未保存。
+- 顶栏的保存状态是项目级的，由外壳观察工作区后用 `StructureWorkspace::set_project` 告知；边栏的圆点来自 `ProjectSidebar::set_modified`。
+- 设置、最近项目和退出时打开着的项目在配置目录（`apps/workbench/src/config.rs`，`MW_CONFIG_DIR` 可以改位置）；截图巡览用 `screenshots/config`，每次从第一次启动开始，不碰用户自己的文件。
 
 ### 导出
 

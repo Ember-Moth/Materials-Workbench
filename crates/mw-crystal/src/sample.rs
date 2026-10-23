@@ -1,6 +1,6 @@
-//! Mock: built-in sample structures. They stand in for structures saved in
-//! a project file (M6). Everything derived from them, the symmetry analysis
-//! included, is real.
+//! Reference structures for tests: rutile, a 2 × 2 × 2 rutile supercell
+//! and SrTiO₃, built in code. The application's sample projects are project
+//! files (`mw-project-file`), imported from CIF files with the same values.
 //!
 //! Lattice parameters and coordinates are the commonly cited room-temperature
 //! values.

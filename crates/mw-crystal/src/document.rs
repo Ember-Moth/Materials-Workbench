@@ -34,6 +34,10 @@ pub struct Annotation {
     pub stale: bool,
 }
 
+/// A state of a document's history, for [`CrystalDocument::mark_saved`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checkpoint(Option<u64>);
+
 /// What a command, undo or redo did.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -120,12 +124,18 @@ impl CrystalDocument {
     /// was never saved, from how it was made). Undoing back to that state
     /// makes it unmodified again.
     pub fn is_modified(&self) -> bool {
-        self.done.last().map(|step| step.id) != self.saved
+        self.checkpoint() != Checkpoint(self.saved)
     }
 
-    /// Records the current state as saved.
-    pub fn mark_saved(&mut self) {
-        self.saved = self.done.last().map(|step| step.id);
+    /// Names the current state, to mark it saved once it is written, even
+    /// if the document changed while writing.
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint(self.done.last().map(|step| step.id))
+    }
+
+    /// Records the state `checkpoint` named as the saved one.
+    pub fn mark_saved(&mut self, checkpoint: Checkpoint) {
+        self.saved = checkpoint.0;
     }
 
     pub fn structure(&self) -> &Structure {
@@ -497,7 +507,8 @@ mod tests {
         doc.undo().unwrap();
         assert!(!doc.is_modified());
         doc.redo().unwrap();
-        doc.mark_saved();
+        let checkpoint = doc.checkpoint();
+        doc.mark_saved(checkpoint);
         assert!(!doc.is_modified());
         doc.edit(a(4.1)).unwrap();
         assert!(doc.is_modified());
@@ -510,6 +521,15 @@ mod tests {
         doc.edit(a(4.0)).unwrap();
         assert!(doc.is_modified());
         assert_eq!(doc.structure().lattice.params().a.value(), 4.0);
+
+        // A change made while the saved state was being written stays
+        // unsaved.
+        let checkpoint = doc.checkpoint();
+        doc.edit(a(4.2)).unwrap();
+        doc.mark_saved(checkpoint);
+        assert!(doc.is_modified());
+        doc.undo().unwrap();
+        assert!(!doc.is_modified());
     }
 
     #[test]

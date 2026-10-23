@@ -4,10 +4,13 @@ sidebar:
     en: Hide sidebar
     zh-CN: 隐藏边栏
   new_project:
-    en: New Project…
-    zh-CN: 新建项目…
+    en: New project
+    zh-CN: 新建项目
+  open_project:
+    en: Open project…
+    zh-CN: 打开项目…
   open_file:
-    en: Open File…
+    en: Open file…
     zh-CN: 打开文件…
   search_commands:
     en: Search commands
@@ -15,6 +18,21 @@ sidebar:
   derived:
     en: Derived
     zh-CN: 派生
+  unsaved:
+    en: Unsaved changes
+    zh-CN: 有未保存的更改
+  save:
+    en: Save
+    zh-CN: 保存
+  save_as:
+    en: Save as…
+    zh-CN: 另存为…
+  reveal:
+    en: Show in Finder
+    zh-CN: 在访达中显示
+  close_project:
+    en: Close project
+    zh-CN: 关闭项目
   settings:
     en: Settings…
     zh-CN: 设置…

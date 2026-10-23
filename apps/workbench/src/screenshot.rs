@@ -14,8 +14,12 @@ use mw_structure::import::OpenedFile;
 use crate::workbench::Workbench;
 use crate::{palette, settings};
 
-/// Time for the viewport frame to land and the window to redraw.
-const SETTLE: Duration = Duration::from_millis(1500);
+/// Time for a step's background work (reading a project, a structure or a
+/// file) to finish before the frame is waited for.
+const SETTLE: Duration = Duration::from_millis(500);
+/// How long to wait at most for the viewport's newest frame.
+const FRAME_TIMEOUT: Duration = Duration::from_secs(4);
+const POLL: Duration = Duration::from_millis(50);
 
 type Step = fn(&mut Workbench, &mut Window, &mut Context<Workbench>);
 
@@ -214,10 +218,14 @@ const TOUR: &[(&str, Step)] = &[
     ("16-supercell", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(2), window, cx);
     }),
+    // ⌘S: the measurements made on rutile are saved, its unsaved mark goes.
+    ("17-saved", |workbench, window, cx| {
+        workbench.save_active_project(&crate::actions::SaveProject, window, cx);
+    }),
     // Opening files goes through the same path as the file dialog and drops.
     // Several at once, as when dropping a selection: the first opens, the
-    // rest join the "imported files" project.
-    ("17-import-files", |workbench, window, cx| {
+    // rest join the open structure's project, unsaved until ⌘S.
+    ("18-import-files", |workbench, window, cx| {
         let files = [
             "bst_su_aniso.cif",
             "rutile.cif",
@@ -227,50 +235,70 @@ const TOUR: &[(&str, Step)] = &[
         workbench.import_paths(files.map(fixture).to_vec(), window, cx);
     }),
     // Entry 5 is the imported rutile, after the three samples and BST.
-    ("18-imported-rutile", |workbench, window, cx| {
+    ("19-imported-rutile", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(5), window, cx);
     }),
-    ("19-import-zincite", |workbench, window, cx| {
+    ("20-import-zincite", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
     }),
-    ("20-import-diagnostics", |_, window, cx| {
+    ("21-import-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
     // Sites snapped onto special positions, rows merged and dropped.
-    ("21-import-snapped", |workbench, window, cx| {
+    ("22-import-snapped", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("rutile_near_special.cif")], window, cx);
     }),
-    ("22-snapped-diagnostics", |_, window, cx| {
+    ("23-snapped-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
-    ("23-import-failed", |workbench, window, cx| {
+    ("24-import-failed", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("malformed.cif")], window, cx);
     }),
-    ("24-import-errors", |_, window, cx| {
+    ("25-import-errors", |_, window, cx| {
         OpenedFile::read(fixture("malformed.cif")).show_errors(window, cx);
     }),
-    ("25-settings", |_, window, cx| {
+    // The imports are not saved yet: closing their project asks first.
+    ("26-unsaved-dialog", |workbench, window, cx| {
+        window.close_dialog(cx);
+        workbench.close_active_project(&crate::actions::CloseProject, window, cx);
+    }),
+    ("27-settings", |_, window, cx| {
         window.close_dialog(cx);
         settings::open(window, cx)
     }),
-    ("26-no-sidebar", |workbench, window, cx| {
+    ("28-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    // The structure from step 21 shares a site between Ti and V, so the
+    // The structure from step 22 shares a site between Ti and V, so the
     // formats that list atoms are unavailable and say why.
-    ("27-export-dialog", |workbench, window, cx| {
+    ("29-export-dialog", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
         if let Some(workspace) = workbench.workspace() {
             workspace.focus_handle(cx).focus(window, cx);
         }
         window.dispatch_action(Box::new(mw_structure::ExportStructure), cx);
     }),
-    ("28-empty", |workbench, window, cx| {
+    // The empty state lists the recent projects.
+    ("30-empty", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_structure(window, cx);
     }),
+    // A new project is untitled and empty until files are opened into it.
+    ("31-new-project", |workbench, window, cx| {
+        workbench.new_project(&crate::actions::NewProject, window, cx);
+    }),
 ];
+
+/// A fresh directory for the tour's settings, session and sample projects
+/// (`<MW_SCREENSHOT_DIR>/config`), so that every run starts as a first
+/// start and never touches the user's own files.
+pub fn paths() -> Option<crate::config::AppPaths> {
+    let dir = std::env::var_os("MW_SCREENSHOT_DIR").map(PathBuf::from)?;
+    let config = dir.join("config");
+    let _ = std::fs::remove_dir_all(&config);
+    Some(crate::config::AppPaths::in_dir(config))
+}
 
 pub fn start(window: AnyWindowHandle, workbench: Entity<Workbench>, cx: &mut App) {
     let Some(dir) = std::env::var_os("MW_SCREENSHOT_DIR").map(PathBuf::from) else {
@@ -288,6 +316,37 @@ pub fn start(window: AnyWindowHandle, workbench: Entity<Workbench>, cx: &mut App
     .detach();
 }
 
+/// Waits for a step's background work, then until the viewport shows its
+/// newest frame (`Viewport::is_current`) and the window has drawn it.
+async fn settle(
+    window: AnyWindowHandle,
+    workbench: &Entity<Workbench>,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    cx.background_executor().timer(SETTLE).await;
+    let mut waited = Duration::ZERO;
+    while waited < FRAME_TIMEOUT {
+        let current = cx.update_window(window, |_, _, cx| {
+            workbench
+                .read(cx)
+                .workspace()
+                .is_none_or(|workspace| workspace.read(cx).viewport_is_current(cx))
+        })?;
+        if current {
+            break;
+        }
+        cx.background_executor().timer(POLL).await;
+        waited += POLL;
+    }
+    if waited >= FRAME_TIMEOUT {
+        log::warn!("screenshot tour: the viewport frame did not land in time");
+    }
+    // One more redraw with the landed frame.
+    cx.update_window(window, |_, window, _| window.refresh())?;
+    cx.background_executor().timer(POLL * 2).await;
+    Ok(())
+}
+
 async fn tour(
     dir: &Path,
     window: AnyWindowHandle,
@@ -295,12 +354,12 @@ async fn tour(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    cx.background_executor().timer(SETTLE).await;
+    settle(window, workbench, cx).await?;
     for (name, step) in TOUR {
         cx.update_window(window, |_, window, cx| {
             workbench.update(cx, |workbench, cx| step(workbench, window, cx));
         })?;
-        cx.background_executor().timer(SETTLE).await;
+        settle(window, workbench, cx).await?;
         let image = cx.update_window(window, |_, window, _| window.render_to_image())??;
         let path = dir.join(format!("{name}.png"));
         image.save(&path)?;

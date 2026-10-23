@@ -10,8 +10,9 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
-        Atom, Box, Circle, Download, FolderOpen, Grid3x3, Languages, Link, Lock, Maximize, Moon,
-        PanelLeft, PanelRight, Plus, Redo2, Ruler, Settings, Trash, Undo2, X,
+        Atom, Box, Circle, Clock, Download, Folder, FolderOpen, FolderX, Grid3x3, Languages, Link,
+        Lock, Maximize, Moon, PanelLeft, PanelRight, Plus, Redo2, Ruler, Save, Settings, Trash,
+        Undo2, X,
     ]
 );
 

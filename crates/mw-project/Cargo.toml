@@ -9,5 +9,9 @@ license.workspace = true
 mw-automation.workspace = true
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
+mw-project-file.workspace = true
 gpui-kit.workspace = true
 rust-i18n.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

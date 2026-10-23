@@ -10,6 +10,9 @@ command:
     app:
       en: Application
       zh-CN: 应用
+    recent:
+      en: Recent projects
+      zh-CN: 最近的项目
   footer:
     navigate:
       en: ↑↓ Select
@@ -20,12 +23,30 @@ command:
     search:
       en: Esc Close
       zh-CN: Esc 关闭
+  save:
+    en: Save project
+    zh-CN: 保存项目
+  save_as:
+    en: Save project as…
+    zh-CN: 项目另存为…
   open_file:
-    en: Open File…
+    en: Open file…
     zh-CN: 打开文件…
+  open_project:
+    en: Open project…
+    zh-CN: 打开项目…
   new_project:
-    en: New Project…
-    zh-CN: 新建项目…
+    en: New project
+    zh-CN: 新建项目
+  close_project:
+    en: Close project
+    zh-CN: 关闭项目
+  open_samples:
+    en: Open sample projects
+    zh-CN: 打开示例项目
+  open_recent:
+    en: "Open “%{name}”"
+    zh-CN: "打开「%{name}」"
   toggle_sidebar:
     en: Show or hide sidebar
     zh-CN: 显示或隐藏边栏
@@ -47,14 +68,17 @@ empty:
     en: Open a structure
     zh-CN: 打开一个结构
   description:
-    en: Pick one from a project on the left, or open a CIF file. You can also drop files onto the window.
-    zh-CN: 从左侧项目中选择，或打开 CIF 文件。也可以把文件直接拖进窗口。
+    en: Pick one from a project on the left, or open a CIF file. You can also drop files and project folders onto the window.
+    zh-CN: 从左侧项目中选择，或打开 CIF 文件。也可以把文件和项目文件夹直接拖进窗口。
   open_file:
-    en: Open File…
+    en: Open file…
     zh-CN: 打开文件…
-  open_sample:
-    en: "Open sample: rutile TiO₂"
-    zh-CN: 打开示例：金红石 TiO₂
+  open_samples:
+    en: Open sample projects
+    zh-CN: 打开示例项目
+  recent:
+    en: Recent projects
+    zh-CN: 最近的项目
 settings:
   title:
     en: Settings
@@ -65,22 +89,76 @@ settings:
   language:
     en: Language
     zh-CN: 界面语言
-  not_saved:
-    en: These choices are not saved yet and reset when the app restarts.
-    zh-CN: 这些选择暂不保存，重启应用后会恢复默认。
 project:
-  imported:
-    en: Imported files
-    zh-CN: 导入的文件
+  untitled:
+    en: Untitled project
+    zh-CN: 未命名项目
 open:
   unavailable:
     en: "The file dialog could not be opened: %{reason}"
     zh-CN: "无法打开文件对话框：%{reason}"
-feature:
-  new_project:
-    en: New projects
-    zh-CN: 新建项目
-mock:
-  not_implemented:
-    en: "%{feature} is not implemented yet."
-    zh-CN: "「%{feature}」尚未实现。"
+  project_failed:
+    en: "Couldn’t open the project. %{reason}"
+    zh-CN: "无法打开项目。%{reason}"
+  structure_failed:
+    en: "Couldn’t open “%{name}”. %{reason}"
+    zh-CN: "无法打开「%{name}」。%{reason}"
+  samples_failed:
+    en: "Couldn’t install the sample projects: %{reason}"
+    zh-CN: "无法安装示例项目：%{reason}"
+  not_a_project:
+    en: "%{path} is not a Materials Workbench project."
+    zh-CN: "%{path} 不是 Materials Workbench 项目。"
+  newer:
+    en: "It was saved by a newer version of Materials Workbench (format version %{version}). Update the app to open it."
+    zh-CN: "它由更新版本的 Materials Workbench 保存（格式版本 %{version}），请升级应用后再打开。"
+  io:
+    en: "%{path} can’t be read: %{reason}"
+    zh-CN: "无法读取 %{path}：%{reason}"
+  corrupt:
+    en: "%{path} is damaged: %{reason}"
+    zh-CN: "%{path} 已损坏：%{reason}"
+  invalid:
+    en: "%{path} holds a structure that can’t exist: %{reason}"
+    zh-CN: "%{path} 里的结构不成立：%{reason}"
+  source:
+    en: "The copy of an imported file is missing or changed: %{path}"
+    zh-CN: "导入文件的副本缺失或已被改动：%{path}"
+save:
+  exists:
+    en: "“%{name}” already exists. Choose another name; existing projects and folders are never overwritten."
+    zh-CN: "「%{name}」已经存在，请换一个名字。已有的项目和文件夹不会被覆盖。"
+  failed:
+    en: "Couldn’t save the project: %{reason}"
+    zh-CN: "无法保存项目：%{reason}"
+unsaved:
+  close_title:
+    en: "Save changes to “%{name}” before closing?"
+    zh-CN: "关闭前保存对「%{name}」的更改吗？"
+  quit_title:
+    en: "Save changes to “%{name}” before quitting?"
+    zh-CN: "退出前保存对「%{name}」的更改吗？"
+  quit_title_many:
+    en: "Save changes to %{count} projects before quitting?"
+    zh-CN: "退出前保存对 %{count} 个项目的更改吗？"
+  quit_projects:
+    en: "%{names} have unsaved changes."
+    zh-CN: "%{names} 有未保存的更改。"
+  separator:
+    en: ", "
+    zh-CN: "、"
+  description:
+    en: Your changes are lost if you don’t save them.
+    zh-CN: 不保存的话，这些更改会丢失。
+  description_with:
+    en: "%{projects} Your changes are lost if you don’t save them."
+    zh-CN: "%{projects}不保存的话，这些更改会丢失。"
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+  discard:
+    en: Don’t save
+    zh-CN: 不保存
+  save:
+    en: Save
+    zh-CN: 保存

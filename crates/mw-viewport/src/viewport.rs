@@ -8,8 +8,8 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal_render::{
-    CameraMatrices, FrameImage, HighlightRing, OrbitCamera, Pick, PickRequest, RenderError,
-    RenderRequest, Renderer, Scene, srgb_to_linear,
+    CameraMatrices, CameraPose, FrameImage, HighlightRing, OrbitCamera, Pick, PickRequest,
+    RenderError, RenderRequest, Renderer, Scene, srgb_to_linear,
 };
 
 /// Frames that may be rendering or reading back at the same time.
@@ -217,6 +217,19 @@ impl Viewport {
     /// What is under the pointer, as of the last hover pick.
     pub fn hovered(&self) -> Option<Pick> {
         self.hovered
+    }
+
+    /// The camera's angle and zoom, to save the view.
+    pub fn camera_pose(&self) -> CameraPose {
+        self.camera.pose()
+    }
+
+    /// Returns to a saved angle and zoom. Set after the first scene, so that
+    /// the zoom is limited to that scene's size.
+    pub fn set_camera_pose(&mut self, pose: CameraPose, cx: &mut Context<Self>) {
+        self.framed = true;
+        self.camera.set_pose(pose);
+        self.request_frame(cx);
     }
 
     /// Restores the default angle and zoom.

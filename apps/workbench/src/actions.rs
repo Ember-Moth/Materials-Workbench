@@ -8,6 +8,11 @@ gpui_kit::actions!(
         ToggleSidebar,
         OpenFile,
         NewProject,
+        OpenProject,
+        SaveProject,
+        SaveProjectAs,
+        CloseProject,
+        OpenSampleProjects,
         OpenSettings,
         ToggleDarkMode,
         SwitchLanguage,
@@ -21,6 +26,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-k", ToggleCommandPalette, None),
         KeyBinding::new("cmd-\\", ToggleSidebar, None),
         KeyBinding::new("cmd-o", OpenFile, None),
+        KeyBinding::new("cmd-shift-o", OpenProject, None),
+        KeyBinding::new("cmd-s", SaveProject, None),
+        KeyBinding::new("cmd-shift-s", SaveProjectAs, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
     ]);
 }

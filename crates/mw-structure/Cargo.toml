@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
+mw-project-file.workspace = true
 mw-viewport.workspace = true
 gpui-kit.workspace = true
 rust-i18n.workspace = true

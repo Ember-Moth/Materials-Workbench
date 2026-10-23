@@ -4,9 +4,10 @@
 //! Viewing, selecting, measuring, editing and exporting are real: the
 //! fields, the element pickers and the delete command run the domain
 //! commands of `mw_crystal` on the open document, with undo and redo, and
-//! the export dialog writes CIF, POSCAR or extended XYZ. Converting to P1
-//! and supercells are still mocked; each mock says so where it happens (see
-//! `docs/architecture.md`, "Mocks").
+//! the export dialog writes CIF, POSCAR or extended XYZ. Documents come
+//! from project files and give back what to save, with their view state.
+//! Converting to P1 and supercells are still mocked; each mock says so
+//! where it happens (see `docs/architecture.md`, "Mocks").
 
 rust_i18n::i18n!("locales", fallback = "en");
 

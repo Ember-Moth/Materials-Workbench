@@ -235,7 +235,7 @@ mod tests {
     use crate::document::StructureDocument;
 
     fn rutile() -> StructureDocument {
-        StructureDocument::from_sample("p", "rutile", SampleKey::Rutile)
+        crate::document::tests::sample_document(SampleKey::Rutile)
     }
 
     #[test]

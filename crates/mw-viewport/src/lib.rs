@@ -11,6 +11,6 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod viewport;
 
 pub use mw_crystal_render::{
-    BondInstance, LineInstance, Pick, Scene, SphereInstance, srgb_to_linear,
+    BondInstance, CameraPose, LineInstance, Pick, Scene, SphereInstance, srgb_to_linear,
 };
 pub use viewport::{Viewport, ViewportEvent};

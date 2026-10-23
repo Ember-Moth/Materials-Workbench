@@ -182,14 +182,19 @@ impl Import {
     }
 
     /// Reads the copy's bytes again and returns the data block the entry
-    /// came from, with its diagnostics and the fields the structure does
-    /// not hold (design §7.1).
+    /// came from, with its diagnostics (the file's own first, as on import)
+    /// and the fields the structure does not hold (design §7.1).
     pub fn read_block(&self, bytes: &[u8]) -> Option<ImportedBlock> {
         match self.format {
-            SourceFormat::Cif => cif::read(bytes)
-                .blocks
-                .into_iter()
-                .find(|block| block.name == self.block),
+            SourceFormat::Cif => {
+                let report = cif::read(bytes);
+                let mut block = report
+                    .blocks
+                    .into_iter()
+                    .find(|block| block.name == self.block)?;
+                block.diagnostics.splice(0..0, report.diagnostics);
+                Some(block)
+            }
         }
     }
 }
@@ -244,6 +249,7 @@ impl Derived {
 /// An operation that makes a new entry, with everything needed to repeat it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Operation {
     /// The new lattice is `A·M` (crystallography design §7.9); rows of M.
     MakeSupercell { matrix: [[i32; 3]; 3] },

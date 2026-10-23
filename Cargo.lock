@@ -4197,7 +4197,9 @@ dependencies = [
  "mw-automation",
  "mw-crystal",
  "mw-crystal-io",
+ "mw-project-file",
  "rust-i18n",
+ "tempfile",
 ]
 
 [[package]]
@@ -4221,6 +4223,7 @@ dependencies = [
  "gpui-pre",
  "mw-crystal",
  "mw-crystal-io",
+ "mw-project-file",
  "mw-viewport",
  "rust-i18n",
 ]
@@ -8708,6 +8711,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workbench"
 version = "0.0.0"
 dependencies = [
+ "dirs 6.0.0",
  "env_logger",
  "gpui-kit",
  "gpui-pre",
@@ -8715,9 +8719,14 @@ dependencies = [
  "image",
  "log",
  "mw-crystal",
+ "mw-crystal-io",
  "mw-project",
+ "mw-project-file",
  "mw-structure",
  "rust-i18n",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

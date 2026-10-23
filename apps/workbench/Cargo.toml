@@ -14,19 +14,29 @@ path = "src/main.rs"
 # MW_SCREENSHOT_DIR=out cargo run --bin materials-workbench --features screenshot
 # Turns on GPUI's test support directly: Kit's own `test-support` feature
 # also names an alternative GPUI backend whose dependencies conflict here.
-screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image", "dep:mw-crystal"]
+screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image"]
 
 [dependencies]
-# The screenshot tour edits a structure with domain commands.
-mw-crystal = { workspace = true, optional = true }
+mw-crystal.workspace = true
+mw-crystal-io.workspace = true
 mw-project.workspace = true
+mw-project-file.workspace = true
 mw-structure.workspace = true
 gpui-kit.workspace = true
 rust-i18n.workspace = true
 log.workspace = true
 env_logger.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 gpui-pre = { version = "=0.3.9", optional = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui-pre-macos = { version = "=0.3.9", optional = true, features = ["test-support"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+# UI integration tests (`src/ui_tests.rs`), as in mw-structure: GPUI's test
+# support directly, not Kit's.
+gpui-pre = { version = "=0.3.9", features = ["test-support"] }

@@ -78,6 +78,25 @@ toolbar:
     en: Reset view
     zh-CN: 重置视图
 panel:
+  source:
+    title:
+      en: Source
+      zh-CN: 来源
+    import:
+      en: "Imported from %{file}"
+      zh-CN: "导入自 %{file}"
+    supercell:
+      en: "%{a} × %{b} × %{c} supercell of “%{name}”"
+      zh-CN: "由「%{name}」生成的 %{a} × %{b} × %{c} 超胞"
+    supercell_matrix:
+      en: "Supercell of “%{name}”, matrix %{matrix}"
+      zh-CN: "由「%{name}」生成的超胞，矩阵 %{matrix}"
+    derived:
+      en: "Made from “%{name}”"
+      zh-CN: "由「%{name}」生成"
+    created:
+      en: Created in Materials Workbench
+      zh-CN: 在 Materials Workbench 中新建
   tab:
     properties:
       en: Properties
@@ -467,11 +486,10 @@ mock:
   not_implemented:
     en: "%{feature} is not implemented yet."
     zh-CN: "「%{feature}」尚未实现。"
-  diagnostic:
-    supercell:
-      en: This supercell was made from rutile and is in P1, so editing applies to single atoms.
-      zh-CN: 这个超胞由金红石生成，处于 P1 模式，编辑只作用于单个原子。
 diagnostic:
+  source_unavailable:
+    en: "The project's copy of %{file} is missing or has changed, so the import diagnostics are not shown and a CIF export does not write back the source's other fields."
+    zh-CN: "项目里 %{file} 的副本缺失或已被改动，所以不显示导入诊断，导出 CIF 时也不再写回源文件里的其他字段。"
   line:
     en: "Line %{line}"
     zh-CN: "第 %{line} 行"

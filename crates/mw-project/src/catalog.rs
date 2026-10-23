@@ -1,189 +1,432 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Capabilities name structures by this id, so it lives with them.
 pub use mw_automation::StructureEntryId;
-use mw_crystal::sample::SampleKey;
+use mw_crystal::Structure;
 use mw_crystal_io::ImportedBlock;
+use mw_project_file::{
+    Derived, Entry, EntryId, EntryKind, Import, Manifest, Operation, ProjectDir, Provenance, Save,
+    Sha256, Source, SourceFormat, StructureFile, Timestamp, ViewState, structure_sha256,
+};
 
+/// A project open in this session. Files name projects by their own ids;
+/// this one is for the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectId(pub u32);
 
-/// Where a structure in a project came from.
-#[derive(Clone, Debug, PartialEq)]
-pub enum StructureOrigin {
-    Imported {
-        file_name: String,
-    },
-    /// Generated from another structure, e.g. a supercell.
-    Derived {
-        from: StructureEntryId,
-    },
-}
-
-/// Where a structure's data is held.
-#[derive(Clone, Debug, PartialEq)]
-pub enum StructureSource {
-    /// Mock: a built-in sample stands in for the structure a project file
-    /// would hold (M6).
-    Sample(SampleKey),
-    /// A data block read from a file in this session, with the diagnostics
-    /// of its import. Held in memory until project files exist (M6).
-    Imported(Arc<ImportedBlock>),
-}
-
-#[derive(Clone, Debug, PartialEq)]
+/// A structure whose content is not in the project directory yet: imported
+/// or derived since the project was last saved.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct StructureEntry {
-    pub id: StructureEntryId,
-    pub name: String,
-    pub origin: StructureOrigin,
-    pub source: StructureSource,
+pub struct Pending {
+    pub file: Arc<StructureFile>,
+    /// For an imported structure, the data block it came from.
+    pub block: Option<Arc<ImportedBlock>>,
 }
 
-/// A structure to add to the catalog, as [`ProjectCatalog::add_imported`]
-/// takes it.
-#[derive(Clone, Debug, PartialEq)]
+/// One structure of a project.
+#[derive(Clone, Debug)]
+pub struct StructureEntry {
+    id: StructureEntryId,
+    entry: Entry,
+    pending: Option<Pending>,
+}
+
+impl StructureEntry {
+    pub fn id(&self) -> StructureEntryId {
+        self.id
+    }
+
+    /// The entry as the project file lists it: its file id, name and
+    /// provenance.
+    pub fn entry(&self) -> &Entry {
+        &self.entry
+    }
+
+    pub fn name(&self) -> &str {
+        &self.entry.name
+    }
+
+    pub fn is_derived(&self) -> bool {
+        matches!(self.entry.provenance, Provenance::Derived(_))
+    }
+
+    /// The content when it is not on disk yet.
+    pub fn pending(&self) -> Option<&Pending> {
+        self.pending.as_ref()
+    }
+}
+
+/// A project: on disk once saved, or untitled until then.
+#[derive(Clone, Debug)]
+pub struct Project {
+    id: ProjectId,
+    manifest: Manifest,
+    structures: Vec<StructureEntry>,
+    dir: Option<ProjectDir>,
+    /// Copies of imported files not in the directory yet.
+    sources: Vec<Source>,
+    view: ViewState,
+    /// Counts changes to the project itself (entries added, renamed), so
+    /// that a save finishing after another change leaves it modified.
+    revision: u64,
+    saved_revision: u64,
+}
+
+impl Project {
+    pub fn id(&self) -> ProjectId {
+        self.id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.manifest.name
+    }
+
+    pub fn structures(&self) -> &[StructureEntry] {
+        &self.structures
+    }
+
+    pub fn structure(&self, id: StructureEntryId) -> Option<&StructureEntry> {
+        self.structures.iter().find(|s| s.id == id)
+    }
+
+    /// The directory, once the project is saved.
+    pub fn dir(&self) -> Option<&ProjectDir> {
+        self.dir.as_ref()
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.dir.as_ref().map(ProjectDir::path)
+    }
+
+    /// The project's id in its files.
+    pub fn file_id(&self) -> mw_project_file::ProjectId {
+        self.manifest.id
+    }
+
+    /// Whether the project itself has unsaved changes: structures added
+    /// (an untitled project with structures has them all unsaved), or an
+    /// older format read. Edits to open structures are tracked by their
+    /// documents.
+    pub fn is_modified(&self) -> bool {
+        self.revision != self.saved_revision
+    }
+
+    pub fn is_untitled(&self) -> bool {
+        self.dir.is_none()
+    }
+
+    /// The view state as last read or saved.
+    pub fn view(&self) -> &ViewState {
+        &self.view
+    }
+
+    /// What to write to save the project: `structures` (the open documents
+    /// that changed) and everything that is not on disk yet.
+    pub fn save_request(&self, structures: Vec<(EntryId, StructureFile)>, view: ViewState) -> Save {
+        let mut structures = structures;
+        for entry in &self.structures {
+            if let Some(pending) = &entry.pending
+                && !structures.iter().any(|(id, _)| *id == entry.entry.id)
+            {
+                structures.push((entry.entry.id, StructureFile::clone(&pending.file)));
+            }
+        }
+        Save {
+            manifest: self.manifest.clone(),
+            structures,
+            sources: self.sources.clone(),
+            from: self.dir.clone(),
+            view: Some(view),
+        }
+    }
+}
+
+/// A structure read from a file, to add to a project.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ImportedEntry {
     pub name: String,
-    pub file_name: String,
+    pub path: PathBuf,
+    /// The whole file, for the project's copy.
+    pub bytes: Arc<[u8]>,
     pub block: Arc<ImportedBlock>,
 }
 
 impl ImportedEntry {
-    pub fn new(name: String, file_name: String, block: Arc<ImportedBlock>) -> Self {
+    pub fn new(name: String, path: PathBuf, bytes: Arc<[u8]>, block: Arc<ImportedBlock>) -> Self {
         Self {
             name,
-            file_name,
+            path,
+            bytes,
             block,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// A structure made from another one, to add to a project.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct Project {
-    pub id: ProjectId,
+pub struct DerivedEntry {
     pub name: String,
-    pub structures: Vec<StructureEntry>,
+    pub structure: Structure,
+    pub operation: Operation,
 }
 
-/// All projects known to the application.
-#[derive(Clone, Debug, Default, PartialEq)]
+impl DerivedEntry {
+    pub fn new(name: String, structure: Structure, operation: Operation) -> Self {
+        Self {
+            name,
+            structure,
+            operation,
+        }
+    }
+}
+
+/// The projects open in this session.
+#[derive(Clone, Debug, Default)]
 pub struct ProjectCatalog {
     projects: Vec<Project>,
-    /// The project that collects files opened outside any project.
-    imports: Option<ProjectId>,
+    next_project: u32,
+    next_structure: u32,
 }
 
 impl ProjectCatalog {
-    /// Mock: two projects built from the samples, standing in for project
-    /// files on disk.
-    pub fn sample() -> Self {
-        let rutile = StructureEntryId(1);
-        Self {
-            projects: vec![
-                Project {
-                    id: ProjectId(1),
-                    name: "TiO₂ 相研究".into(),
-                    structures: vec![
-                        StructureEntry {
-                            id: rutile,
-                            name: "金红石".into(),
-                            origin: StructureOrigin::Imported {
-                                file_name: "rutile.cif".into(),
-                            },
-                            source: StructureSource::Sample(SampleKey::Rutile),
-                        },
-                        StructureEntry {
-                            id: StructureEntryId(2),
-                            name: "金红石 2×2×2 超胞".into(),
-                            origin: StructureOrigin::Derived { from: rutile },
-                            source: StructureSource::Sample(SampleKey::RutileSupercell),
-                        },
-                    ],
-                },
-                Project {
-                    id: ProjectId(2),
-                    name: "钙钛矿氧化物".into(),
-                    structures: vec![StructureEntry {
-                        id: StructureEntryId(3),
-                        name: "SrTiO₃".into(),
-                        origin: StructureOrigin::Imported {
-                            file_name: "SrTiO3.cif".into(),
-                        },
-                        source: StructureSource::Sample(SampleKey::StrontiumTitanate),
-                    }],
-                },
-            ],
-            imports: None,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn projects(&self) -> &[Project] {
         &self.projects
     }
 
-    /// The structure with this id and the project that contains it.
-    pub fn structure(&self, id: StructureEntryId) -> Option<(&Project, &StructureEntry)> {
-        self.projects.iter().find_map(|project| {
-            project
-                .structures
-                .iter()
-                .find(|entry| entry.id == id)
-                .map(|entry| (project, entry))
-        })
+    pub fn project(&self, id: ProjectId) -> Option<&Project> {
+        self.projects.iter().find(|p| p.id == id)
     }
 
-    /// Adds imported structures to the project that collects opened files,
-    /// creating it under `project_name` the first time. Returns the new
-    /// entries' ids in order.
-    ///
-    /// Mock: until there are project files and a "new project" flow (M6),
-    /// every opened file lands in this one in-memory project.
+    fn project_mut(&mut self, id: ProjectId) -> Option<&mut Project> {
+        self.projects.iter_mut().find(|p| p.id == id)
+    }
+
+    /// The structure with this id and the project that contains it.
+    pub fn structure(&self, id: StructureEntryId) -> Option<(&Project, &StructureEntry)> {
+        self.projects
+            .iter()
+            .find_map(|project| project.structure(id).map(|entry| (project, entry)))
+    }
+
+    /// The open project read from this directory, or with this file id
+    /// (the same project moved or copied while open).
+    pub fn find(&self, path: &Path, file_id: mw_project_file::ProjectId) -> Option<ProjectId> {
+        self.projects
+            .iter()
+            .find(|p| p.path() == Some(path) || p.file_id() == file_id)
+            .map(|p| p.id)
+    }
+
+    fn next_project_id(&mut self) -> ProjectId {
+        self.next_project += 1;
+        ProjectId(self.next_project)
+    }
+
+    fn next_structure_id(&mut self) -> StructureEntryId {
+        self.next_structure += 1;
+        StructureEntryId(self.next_structure)
+    }
+
+    fn push(&mut self, manifest: Manifest, dir: Option<ProjectDir>, view: ViewState) -> ProjectId {
+        let id = self.next_project_id();
+        let structures = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::CrystalStructure)
+            .cloned()
+            .map(|entry| StructureEntry {
+                id: self.next_structure_id(),
+                entry,
+                pending: None,
+            })
+            .collect();
+        // An older format is migrated in memory and saved in the new one.
+        let revision = u64::from(dir.as_ref().is_some_and(ProjectDir::is_migrated));
+        self.projects.push(Project {
+            id,
+            manifest,
+            structures,
+            dir,
+            sources: Vec::new(),
+            view,
+            revision,
+            saved_revision: 0,
+        });
+        id
+    }
+
+    /// Adds a project read from disk.
+    pub fn open(&mut self, dir: ProjectDir, manifest: Manifest, view: ViewState) -> ProjectId {
+        self.push(manifest, Some(dir), view)
+    }
+
+    /// Adds an empty, untitled project.
+    pub fn create(&mut self, name: impl Into<String>) -> ProjectId {
+        self.push(Manifest::new(name), None, ViewState::default())
+    }
+
+    pub fn close(&mut self, id: ProjectId) -> Option<Project> {
+        let index = self.projects.iter().position(|p| p.id == id)?;
+        Some(self.projects.remove(index))
+    }
+
+    /// Adds imported structures to a project, recording their provenance
+    /// and keeping a copy of each file. Returns the new entries' ids.
     pub fn add_imported(
         &mut self,
-        project_name: &str,
+        project: ProjectId,
         entries: impl IntoIterator<Item = ImportedEntry>,
     ) -> Vec<StructureEntryId> {
-        let project_id = match self.imports {
-            Some(id) => id,
-            None => {
-                let id = ProjectId(self.projects.iter().map(|p| p.id.0).max().unwrap_or(0) + 1);
-                self.projects.push(Project {
-                    id,
-                    name: project_name.to_string(),
-                    structures: Vec::new(),
+        let now = Timestamp::now();
+        let mut added = Vec::new();
+        for imported in entries {
+            let Some(structure) = imported.block.structure.clone() else {
+                continue;
+            };
+            let id = self.next_structure_id();
+            let Some(project) = self.project_mut(project) else {
+                return added;
+            };
+            let sha = Sha256::of(&imported.bytes);
+            if !project.sources.iter().any(|s| s.sha256 == sha) {
+                project.sources.push(Source {
+                    sha256: sha.clone(),
+                    format: SourceFormat::Cif,
+                    bytes: imported.bytes.clone(),
                 });
-                self.imports = Some(id);
-                id
             }
-        };
-        let mut next = self
+            let file_name = imported
+                .path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            let import = Import::new(
+                SourceFormat::Cif,
+                file_name,
+                Some(imported.path.display().to_string()),
+                sha,
+                imported.block.name.clone(),
+                now.clone(),
+                structure_sha256(&structure),
+            );
+            let entry = Entry::new(
+                EntryId::new(),
+                EntryKind::CrystalStructure,
+                imported.name,
+                Provenance::Import(import),
+            );
+            project.add(StructureEntry {
+                id,
+                entry,
+                pending: Some(Pending {
+                    file: Arc::new(StructureFile::new(structure, Vec::new(), Vec::new())),
+                    block: Some(imported.block),
+                }),
+            });
+            added.push(id);
+        }
+        added
+    }
+
+    /// Adds a structure made from `from` to its project, right after the
+    /// structures already made from it, recording the operation. `from`
+    /// is the source structure as it is now.
+    pub fn add_derived(
+        &mut self,
+        from: StructureEntryId,
+        source: &Structure,
+        derived: DerivedEntry,
+    ) -> Option<StructureEntryId> {
+        let id = self.next_structure_id();
+        let project = self
             .projects
+            .iter_mut()
+            .find(|p| p.structure(from).is_some())?;
+        let index = project.structures.iter().position(|s| s.id == from)?;
+        let from_entry = project.structures[index].entry.clone();
+        let record = Derived::new(
+            from_entry.id,
+            from_entry.name.clone(),
+            structure_sha256(source),
+            derived.operation,
+            Timestamp::now(),
+        );
+        let entry = Entry::new(
+            EntryId::new(),
+            EntryKind::CrystalStructure,
+            derived.name,
+            Provenance::Derived(record),
+        );
+        let after = project.structures[index + 1..]
             .iter()
-            .flat_map(|p| p.structures.iter().map(|s| s.id.0))
-            .max()
-            .unwrap_or(0);
-        let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) else {
-            return Vec::new();
-        };
-        entries
-            .into_iter()
-            .map(|entry| {
-                next += 1;
-                let id = StructureEntryId(next);
-                project.structures.push(StructureEntry {
-                    id,
-                    name: entry.name,
-                    origin: StructureOrigin::Imported {
-                        file_name: entry.file_name,
-                    },
-                    source: StructureSource::Imported(entry.block),
-                });
-                id
+            .take_while(|s| {
+                matches!(&s.entry.provenance, Provenance::Derived(d) if d.from == from_entry.id)
             })
-            .collect()
+            .count();
+        let position = index + 1 + after;
+        let structure_entry = StructureEntry {
+            id,
+            entry,
+            pending: Some(Pending {
+                file: Arc::new(StructureFile::new(
+                    derived.structure,
+                    Vec::new(),
+                    Vec::new(),
+                )),
+                block: None,
+            }),
+        };
+        project
+            .manifest
+            .entries
+            .insert(position, structure_entry.entry.clone());
+        project.structures.insert(position, structure_entry);
+        project.revision += 1;
+        Some(id)
+    }
+
+    /// Records a finished save of `project` to `dir`: the entries written
+    /// are on disk now, the project has the name it was saved under, and it
+    /// is unmodified unless it changed after `snapshot` was taken.
+    pub fn saved(&mut self, project: ProjectId, dir: ProjectDir, snapshot: &SaveSnapshot) {
+        let Some(project) = self.project_mut(project) else {
+            return;
+        };
+        for entry in &mut project.structures {
+            if snapshot.entries.contains(&entry.entry.id) {
+                entry.pending = None;
+            }
+        }
+        project
+            .sources
+            .retain(|source| !snapshot.sources.contains(&source.sha256));
+        // Saving under a new name renames the project; that is part of the
+        // save, not a change after it.
+        project.manifest.name = snapshot.name.clone();
+        if project.revision == snapshot.revision {
+            project.saved_revision = project.revision;
+        }
+        project.dir = Some(dir);
+        project.view = snapshot.view.clone();
+    }
+
+    /// Takes the facts [`Self::saved`] needs, when a save starts.
+    pub fn snapshot(&self, project: ProjectId, save: &Save) -> Option<SaveSnapshot> {
+        let project = self.project(project)?;
+        Some(SaveSnapshot {
+            name: save.manifest.name.clone(),
+            revision: project.revision,
+            entries: save.manifest.entries.iter().map(|e| e.id).collect(),
+            sources: save.sources.iter().map(|s| s.sha256.clone()).collect(),
+            view: save.view.clone().unwrap_or_default(),
+        })
     }
 
     /// The first structure of the first project, if any.
@@ -195,58 +438,148 @@ impl ProjectCatalog {
     }
 }
 
+impl Project {
+    fn add(&mut self, entry: StructureEntry) {
+        self.manifest.entries.push(entry.entry.clone());
+        self.structures.push(entry);
+        self.revision += 1;
+    }
+}
+
+/// What a save in progress wrote, for [`ProjectCatalog::saved`].
+#[derive(Clone, Debug)]
+pub struct SaveSnapshot {
+    name: String,
+    revision: u64,
+    entries: Vec<EntryId>,
+    sources: Vec<Sha256>,
+    view: ViewState,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mw_crystal::sample::{self, SampleKey};
+
+    fn imported(name: &str, text: &str) -> ImportedEntry {
+        let bytes: Arc<[u8]> = text.as_bytes().into();
+        let block = mw_crystal_io::cif::read(&bytes).blocks.remove(0);
+        ImportedEntry::new(
+            name.into(),
+            PathBuf::from(format!("/data/{name}.cif")),
+            bytes,
+            Arc::new(block),
+        )
+    }
+
+    const CIF: &str = "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+        _cell_length_a 4\n_cell_length_b 4\n_cell_length_c 4\n\
+        loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+        Na1 0 0 0\n";
 
     #[test]
-    fn finds_structures_with_their_project() {
-        let catalog = ProjectCatalog::sample();
-        let (project, entry) = catalog.structure(StructureEntryId(3)).expect("SrTiO₃");
-        assert_eq!(project.id, ProjectId(2));
-        assert_eq!(
-            entry.source,
-            StructureSource::Sample(SampleKey::StrontiumTitanate)
-        );
-        assert!(catalog.structure(StructureEntryId(99)).is_none());
+    fn imports_record_their_provenance_and_keep_the_file() {
+        let mut catalog = ProjectCatalog::new();
+        let project = catalog.create("未命名项目");
+        let ids = catalog.add_imported(project, [imported("a", CIF), imported("b", CIF)]);
+        assert_eq!(ids, [StructureEntryId(1), StructureEntryId(2)]);
+        let (found, entry) = catalog.structure(ids[1]).unwrap();
+        assert_eq!(found.id(), project);
+        assert!(found.is_modified());
+        let import = entry.entry().provenance.import().unwrap();
+        assert_eq!(import.file_name, "b.cif");
+        assert_eq!(import.path.as_deref(), Some("/data/b.cif"));
+        assert_eq!(import.sha256, Sha256::of(CIF.as_bytes()));
+        // One copy for both: they are the same file.
+        let save = found.save_request(Vec::new(), ViewState::default());
+        assert_eq!(save.sources.len(), 1);
+        assert_eq!(save.structures.len(), 2);
+        assert_eq!(save.manifest.entries.len(), 2);
+        assert!(save.from.is_none());
     }
 
     #[test]
-    fn structure_ids_are_unique() {
-        let catalog = ProjectCatalog::sample();
-        let mut ids: Vec<_> = catalog
-            .projects()
+    fn derived_structures_follow_their_source() {
+        let mut catalog = ProjectCatalog::new();
+        let project = catalog.create("p");
+        let ids = catalog.add_imported(project, [imported("a", CIF), imported("b", CIF)]);
+        let source = sample::load(SampleKey::Rutile).structure;
+        let derive = |name: &str| {
+            DerivedEntry::new(
+                name.into(),
+                source.clone(),
+                Operation::MakeSupercell {
+                    matrix: [[2, 0, 0], [0, 2, 0], [0, 0, 2]],
+                },
+            )
+        };
+        let first = catalog.add_derived(ids[0], &source, derive("a 2")).unwrap();
+        let second = catalog.add_derived(ids[0], &source, derive("a 3")).unwrap();
+        let project = catalog.project(project).unwrap();
+        let names: Vec<_> = project.structures().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["a", "a 2", "a 3", "b"]);
+        let entry = project.structure(second).unwrap();
+        assert!(entry.is_derived() && entry.pending().is_some());
+        let Provenance::Derived(record) = &entry.entry().provenance else {
+            panic!("derived");
+        };
+        assert_eq!(record.from_name, "a");
+        assert_eq!(record.from_structure_sha256, structure_sha256(&source));
+        assert_ne!(first, second);
+        let manifest: Vec<_> = project
+            .save_request(Vec::new(), ViewState::default())
+            .manifest
+            .entries
             .iter()
-            .flat_map(|p| p.structures.iter().map(|s| s.id.0))
+            .map(|e| e.name.clone())
             .collect();
-        let count = ids.len();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), count);
+        assert_eq!(manifest, names);
     }
 
     #[test]
-    fn imports_collect_in_one_new_project() {
-        let mut catalog = ProjectCatalog::sample();
-        let block = Arc::new(
-            mw_crystal_io::cif::read_str("data_x\n_cell_length_a 1\n")
-                .blocks
-                .remove(0),
-        );
-        let entry = |name: &str| ImportedEntry::new(name.into(), "x.cif".into(), block.clone());
-        let first = catalog.add_imported("Imported", [entry("a"), entry("b")]);
-        let second = catalog.add_imported("ignored", [entry("c")]);
-        assert_eq!(first, [StructureEntryId(4), StructureEntryId(5)]);
-        assert_eq!(second, [StructureEntryId(6)]);
-        assert_eq!(catalog.projects().len(), 3);
-        let (project, entry) = catalog.structure(StructureEntryId(6)).expect("added");
-        assert_eq!(project.name, "Imported");
-        assert_eq!(project.structures.len(), 3);
+    fn saving_clears_what_was_written_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("p.mwproj");
+        let mut catalog = ProjectCatalog::new();
+        let project = catalog.create("p");
+        catalog.add_imported(project, [imported("a", CIF)]);
+        let save = catalog
+            .project(project)
+            .unwrap()
+            .save_request(Vec::new(), ViewState::default());
+        let snapshot = catalog.snapshot(project, &save).unwrap();
+        let dir = mw_project_file::save(&path, &save).unwrap();
+        // Something was imported while the save was writing.
+        let later = catalog.add_imported(project, [imported("b", CIF)]);
+        catalog.saved(project, dir.clone(), &snapshot);
+        let found = catalog.project(project).unwrap();
+        assert_eq!(found.path(), Some(path.as_path()));
+        assert!(found.structures()[0].pending().is_none());
+        assert!(found.structure(later[0]).unwrap().pending().is_some());
+        assert!(found.is_modified());
+
+        let save = found.save_request(Vec::new(), ViewState::default());
+        let snapshot = catalog.snapshot(project, &save).unwrap();
+        let dir = mw_project_file::save(&path, &save).unwrap();
+        catalog.saved(project, dir, &snapshot);
+        assert!(!catalog.project(project).unwrap().is_modified());
+
+        // Opened again, the project has the same structures.
+        let (dir, manifest) = mw_project_file::read_manifest(&path).unwrap();
+        let mut reopened = ProjectCatalog::new();
+        let id = reopened.open(dir, manifest, ViewState::default());
         assert_eq!(
-            entry.origin,
-            StructureOrigin::Imported {
-                file_name: "x.cif".into()
-            }
+            reopened.find(&path, catalog.project(project).unwrap().file_id()),
+            Some(id)
         );
+        let names: Vec<_> = reopened
+            .project(id)
+            .unwrap()
+            .structures()
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect();
+        assert_eq!(names, ["a", "b"]);
+        assert!(!reopened.project(id).unwrap().is_modified());
     }
 }

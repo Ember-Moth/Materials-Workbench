@@ -1,28 +1,39 @@
+use std::collections::HashSet;
+
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::kbd::Kbd;
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::sidebar::{Sidebar, SidebarFooter, SidebarMenu, SidebarMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::{ImportedEntry, ProjectCatalog, StructureEntryId, StructureOrigin};
+use crate::{ProjectCatalog, ProjectId, StructureEntryId};
 
 /// Requests from the sidebar; the window that hosts it decides what they do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProjectSidebarEvent {
     OpenStructure(StructureEntryId),
     NewProject,
+    OpenProject,
     OpenFile,
     SearchCommands,
     OpenSettings,
     Hide,
+    SaveProject(ProjectId),
+    SaveProjectAs(ProjectId),
+    RevealProject(ProjectId),
+    CloseProject(ProjectId),
 }
 
-/// Navigation over the project catalog. Owns which structure is selected; the
-/// host keeps it in sync with the open document through
-/// [`ProjectSidebar::set_selected`].
+/// Navigation over the open projects. Owns the catalog and which structure
+/// is selected; the host keeps the selection in sync with the open document
+/// through [`ProjectSidebar::set_selected`], and tells it which structures
+/// have unsaved edits.
 pub struct ProjectSidebar {
     catalog: ProjectCatalog,
     selected: Option<StructureEntryId>,
+    modified: HashSet<StructureEntryId>,
 }
 
 impl EventEmitter<ProjectSidebarEvent> for ProjectSidebar {}
@@ -32,6 +43,7 @@ impl ProjectSidebar {
         Self {
             catalog,
             selected: None,
+            modified: HashSet::new(),
         }
     }
 
@@ -39,24 +51,28 @@ impl ProjectSidebar {
         &self.catalog
     }
 
-    /// Adds imported structures to the catalog; see
-    /// [`ProjectCatalog::add_imported`].
-    pub fn add_imported(
+    /// Changes the catalog and redraws.
+    pub fn update_catalog<R>(
         &mut self,
-        project_name: &str,
-        entries: Vec<ImportedEntry>,
         cx: &mut Context<Self>,
-    ) -> Vec<StructureEntryId> {
-        let ids = self.catalog.add_imported(project_name, entries);
-        if !ids.is_empty() {
-            cx.notify();
-        }
-        ids
+        change: impl FnOnce(&mut ProjectCatalog) -> R,
+    ) -> R {
+        let result = change(&mut self.catalog);
+        cx.notify();
+        result
     }
 
     pub fn set_selected(&mut self, selected: Option<StructureEntryId>, cx: &mut Context<Self>) {
         if self.selected != selected {
             self.selected = selected;
+            cx.notify();
+        }
+    }
+
+    /// The open structures whose documents have unsaved edits.
+    pub fn set_modified(&mut self, modified: HashSet<StructureEntryId>, cx: &mut Context<Self>) {
+        if self.modified != modified {
+            self.modified = modified;
             cx.notify();
         }
     }
@@ -82,61 +98,119 @@ impl ProjectSidebar {
             let keystroke = Keystroke::parse(keys).ok();
             move |_: &mut Window, _: &mut App| div().children(keystroke.clone().map(Kbd::new))
         };
+        let item = |label: SharedString, icon: IconName, event: ProjectSidebarEvent| {
+            SidebarMenuItem::new(label)
+                .icon(icon)
+                .on_click(cx.listener(move |this, _, _, cx| this.emit(event.clone(), cx)))
+        };
         SidebarMenu::new()
+            .child(item(
+                tr!("sidebar.new_project"),
+                IconName::Plus,
+                ProjectSidebarEvent::NewProject,
+            ))
             .child(
-                SidebarMenuItem::new(tr!("sidebar.new_project"))
-                    .icon(IconName::Plus)
-                    .on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.emit(ProjectSidebarEvent::NewProject, cx)
-                        }),
-                    ),
+                item(
+                    tr!("sidebar.open_project"),
+                    IconName::Folder,
+                    ProjectSidebarEvent::OpenProject,
+                )
+                .suffix(shortcut("cmd-shift-o")),
             )
             .child(
-                SidebarMenuItem::new(tr!("sidebar.open_file"))
-                    .icon(IconName::FolderOpen)
-                    .suffix(shortcut("cmd-o"))
-                    .on_click(
-                        cx.listener(|this, _, _, cx| this.emit(ProjectSidebarEvent::OpenFile, cx)),
-                    ),
+                item(
+                    tr!("sidebar.open_file"),
+                    IconName::FolderOpen,
+                    ProjectSidebarEvent::OpenFile,
+                )
+                .suffix(shortcut("cmd-o")),
             )
             .child(
-                SidebarMenuItem::new(tr!("sidebar.search_commands"))
-                    .icon(IconName::Search)
-                    .suffix(shortcut("cmd-k"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.emit(ProjectSidebarEvent::SearchCommands, cx)
-                    })),
+                item(
+                    tr!("sidebar.search_commands"),
+                    IconName::Search,
+                    ProjectSidebarEvent::SearchCommands,
+                )
+                .suffix(shortcut("cmd-k")),
             )
     }
 
     fn render_projects(&self, cx: &mut Context<Self>) -> SidebarMenu {
         let mut menu = SidebarMenu::new();
+        let sidebar = cx.entity().downgrade();
         for project in self.catalog.projects() {
-            let structures = project.structures.iter().map(|entry| {
-                let id = entry.id;
-                let item = SidebarMenuItem::new(entry.name.clone())
+            let structures = project.structures().iter().map(|entry| {
+                let id = entry.id();
+                let derived = entry.is_derived();
+                // New structures are not in the project directory yet.
+                let modified = self.modified.contains(&id) || entry.pending().is_some();
+                SidebarMenuItem::new(SharedString::from(entry.name().to_string()))
                     .active(self.selected == Some(id))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.emit(ProjectSidebarEvent::OpenStructure(id), cx)
-                    }));
-                if matches!(entry.origin, StructureOrigin::Derived { .. }) {
-                    item.suffix(|_, cx| {
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(tr!("sidebar.derived"))
+                    }))
+                    .when(derived || modified, |item| {
+                        item.suffix(move |_, cx| {
+                            let theme = cx.theme();
+                            h_flex()
+                                .gap_1p5()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .when(derived, |this| this.child(tr!("sidebar.derived")))
+                                .when(modified, |this| {
+                                    this.child(
+                                        div().id(("unsaved", id.0 as usize)).child("●").tooltip(
+                                            |window, cx| {
+                                                gpui_kit::component::tooltip::Tooltip::new(tr!(
+                                                    "sidebar.unsaved"
+                                                ))
+                                                .build(window, cx)
+                                            },
+                                        ),
+                                    )
+                                })
+                        })
                     })
-                } else {
-                    item
-                }
             });
+            let id = project.id();
+            let saved = project.path().is_some();
+            let sidebar = sidebar.clone();
             menu = menu.child(
-                SidebarMenuItem::new(project.name.clone())
+                SidebarMenuItem::new(SharedString::from(project.name().to_string()))
                     .icon(IconName::Folder)
                     .default_open(true)
                     .click_to_toggle(true)
-                    .children(structures),
+                    .children(structures)
+                    .context_menu(move |menu, _, _| {
+                        let item = |label: SharedString, event: ProjectSidebarEvent| {
+                            let sidebar = sidebar.clone();
+                            PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                                sidebar
+                                    .update(cx, |this, cx| this.emit(event.clone(), cx))
+                                    .ok();
+                            })
+                        };
+                        menu.item(item(
+                            tr!("sidebar.save"),
+                            ProjectSidebarEvent::SaveProject(id),
+                        ))
+                        .item(item(
+                            tr!("sidebar.save_as"),
+                            ProjectSidebarEvent::SaveProjectAs(id),
+                        ))
+                        .item(
+                            item(
+                                tr!("sidebar.reveal"),
+                                ProjectSidebarEvent::RevealProject(id),
+                            )
+                            .disabled(!saved),
+                        )
+                        .separator()
+                        .item(item(
+                            tr!("sidebar.close_project"),
+                            ProjectSidebarEvent::CloseProject(id),
+                        ))
+                    }),
             );
         }
         menu

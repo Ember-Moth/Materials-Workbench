@@ -10,7 +10,7 @@ mod camera;
 mod renderer;
 mod scene;
 
-pub use camera::{CameraMatrices, OrbitCamera};
+pub use camera::{CameraMatrices, CameraPose, OrbitCamera};
 pub use renderer::{
     FrameImage, FrameTimings, PendingFrame, PendingPick, Pick, PickRequest, RenderError,
     RenderRequest, Renderer, srgb_to_linear,

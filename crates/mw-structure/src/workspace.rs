@@ -9,8 +9,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal::{AtomRef, CellParam, CoordinateConstraint, EditMode, SiteId, element};
-use mw_viewport::Viewport;
+use mw_crystal::{AtomRef, CellParam, Checkpoint, CoordinateConstraint, EditMode, SiteId, element};
+use mw_project_file::{
+    Camera, DisplayModel as SavedDisplayModel, EntryView, PanelTab as SavedPanelTab, StructureFile,
+};
+use mw_viewport::{CameraPose, Viewport};
 
 use crate::actions::*;
 use crate::document::StructureDocument;
@@ -85,6 +88,9 @@ pub struct StructureWorkspace {
     /// The site the coordinate and occupant fields show.
     pub(crate) editing_site: Option<SiteId>,
     pub(crate) occupants: Vec<OccupantEditor>,
+    /// Whether the project has unsaved changes beyond this document's; the
+    /// shell knows, since it saves projects.
+    project_modified: bool,
     _subscriptions: Vec<Subscription>,
     _occupant_subscriptions: Vec<Subscription>,
 }
@@ -166,6 +172,7 @@ impl StructureWorkspace {
             coordinate_inputs,
             editing_site: None,
             occupants: Vec::new(),
+            project_modified: false,
             _subscriptions: subscriptions,
             _occupant_subscriptions: Vec::new(),
         };
@@ -176,6 +183,97 @@ impl StructureWorkspace {
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         self.focus_handle.focus(window, cx);
+    }
+
+    /// Whether the 3D view shows its newest frame; the screenshot tour
+    /// waits for it.
+    pub fn viewport_is_current(&self, cx: &App) -> bool {
+        self.viewport.read(cx).is_current()
+    }
+
+    // MARK: Saving
+
+    /// Whether the structure has edits since it was opened or saved.
+    pub fn is_modified(&self) -> bool {
+        self.document.is_modified()
+    }
+
+    /// The document as the project file holds it, with the state it is in,
+    /// to mark that state saved once the file is written.
+    pub fn file_to_save(&self) -> (StructureFile, Checkpoint) {
+        (self.document.file(), self.document.checkpoint())
+    }
+
+    pub fn mark_saved(&mut self, checkpoint: Checkpoint, cx: &mut Context<Self>) {
+        self.document.mark_saved(checkpoint);
+        cx.notify();
+    }
+
+    /// Tells the workspace its project's name, and whether the project has
+    /// unsaved changes besides this document's, for the header.
+    pub fn set_project(&mut self, name: SharedString, modified: bool, cx: &mut Context<Self>) {
+        if self.document.project_name != name || self.project_modified != modified {
+            self.document.project_name = name;
+            self.project_modified = modified;
+            cx.notify();
+        }
+    }
+
+    /// How the structure is shown, to save with the project
+    /// (`docs/design/project-format.md` §8).
+    pub fn view(&self, cx: &App) -> EntryView {
+        let pose = self.viewport.read(cx).camera_pose();
+        let camera = Camera::new(pose.yaw, pose.pitch, pose.half_height, pose.target);
+        let display_model = match self.display_model {
+            DisplayModel::BallAndStick => SavedDisplayModel::BallAndStick,
+            DisplayModel::SpaceFilling => SavedDisplayModel::SpaceFilling,
+            DisplayModel::Polyhedra => SavedDisplayModel::Polyhedra,
+        };
+        let panel = match self.panel {
+            PanelTab::Properties => SavedPanelTab::Properties,
+            PanelTab::Sites => SavedPanelTab::Sites,
+            PanelTab::Measurements => SavedPanelTab::Measurements,
+            PanelTab::Diagnostics => SavedPanelTab::Diagnostics,
+        };
+        EntryView::new(
+            Some(camera),
+            Some(display_model),
+            Some(panel),
+            Some(self.panel_open),
+        )
+    }
+
+    /// Shows the structure as it was when saved.
+    pub fn set_view(&mut self, view: &EntryView, cx: &mut Context<Self>) {
+        if let Some(model) = view.display_model {
+            let model = match model {
+                SavedDisplayModel::BallAndStick => DisplayModel::BallAndStick,
+                SavedDisplayModel::SpaceFilling => DisplayModel::SpaceFilling,
+                SavedDisplayModel::Polyhedra => DisplayModel::Polyhedra,
+            };
+            if self.display_model != model {
+                self.display_model = model;
+                self.refresh_scene(cx);
+            }
+        }
+        if let Some(panel) = view.panel {
+            self.panel = match panel {
+                SavedPanelTab::Properties => PanelTab::Properties,
+                SavedPanelTab::Sites => PanelTab::Sites,
+                SavedPanelTab::Measurements => PanelTab::Measurements,
+                SavedPanelTab::Diagnostics => PanelTab::Diagnostics,
+            };
+        }
+        if let Some(open) = view.panel_open {
+            self.panel_open = open;
+        }
+        // After the scene, so that the zoom is limited to its size.
+        if let Some(camera) = view.camera {
+            let pose = CameraPose::new(camera.yaw, camera.pitch, camera.half_height, camera.target);
+            self.viewport
+                .update(cx, |viewport, cx| viewport.set_camera_pose(pose, cx));
+        }
+        cx.notify();
     }
 
     pub(crate) fn select_site(
@@ -448,11 +546,11 @@ impl StructureWorkspace {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    // Mock: nothing is saved until project files exist (M6);
-                    // the status only tells whether there are edits.
-                    .child(match crystal.undo_command() {
-                        Some(_) => tr!("header.unsaved"),
-                        None => tr!("header.saved"),
+                    // The project is what ⌘S saves, so its state counts.
+                    .child(if self.project_modified || self.document.is_modified() {
+                        tr!("header.unsaved")
+                    } else {
+                        tr!("header.saved")
                     }),
             )
             .child(

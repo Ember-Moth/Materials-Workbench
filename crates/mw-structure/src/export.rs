@@ -127,6 +127,9 @@ struct ExportJob {
     format: ExportFormat,
     structure: Structure,
     source: Option<Arc<ImportedBlock>>,
+    /// Whether the structure differs from the imported one: then the source's
+    /// unrecognized fields are left out.
+    changed: bool,
     /// The POSCAR comment line.
     comment: String,
 }
@@ -145,7 +148,9 @@ impl ExportJob {
         match self.format {
             ExportFormat::Cif => {
                 let options = match &self.source {
-                    Some(block) => block.write_options(&self.structure),
+                    Some(block) => {
+                        cif::WriteOptions::new(&block.name).kept(&block.fields, self.changed)
+                    }
                     None => cif::WriteOptions::new(file_stem),
                 };
                 let written = cif::write(&self.structure, &options);
@@ -279,6 +284,7 @@ impl StructureWorkspace {
             format,
             structure: self.document.structure().clone(),
             source: self.document.source.clone(),
+            changed: self.document.changed_since_import(),
             comment: format!("{} · {}", self.document.name, self.document.project_name),
         };
         cx.spawn_in(window, async move |_, cx| {
@@ -382,10 +388,14 @@ mod tests {
         structure: Structure,
         source: Option<Arc<ImportedBlock>>,
     ) -> ExportJob {
+        let changed = source
+            .as_ref()
+            .is_none_or(|block| block.structure.as_ref() != Some(&structure));
         ExportJob {
             format,
             structure,
             source,
+            changed,
             comment: "金红石 · TiO₂".into(),
         }
     }

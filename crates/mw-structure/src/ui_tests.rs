@@ -17,7 +17,6 @@ use gpui_kit::{
 use mw_crystal::sample::SampleKey;
 use mw_crystal::{AtomRef, CellParam, SiteId};
 
-use crate::document::StructureDocument;
 use crate::selection::Selection;
 use crate::workspace::StructureWorkspace;
 
@@ -39,7 +38,7 @@ fn open(
     };
     let (window, workspace) = cx.update(|cx| {
         gpui_kit::open_window(options, cx, |window, cx| {
-            let document = StructureDocument::from_sample("Samples", "Test", key);
+            let document = crate::document::tests::sample_document(key);
             cx.new(|cx| StructureWorkspace::new(document, window, cx))
         })
         .expect("open a test window")
