@@ -1,6 +1,6 @@
 # 3D 视口：技术选型与 GPUI 集成
 
-> 状态：已决定 · macOS 上已用 PoC 验证方案 A（见 8.1 节），Linux / Windows 待测 · M3 已实现键、晶胞边框、ID 纹理拾取和测量（5.4–5.6 节、8.2 节）· 2026-10-22
+> 状态：已决定 · macOS 上已用 PoC 验证方案 A（见 8.1 节），Linux / Windows 待测 · M3 已实现键、晶胞边框、ID 纹理拾取和测量（5.4–5.6 节、8.2 节）· 2026-10-22；2026-10-23 补充上游现状和不改 GPUI 的零拷贝路线（方案 F，3.5、6.1–6.3 节）
 > 相关：[晶体学模块：数据模型与编辑语义](crystallography-model.md)（`mw-crystal-render` 持有的视图状态，以及拾取结果如何映射到 `AtomRef`）
 > 源码结论基于 GPUI Kit 0.8.0 锁定的 `gpui-pre 0.3.9` 系列 crate，于 2026-10-22 从 crates.io 下载后逐一核对。升级 GPUI Kit 时，按附录清单重新核对。
 
@@ -11,7 +11,7 @@
 | UI 框架 | GPUI，通过 GPUI Kit 使用（应用只依赖 `gpui-kit` 一个 crate） |
 | 3D 渲染 | wgpu，版本与 GPUI 的 wgpu 渲染器对齐（当前为 29.x） |
 | 渲染器边界 | `mw-crystal-render` 只依赖 wgpu，不依赖 GPUI |
-| 视口接入 GPUI | 第一阶段：离屏渲染 → 回读到内存 → `Window::paint_image`，全平台通用。之后根据实测结果，在 macOS / Linux 上改为给 GPUI 打补丁的零拷贝路线 |
+| 视口接入 GPUI | 第一阶段：离屏渲染 → 回读到内存 → `Window::paint_image`，全平台通用（方案 A）。只有实测证明回读不够用时才做零拷贝：优先等上游接受外部纹理图元（方案 C）；进不了上游时，用不改 GPUI 的底层合成（方案 F，6.2 节） |
 | 原生子视图 | 不采用 |
 | Bevy | 不采用 |
 
@@ -71,6 +71,18 @@ GPUI 有一个 `Surface` 图元，但它是为通话视频设计的：
 - **渲染测试**（`docs/test.md`）：GPUI Kit 的像素级渲染测试覆盖 macOS（Metal）和 Linux（WGPU）；Windows 没有无头渲染器。
 - **WebAssembly**（`docs/webassembly.md`）：只有一个 canvas、一个顶层窗口；WebGPU 失败时退回 WebGL2。
 
+### 3.5 底层合成可用的接口（2026-10-23 核对）
+
+方案 F（6.2 节）不改 GPUI，只依赖下面这些已有的接口：
+
+| 位置 | 结论 |
+|---|---|
+| `gpui-pre`：`src/platform.rs:2766` 的 `WindowBackgroundAppearance` | 窗口可以用透明背景 |
+| `gpui-pre-apple`：`src/metal_renderer.rs:182`、`484` | 透明背景时，GPUI 的 Metal 图层设为非不透明（`set_opaque(!transparent)`），下面的内容能透上来 |
+| `gpui-pre`：`src/window.rs:7572` | `Window` 实现了 `HasWindowHandle`，可以拿到原生窗口（NSView、HWND、Wayland 表面） |
+| `gpui-pre-windows`：`src/directx_renderer.rs:1017` | GPUI 用 `CreateTargetForHwnd(hwnd, true)` 建的是"顶层"DirectComposition 目标。每个窗口还可以有一个非顶层目标，系统把它合成在顶层目标下面 |
+| `wgpu-29.0.4`：`src/api/surface.rs:392`、`400` | `SurfaceTargetUnsafe::CoreAnimationLayer` 和 `SurfaceTargetUnsafe::CompositionVisual`：wgpu 能直接在 Core Animation 图层和 DirectComposition 视觉对象上创建绘制目标。后者只有 DX12 后端支持 |
+
 ## 4. 方案比较
 
 | 方案 | 做法 | 弹层能否盖住视口 | 平台 | 主要代价 | 结论 |
@@ -80,6 +92,7 @@ GPUI 有一个 `Surface` 图元，但它是为通话视频设计的：
 | C 打补丁零拷贝 | 给 GPUI 加一个"外部纹理"图元 | 能 | 逐个平台实现 | 需要维护 `gpui-pre` 补丁 | **视实测结果，第二阶段采用** |
 | D GPUI 原生绘制 | 用 `paint_path` 和图片精灵画 2.5D 球棍模型，在 CPU 上按深度排序 | 能 | 全部 | 没有真实深度，相交处画错，大结构性能差 | 不作为主视口，可用于缩略图 |
 | E Bevy | 用 Bevy 渲染 | 同方案 A / C | — | 见第 7 节 | 不采用 |
+| F 底层合成 | wgpu 直接画在一个原生子图层上，这个图层放在 GPUI 内容的**下面**；GPUI 窗口用透明背景，只在视口处留洞，由系统合成器把两层叠起来 | 能 | Windows、Linux Wayland、macOS（较脆弱）；X11 不可用 | 每个平台要写一层图层胶水（unsafe）；两层要同步提交；整个窗口变透明；截图和测试拍不到 3D 画面 | **备选**：方案 A 不够用、方案 C 又进不了上游时，先做原型验证（6.2 节） |
 
 **方案 A 的带宽估算**：每帧字节数 = 宽 × 高 × 4。
 
@@ -171,9 +184,9 @@ M3 里已经这样画的有：
 - **抗锯齿**：MSAA 4×。环境光遮蔽（SSAO）作为可选效果，以后再加。
 - **已知代价**：写 `frag_depth` 会关闭提前深度测试（early-z），被挡住的片元也要跑完整个着色器。原子和键都很密时，这部分开销随重叠层数增长（8.2 节的 10 万原子 + 30 万键）。可以考虑的办法：把四边形放在球或圆柱离相机最近的平面上，再用保守深度（conservative depth）声明写出的深度只会更远，让硬件保留提前测试。
 
-## 6. 方案 C：各平台的零拷贝路线
+## 6. 零拷贝路线：方案 C 与方案 F
 
-只有当 PoC 证明方案 A 不够用时才实施，并且按平台独立推进：
+只有当实测证明方案 A 不够用时才考虑零拷贝。方案 C 是给 GPUI 打补丁，加一个外部纹理图元，按平台独立推进：
 
 | 平台 | 做法 | 需要改的 crate | 难度 |
 |---|---|---|---|
@@ -186,6 +199,68 @@ M3 里已经这样画的有：
 - 用 `[patch.crates-io]` 指向自己维护的 `gpui-pre-*` 分支。
 - 补丁尽量小，争取提交给上游（Zed / GPUI Kit）。
 - 每次升级 GPUI Kit，都按附录清单复核。
+
+### 6.1 上游现状（2026-10-23）
+
+方案 C 的补丁要提给 Zed（`gpui-pre` 是 zed-industries/zed 的快照）。GPUI Kit 只使用原样的 `gpui-pre` 快照、不接受渲染器补丁，相关问题都转给 Zed。所以改动要先进 Zed，再等下一次快照和 GPUI Kit 跟进。
+
+| 记录 | 内容 | 状态 |
+|---|---|---|
+| [讨论 #60572](https://github.com/zed-industries/zed/discussions/60572)、[PR #60573](https://github.com/zed-industries/zed/pull/60573) | 后端无关的"外部合成器"：零拷贝合成外部渲染的 wgpu 纹理，用例是 CAD 和科学可视化视口。PR 只实现了 wgpu 后端，19 个文件、+2186 行 | PR 当天被 Zed 员工关闭：不否定这个想法，但新的公开接口要先在讨论里定下设计，不承诺时间。讨论有 8 个赞，之后没有维护者回复 |
+| [PR #61291](https://github.com/zed-industries/zed/pull/61291) | 让 macOS 现有的 `surface()` 接受单平面 BGRA 的 `CVPixelBuffer`，不加公开接口（+88 / −6） | 7 月起一直未合并，9 月底有贡献者表示会看 |
+| [讨论 #64849](https://github.com/zed-industries/zed/discussions/64849) | Windows 上绘制外部的 D3D11 纹理，由 GPUI Kit 的 issue 转来 | 没有维护者回复 |
+| [PR #64061](https://github.com/zed-industries/zed/pull/64061) | 可原地更新的动态纹理 | 未合并。合并后方案 A 每帧不必在图集里新建、删除图像 |
+
+Zed 的贡献指南要求新功能先开讨论、拿到员工确认，复杂度超过受益面的功能一般不合并。GPUI 首先是 Zed 自己的界面框架，外部纹理这类 Zed 用不上的功能优先级偏低。
+
+**判断**：完整的跨平台外部纹理图元，近期进入上游的可能性很低，不再单独提 PR，以免和 #60573 重复。能做的是在 #60572 下补充我们的用例和实测数据，并测试、支持 #61291。#61291 合并后，macOS 不用补丁也能零拷贝：wgpu 的 Metal 后端渲染到 IOSurface 支持的纹理（经 wgpu-hal 的 Metal 互操作，需要 unsafe），包成 BGRA 的 `CVPixelBuffer` 交给 `surface()`。还要处理两件事：GPUI 采样之前 wgpu 的工作必须已经完成，IOSurface 要准备几个轮流使用。
+
+### 6.2 方案 F：底层合成（不改 GPUI）
+
+**做法**：
+
+1. wgpu 渲染到一个原生子图层上，这个子图层不是 GPUI 的。
+2. 把子图层放在 GPUI 内容的下面。
+3. GPUI 窗口用透明背景，界面照常画不透明的主题背景，只在视口区域留出透明的洞。
+4. 由系统合成器把两层叠起来，画面完全不经过 CPU。
+
+**和方案 B 的区别**：方案 B 的原生视图盖在 GPUI 上面，所以弹层会被挡住；方案 F 的原生图层在下面，GPUI 的测量标注、浮动工具条、对话框和通知自然叠在 3D 画面上，满足第 2 节的约束。
+
+**分工：wgpu 负责渲染和送显，平台胶水负责图层放在哪里。**
+
+- **wgpu 负责的部分**：
+  - `mw-crystal-render` 的全部渲染代码保持纯 wgpu，三个平台共用；
+  - 绘制目标由 wgpu 在原生对象上创建（3.5 节），提交和送显也都是 wgpu 调用，不直接写 Metal 或 Direct3D；
+  - 拾取不变，仍是离屏渲染一小块 ID 纹理再回读（5.4 节）。
+- **平台胶水负责的部分**：建子图层、把它放在 GPUI 下面、跟着布局更新位置和大小、和 GPUI 同步提交。这些是窗口系统和合成器的接口，不是图形接口，wgpu 不管。不能直接在 GPUI 的窗口上再建一个 wgpu 绘制目标：同一个窗口通常只能有一个交换链（Vulkan 下尤其如此），所以必须先建独立的子对象。
+
+| 平台 | 胶水要做的事 | 接口 | 难度 |
+|---|---|---|---|
+| Windows | 建一个非顶层的 DirectComposition 目标和视觉对象，wgpu（DX12 后端）在上面渲染；设置偏移和裁剪，提交 | DirectComposition（windows-rs） | 中，系统本来就支持这种分层 |
+| Linux Wayland | 用 GPUI 的 Wayland 连接建一个子表面，放在 GPUI 表面的下面，设置位置，开启同步模式；wgpu 走 Vulkan | wayland-client | 中 |
+| macOS | 一个图层自己的内容总是画在它的子图层下面，所以没法直接放到 GPUI 的 Metal 图层底下。只能在视图层级里把我们的视图插到 GPUI 视图后面：要么改窗口的内容视图，要么改系统私有的外层视图。两种都可能破坏 GPUI 对窗口结构的假设，系统更新后也可能失效。两层同步提交要用 Core Animation 事务，并打开 Metal 图层的 `presentsWithTransaction`，wgpu 的普通接口没有暴露这个属性 | AppKit、Core Animation（objc2） | 中到高，而且脆弱 |
+| Linux X11 | 子窗口只能画在上面 | — | 做不到，继续用方案 A |
+
+每个平台的胶水大约几百行，藏在同一个接口后面：设置位置和大小、显示或隐藏、提交。不支持的平台，以及无界面、截图巡览和界面集成测试，都退回方案 A。
+
+**风险**：
+
+- **两层不同步**：调整窗口大小、拖动面板、收起侧栏时，GPUI 和子图层各自提交，可能错开一帧，边缘出现缝隙或重叠。要用平台的事务机制让两边一起提交。
+- **测量标注慢一帧**：视口会自己出帧，不再跟 GPUI 的帧绑在一起。旋转可能更流畅，但 GPUI 按相机投影画的标注可能比 3D 画面慢一帧。
+- **整个窗口变透明**：系统合成的开销会增加；GPUI Kit 的组件都要保证自己画了不透明背景，否则会透出下面的内容。
+- **截图和测试拍不到 3D 画面**：`render_to_image` 只拍到 GPUI 这一层，视口位置是个空洞，所以测试必须走方案 A。
+- **裁剪和移动**：子图层是矩形，圆角要单独加遮罩；视口所在区域能滚动时，图层要跟着移动。
+- **显卡选择**：双显卡电脑上，wgpu 要选和 GPUI 相同的 GPU（用 `Window::gpu_specs` 匹配），否则合成时可能跨 GPU 拷贝。
+
+**收益**：和方案 C 相同。每帧省掉回读、拷贝和上传，在 1792×1600 下约 1.5–4 ms（8.1 节），延迟也少大约一帧。到 4K 或 120 Hz 屏幕，差别更明显。
+
+**何时启动**：只有在 4K、120 Hz 或 Linux、Windows 上实测，证明方案 A 及其优化不够用，而方案 C 又进不了上游时才启动。先挑最顺的 Windows 或 Wayland，在 `viewport-poc` 里花一两天做原型，验证两层能否同步、透明窗口的开销有多大，再决定是否接进应用；macOS 放在最后。
+
+### 6.3 不采用：用 unsafe 访问 GPUI 内部，或改用 C
+
+- **按内存偏移读写 GPUI 的私有字段**（例如拿到它的渲染器或 wgpu 设备）：Rust 不保证普通结构体的布局，这本身就是未定义行为；`gpui-pre` 每次升级都可能改变布局，出错时表现为难以排查的随机崩溃，比维护补丁更糟。
+- **改用 C 语言**：Metal、Core Animation、Direct3D、DirectComposition、Wayland 在 Rust 里都能直接调用（objc2、windows-rs、wayland-client）。C 不会多出任何能力，只会多一套工具链。
+- **只在统一内存上省一次拷贝**：让 wgpu 渲染到 IOSurface 支持的纹理，CPU 直接读，可以省掉拷到暂存缓冲区那一步，但 CPU 拷贝和 GPUI 上传仍然少不了。收益有限，不值得为它引入 unsafe。
 
 ## 7. 不采用 Bevy 的理由
 
@@ -312,7 +387,7 @@ VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 | 每帧新建 `RenderImage` 的图集开销 | `paint_image` 走精灵图集，需要确认高频替换时的上传开销和碎片情况 |
 | GPUI Fast 后端 | GPUI Kit 的可选特性 `gpui-fast` 没有评估，不在本次选型范围内 |
 | impostor 关闭提前深度测试 | 写 `frag_depth` 使被挡住的片元也要着色；10 万原子 + 30 万键在全分辨率下只有约 30 fps（8.2 节）。对策见 5.6 节 |
-| 方案 C 能否进入上游 | 如果补丁进不了上游，就要长期跟着 GPUI Kit 的版本维护 |
+| 方案 C 能否进入上游 | 同类提案（讨论 #60572、PR #60573）已被要求先定设计，三个半月没有维护者回复（6.1 节）。自己维护补丁要长期跟着 GPUI Kit 的版本走；进不了上游时，用不改 GPUI 的方案 F（6.2 节） |
 
 ## 附录：升级 GPUI Kit 时的复核清单
 
@@ -324,3 +399,5 @@ VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 4. `gpui-pre-wgpu` 依赖的 wgpu 大版本——它决定 `mw-crystal-render` 用哪个版本的 wgpu。
 5. `Window::paint_image`、`Window::drop_image` 和 `RenderImage` 的签名与格式说明有没有变化。
 6. 是否出现了新的外部纹理或自定义渲染接口。如果有，重新评估方案 C。
+7. 6.1 节所列上游 PR 和讨论的进展。#61291 合并后，macOS 可以经 `surface()` 走 BGRA 的 IOSurface 零拷贝。
+8. 方案 F 依赖的接口（3.5 节）：GPUI 是否仍支持透明窗口背景、macOS 的 Metal 图层是否仍随之设为非不透明；`Window` 是否仍实现 `HasWindowHandle`；Windows 上 GPUI 是否仍只用顶层 DirectComposition 目标。
