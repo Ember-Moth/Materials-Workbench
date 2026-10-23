@@ -168,7 +168,9 @@ impl StructureWorkspace {
 
     /// Where the displayed atom at a fractional position appears in the
     /// window, for driving the viewport with synthetic pointer events (the
-    /// screenshot tour). `None` if no such atom is displayed.
+    /// screenshot tour). The position is in the image on screen while picks
+    /// use the newest camera, so point once the viewport is current. `None`
+    /// if no such atom is displayed.
     pub fn displayed_atom_position(&self, fractional: [f64; 3], cx: &App) -> Option<Point<Pixels>> {
         let derived = self.document.derived();
         let atom = derived.atoms.iter().find(|atom| {

@@ -32,7 +32,7 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量和选中要删除的原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
+- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量和选中要删除的原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；原子的位置按屏幕上那一帧算，所以转动视图的拖动要单独放进一步，等新画面到了再点选；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
   ```bash
   MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot

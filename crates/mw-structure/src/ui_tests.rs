@@ -10,12 +10,15 @@
 
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::InputState;
+use std::time::Duration;
+
 use gpui_kit::{
-    AppContext as _, Bounds, Entity, TestAppContext, VisualTestContext, WindowBounds,
-    WindowOptions, px, size,
+    AppContext as _, Bounds, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext,
+    WindowBounds, WindowOptions, point, px, size,
 };
 use mw_crystal::sample::SampleKey;
-use mw_crystal::{AtomRef, CellParam, EditMode, SiteId, Target};
+use mw_crystal::{AtomRef, CellParam, Command, EditMode, Measurement, SiteId, Target};
+use mw_viewport::{CameraPose, Pick, Viewport};
 
 use crate::selection::Selection;
 use crate::workspace::{StructureWorkspace, StructureWorkspaceEvent};
@@ -142,8 +145,22 @@ fn ringed(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) ->
     })
 }
 
+fn viewport(
+    workspace: &Entity<StructureWorkspace>,
+    cx: &mut VisualTestContext,
+) -> Entity<Viewport> {
+    workspace.read_with(cx, |workspace, _| workspace.viewport.clone())
+}
+
+/// Frames the 3D view has rendered so far.
+fn frames(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) -> u64 {
+    workspace.read_with(cx, |workspace, cx| {
+        workspace.viewport.read(cx).frames_submitted()
+    })
+}
+
 // An edit replaces the scene and then restores the selection rings, which
-// submits two frames back to back. They finish on background threads in
+// used to submit two frames back to back. They finish on background threads in
 // either order; the rings went missing when the older frame finished last
 // and replaced the newer one. Several seeds let the test scheduler run them
 // in both orders.
@@ -443,4 +460,126 @@ fn supercells_go_to_the_host(cx: &mut TestAppContext) {
     assert!(supercell.source.symmetry.operations().len() > 1);
     // The structure itself does not change.
     assert_eq!(steps(&rutile, &mut cx), 0);
+}
+
+// The scene, the rings and the camera an edit changes go into one frame.
+#[gpui_kit::test]
+fn an_edit_renders_one_frame(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    let a = cell_input(&workspace, CellParam::A, &mut cx);
+    let before = frames(&workspace, &mut cx);
+    type_into(&mut cx, &a, "4.2");
+    assert_eq!(cell(&workspace, CellParam::A, &mut cx), 4.2);
+    assert_eq!(frames(&workspace, &mut cx), before + 1);
+    assert_eq!(ringed(&workspace, &mut cx), (8, true));
+
+    focus_workspace(&workspace, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(frames(&workspace, &mut cx), before + 2);
+    assert_eq!(ringed(&workspace, &mut cx), (8, true));
+}
+
+// The hover ring is painted over the image: pointing at atoms picks them
+// but renders nothing.
+#[gpui_kit::test]
+fn hovering_renders_no_frame(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    select(&workspace, Selection::default(), &mut cx);
+    let before = frames(&workspace, &mut cx);
+    let viewport = viewport(&workspace, &mut cx);
+    let ti = workspace
+        .read_with(&cx, |workspace, cx| {
+            workspace.displayed_atom_position([0.5, 0.5, 0.5], cx)
+        })
+        .expect("Ti at the cell center");
+    cx.simulate_mouse_move(ti, None, Modifiers::none());
+    let hovered = viewport.read_with(&cx, |viewport, _| viewport.hovered());
+    assert!(matches!(hovered, Some(Pick::Sphere(_))), "{hovered:?}");
+
+    let corner = viewport
+        .read_with(&cx, |viewport, _| viewport.bounds())
+        .expect("laid out")
+        .origin
+        + point(px(8.), px(80.));
+    cx.simulate_mouse_move(corner, None, Modifiers::none());
+    assert_eq!(
+        viewport.read_with(&cx, |viewport, _| viewport.hovered()),
+        None
+    );
+    assert_eq!(frames(&workspace, &mut cx), before);
+    assert!(viewport.read_with(&cx, |viewport, _| viewport.is_current()));
+}
+
+// Labels are placed with the camera of the image on screen, not with one
+// whose frame is still being rendered, so they do not run ahead of the
+// atoms while the view turns.
+#[gpui_kit::test]
+fn labels_follow_the_image_on_screen(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    let sr = AtomRef::new(SiteId(1), 0, [0; 3]);
+    let ti = AtomRef::new(SiteId(2), 0, [0; 3]);
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let distance = Measurement::Distance([sr, ti]);
+            workspace.execute(Command::AddMeasurement(distance), window, cx)
+        })
+    })
+    .expect("add the distance");
+    draw(&mut cx);
+    let labels = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, cx| {
+            let labels = workspace.measurement_labels(cx);
+            assert_eq!(labels.len(), 1);
+            labels[0].0
+        })
+    };
+    let viewport = viewport(&workspace, &mut cx);
+    let before = labels(&mut cx);
+
+    // Turn the view; the frame with the new camera is still in flight.
+    cx.update(|_, cx| {
+        viewport.update(cx, |viewport, cx| {
+            let pose = viewport.camera_pose();
+            let turned = CameraPose::new(pose.yaw + 0.5, pose.pitch, pose.half_height, pose.target);
+            viewport.set_camera_pose(turned, cx)
+        })
+    });
+    assert!(!viewport.read_with(&cx, |viewport, _| viewport.is_current()));
+    assert_eq!(labels(&mut cx), before);
+
+    cx.run_until_parked();
+    assert!(viewport.read_with(&cx, |viewport, _| viewport.is_current()));
+    assert_ne!(labels(&mut cx), before);
+}
+
+// Dragging renders at reduced resolution; once the camera rests, a full
+// frame makes the image current again.
+#[gpui_kit::test]
+fn dragging_settles_into_a_full_frame(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    let viewport = viewport(&workspace, &mut cx);
+    let bounds = viewport
+        .read_with(&cx, |viewport, _| viewport.bounds())
+        .expect("laid out");
+    let start = bounds.origin + point(px(40.), bounds.size.height / 2.);
+    let before = frames(&workspace, &mut cx);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    for step in 1..=3 {
+        let to = start + point(px(20. * step as f32), px(0.));
+        cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    }
+    cx.simulate_mouse_up(
+        start + point(px(60.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    // One frame per move, the last of them on screen but not yet full size.
+    assert_eq!(frames(&workspace, &mut cx), before + 3);
+    assert!(!viewport.read_with(&cx, |viewport, _| viewport.is_current()));
+
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert_eq!(frames(&workspace, &mut cx), before + 4);
+    assert!(viewport.read_with(&cx, |viewport, _| viewport.is_current()));
 }
