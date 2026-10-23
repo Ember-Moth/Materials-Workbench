@@ -26,11 +26,12 @@ cargo run --bin materials-workbench          # 运行应用
 cargo test --workspace                       # 全部测试
 cargo test -p mw-crystal-io --test fixtures  # 单个集成测试文件
 cargo test -p mw-structure rutile_apical_bond_and_angle   # 单个测试（按名称过滤）
+cargo test -p mw-structure ui_tests                       # 界面集成测试
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里；点选和测量两步发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径。
+- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里；点选、测量和选中要删除的原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
   ```bash
   MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -57,7 +58,7 @@ cargo fmt --all
 - **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源。
 - **能力 crate（依赖 GPUI）**：
   - `mw-project`：项目目录和左侧边栏；
-  - `mw-structure`：打开的结构，包括文档、视口浮层、右侧面板、对话框和命令。
+  - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区。
 
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。它不知道晶体是什么。
@@ -76,7 +77,7 @@ cargo fmt --all
 - **真源**是不对称单元加对称操作：整数矩阵加有理平移，并做群封闭检查。
 - **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性、键（共价半径之和 + 容差，跨周期边界，金属之间默认不成键）。
 - 能力、选区和测量都引用稳定 ID（`StructureEntryId`、`SiteId`、`AtomRef`），不用列表下标。
-- 编辑分对称模式和 P1 模式，都是可序列化的命令，进入同一个撤销栈。这一部分从 M4 开始实现。
+- 编辑分对称模式和 P1 模式，都是可序列化的命令（`mw_crystal::Edit`），带精确的逆命令，进入 `CrystalDocument` 的撤销栈（M4）。命令只指向整个位点；指向单个原子的请求先经 `target_sites` 换算，对称模式下只改部分等效原子会被拒绝并给出引导。界面、能力注册表（`mw-automation`）和以后的脚本调用的是同一批命令。
 
 ### 视口
 
@@ -93,6 +94,7 @@ cargo fmt --all
 - 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。
 - 按键上下文有两个：`Workbench`（外壳）和 `StructureWorkspace`（只在结构工作区内有效的快捷键）。
 - 处理器写在拥有该命令的视图上。按钮、快捷键和命令面板都派发同一个动作。
+- 撤销和重做是 `Undo` / `Redo`（⌘Z / ⇧⌘Z，绑定在 `StructureWorkspace` 上下文里；输入框更深的上下文里是撤销文字）。
 - 结构相关的命令加进 `mw_structure::palette_commands()`，外壳命令加进 `apps/workbench/src/palette.rs`；关键词写英文名和拼音。
 - 命令面板确认后，先关闭面板，把焦点还给原来的位置，再用 `window.defer` 派发动作。
 
@@ -123,7 +125,7 @@ cargo fmt --all
   - 模拟代码用 `Mock:` 开头的注释标出，`rg "Mock:"` 可以列出全部；
   - 用户能触发的未实现操作要调用 `not_implemented` 给出提示；
   - 替换掉模拟后，同步更新 `docs/architecture.md` 第 9 节的模拟表和第 10 节的里程碑状态。
-- **`screenshot` feature** 直接开启 `gpui-pre` 和 `gpui-pre-macos` 的 `test-support`。不要改成 GPUI Kit 自己的 `test-support`：它会引入一个依赖冲突的 GPUI 后端。
+- **`screenshot` feature** 直接开启 `gpui-pre` 和 `gpui-pre-macos` 的 `test-support`。不要改成 GPUI Kit 自己的 `test-support`：它会让 Cargo 解析可选的 GPUI Fast 后端，其 `cocoa` 版本与 GPUI 冲突。界面集成测试（`mw-structure/src/ui_tests.rs`，`#[gpui_kit::test]`）同样以 dev-dependency 直接开启 `gpui-pre` 的 `test-support`，所以用不了 `gpui_kit::test` 的交互辅助，改用 GPUI 的 `VisualTestContext`：聚焦字段、`simulate_input` 打字、`simulate_keystrokes` 按键。
 - **测试数据**放在使用它的 crate 的 `tests/fixtures/` 里，每个文件开头写明内容和来源；取自数据库的文件要注明条目号和许可。
 
 ## 交付与提交

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
+use mw_crystal::{CellParam, CellValues, Command, Edit, Measured, SiteId, Species};
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
 
@@ -106,6 +107,15 @@ fn point_at(workbench: &Workbench, actions: &'static [Pointer], window: &Window,
     });
 }
 
+/// Runs a command on the open structure, as its fields do.
+fn execute(workbench: &Workbench, command: Command, window: &mut Window, cx: &mut App) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| {
+            let _ = workspace.execute(command, window, cx);
+        });
+    }
+}
+
 /// Rutile atoms around the body-center Ti: two apical O and one equatorial O.
 const TI_CENTER: [f64; 3] = [0.5, 0.5, 0.5];
 const O_APICAL: [f64; 3] = [0.8048, 0.1952, 0.5];
@@ -162,13 +172,52 @@ const TOUR: &[(&str, Step)] = &[
         settings::set_language("zh-CN", cx);
         workbench.open_structure(StructureEntryId(3), window, cx);
     }),
-    ("10-supercell", |workbench, window, cx| {
+    // Editing SrTiO₃. The cell is cubic: a, b and c change together.
+    ("10-edit-cell", |workbench, window, cx| {
+        let values = CellValues::default().with(CellParam::A, 4.2);
+        execute(
+            workbench,
+            Command::Edit(Edit::SetCell { values }),
+            window,
+            cx,
+        );
+    }),
+    // The workspace opened on Sr1; the dialog adds an element to it.
+    ("11-add-occupant-dialog", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::AddMixedOccupant), cx)
+    }),
+    // Ba beside Sr: the occupancies add up to 1.3, and a warning says so.
+    ("12-mixed-occupancy", |workbench, window, cx| {
+        window.close_dialog(cx);
+        let edit = Edit::AddOccupant {
+            site: SiteId(1),
+            species: Species::element("Ba"),
+            occupancy: Measured::exact(0.3),
+            label: None,
+        };
+        execute(workbench, Command::Edit(edit), window, cx);
+    }),
+    // Ti1 has one atom in the cell, so deleting it deletes the site
+    // without asking; a notification names what went.
+    ("13-select-ti", |workbench, window, cx| {
+        point_at(workbench, &[Pointer::Click([0.5, 0.5, 0.5])], window, cx);
+    }),
+    ("14-delete-site", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::DeleteSelection), cx)
+    }),
+    // Undo the deletion, the occupant and the cell: SrTiO₃ as it was.
+    ("15-undo", |_, window, cx| {
+        for _ in 0..3 {
+            window.dispatch_action(Box::new(mw_structure::Undo), cx);
+        }
+    }),
+    ("16-supercell", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(2), window, cx);
     }),
     // Opening files goes through the same path as the file dialog and drops.
     // Several at once, as when dropping a selection: the first opens, the
     // rest join the "imported files" project.
-    ("11-import-files", |workbench, window, cx| {
+    ("17-import-files", |workbench, window, cx| {
         let files = [
             "bst_su_aniso.cif",
             "rutile.cif",
@@ -178,37 +227,37 @@ const TOUR: &[(&str, Step)] = &[
         workbench.import_paths(files.map(fixture).to_vec(), window, cx);
     }),
     // Entry 5 is the imported rutile, after the three samples and BST.
-    ("12-imported-rutile", |workbench, window, cx| {
+    ("18-imported-rutile", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(5), window, cx);
     }),
-    ("13-import-zincite", |workbench, window, cx| {
+    ("19-import-zincite", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
     }),
-    ("14-import-diagnostics", |_, window, cx| {
+    ("20-import-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
     // Sites snapped onto special positions, rows merged and dropped.
-    ("15-import-snapped", |workbench, window, cx| {
+    ("21-import-snapped", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("rutile_near_special.cif")], window, cx);
     }),
-    ("16-snapped-diagnostics", |_, window, cx| {
+    ("22-snapped-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
-    ("17-import-failed", |workbench, window, cx| {
+    ("23-import-failed", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("malformed.cif")], window, cx);
     }),
-    ("18-import-errors", |_, window, cx| {
+    ("24-import-errors", |_, window, cx| {
         OpenedFile::read(fixture("malformed.cif")).show_errors(window, cx);
     }),
-    ("19-settings", |_, window, cx| {
+    ("25-settings", |_, window, cx| {
         window.close_dialog(cx);
         settings::open(window, cx)
     }),
-    ("20-no-sidebar", |workbench, window, cx| {
+    ("26-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    ("21-empty", |workbench, window, cx| {
+    ("27-empty", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
         workbench.close_structure(window, cx);
     }),

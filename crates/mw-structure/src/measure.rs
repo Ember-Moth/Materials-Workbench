@@ -94,7 +94,7 @@ impl StructureWorkspace {
                     _ => None,
                 };
                 if let Some(measurement) = measurement {
-                    let _ = self.run(Command::AddMeasurement(measurement), window, cx);
+                    let _ = self.execute(Command::AddMeasurement(measurement), window, cx);
                 }
             }
         }
@@ -108,7 +108,7 @@ impl StructureWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = self.run(Command::RemoveMeasurement(measurement), window, cx);
+        let _ = self.execute(Command::RemoveMeasurement(measurement), window, cx);
     }
 
     /// The prompt shown over the viewport while measuring.

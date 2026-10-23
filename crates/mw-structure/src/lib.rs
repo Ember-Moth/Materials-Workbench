@@ -28,13 +28,15 @@ mod overlays;
 mod panel;
 mod scene;
 mod selection;
+#[cfg(test)]
+mod ui_tests;
 mod workspace;
 
 pub use actions::{
-    ClearSelection, ConvertToP1, DeleteSelection, ExportStructure, KEY_CONTEXT, MakeSupercell,
-    PaletteCommand, Redo, ResetView, ShowBallAndStick, ShowDiagnosticsPanel, ShowMeasurementsPanel,
-    ShowPolyhedra, ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling, ToggleMeasure,
-    TogglePanel, Undo, bind_keys, palette_commands,
+    AddMixedOccupant, ClearSelection, ConvertToP1, DeleteSelection, ExportStructure, KEY_CONTEXT,
+    MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick, ShowDiagnosticsPanel,
+    ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling,
+    ToggleMeasure, TogglePanel, Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use workspace::StructureWorkspace;

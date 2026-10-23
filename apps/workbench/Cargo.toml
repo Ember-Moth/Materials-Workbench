@@ -13,9 +13,11 @@ path = "src/main.rs"
 # MW_SCREENSHOT_DIR=out cargo run --bin materials-workbench --features screenshot
 # Turns on GPUI's test support directly: Kit's own `test-support` feature
 # also names an alternative GPUI backend whose dependencies conflict here.
-screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image"]
+screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image", "dep:mw-crystal"]
 
 [dependencies]
+# The screenshot tour edits a structure with domain commands.
+mw-crystal = { workspace = true, optional = true }
 mw-project.workspace = true
 mw-structure.workspace = true
 gpui-kit.workspace = true

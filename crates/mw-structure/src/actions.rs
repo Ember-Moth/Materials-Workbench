@@ -10,6 +10,7 @@ gpui_kit::actions!(
         ToggleMeasure,
         ClearSelection,
         DeleteSelection,
+        AddMixedOccupant,
         Undo,
         Redo,
         ConvertToP1,
@@ -102,6 +103,17 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             &["export", "cif", "poscar", "daochu"],
             Lucide::Download,
             Box::new(ExportStructure),
+        ),
+        command(
+            tr!("command.add_mixed_occupant"),
+            &[
+                "mixed occupancy",
+                "add occupant",
+                "hunhe zhanwei",
+                "tianjia zhanwei",
+            ],
+            Lucide::Plus,
+            Box::new(AddMixedOccupant),
         ),
         command(
             tr!("command.delete_selection"),

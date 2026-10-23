@@ -15,7 +15,7 @@ use mw_crystal::{
     SpaceGroupType,
 };
 
-use crate::actions::ConvertToP1;
+use crate::actions::{AddMixedOccupant, ConvertToP1};
 use crate::workspace::{PanelTab, StructureWorkspace};
 use crate::{dialogs, format};
 
@@ -49,6 +49,23 @@ pub(crate) fn space_group_name(number: u16, symbol: &str) -> SharedString {
         symbol = format::space_group(symbol),
         number = number
     )
+}
+
+/// The cell parameter as an identifier, e.g. `alpha`.
+fn param_id(param: CellParam) -> &'static str {
+    match param {
+        CellParam::A => "a",
+        CellParam::B => "b",
+        CellParam::C => "c",
+        CellParam::Alpha => "alpha",
+        CellParam::Beta => "beta",
+        CellParam::Gamma => "gamma",
+    }
+}
+
+/// A field's identity from what it edits, e.g. `cell-a` or `occupancy-Ti1`.
+pub(crate) fn field_id(kind: &str, name: &str) -> ElementId {
+    ElementId::Name(format!("{kind}-{name}").into())
 }
 
 /// How a field's constraint is shown next to its label.
@@ -199,12 +216,14 @@ impl StructureWorkspace {
                 field(
                     param_name(param).into(),
                     note,
-                    Input::new(&state).suffix(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(unit),
-                    ),
+                    Input::new(&state)
+                        .id(field_id("cell", param_id(param)))
+                        .suffix(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(unit),
+                        ),
                     cx,
                 )
             })
@@ -389,7 +408,8 @@ impl StructureWorkspace {
             field(
                 ["x", "y", "z"][axis].into(),
                 note,
-                Input::new(&self.coordinate_inputs[axis]),
+                Input::new(&self.coordinate_inputs[axis])
+                    .id(field_id("coordinate", ["x", "y", "z"][axis])),
                 cx,
             )
         };
@@ -417,16 +437,18 @@ impl StructureWorkspace {
                 .child(
                     div().flex_1().min_w_0().child(
                         Select::new(&editor.element)
+                            .id(field_id("element", &label))
                             .small()
                             .menu_max_h(rems(16.))
                             .search_placeholder(tr!("panel.site.search_element")),
                     ),
                 )
                 .child(
-                    div()
-                        .w_20()
-                        .flex_none()
-                        .child(Input::new(&editor.occupancy).small()),
+                    div().w_20().flex_none().child(
+                        Input::new(&editor.occupancy)
+                            .id(field_id("occupancy", &label))
+                            .small(),
+                    ),
                 )
                 .when(mixed, |row| {
                     row.child(
@@ -495,9 +517,8 @@ impl StructureWorkspace {
                     .small()
                     .icon(IconName::Plus)
                     .label(tr!("panel.site.add_occupant"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let entity = cx.entity();
-                        dialogs::open_add_occupant(this, entity, window, cx)
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(AddMixedOccupant), cx)
                     })),
             ),
         )

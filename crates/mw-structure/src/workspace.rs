@@ -562,6 +562,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::toggle_measure))
             .on_action(cx.listener(Self::clear_selection))
             .on_action(cx.listener(Self::delete_selection))
+            .on_action(cx.listener(Self::add_mixed_occupant))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::convert_to_p1))

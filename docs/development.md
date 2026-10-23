@@ -49,7 +49,7 @@ cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000
 VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 ```
 
-界面截图巡览：依次切换主界面、位点面板、在视口里点选原子（先拖动旋转，再单击、⇧ 单击、悬停，用的是真实的鼠标事件和拾取）、测量距离和键角、命令面板、删除对话框、深色模式、英文界面、其他示例结构，再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、吸附到特殊位置的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
+界面截图巡览：依次切换主界面、位点面板、在视口里点选原子（先拖动旋转，再单击、⇧ 单击、悬停，用的是真实的鼠标事件和拾取）、测量距离和键角、命令面板、删除对话框、深色模式、英文界面、其他示例结构，在 SrTiO₃ 上编辑（改晶胞参数、添加混合占位的对话框和结果、点选并删除位点、撤销回原样），再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、吸附到特殊位置的、导入失败的及其错误列表），最后是设置对话框、收起边栏和空状态，把每一步渲染成 PNG 后自动退出。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
 
 ```bash
 MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -146,7 +146,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
 | 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部能力放进一个严格请求也合规（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导 | `crates/mw-automation/tests/capabilities.rs` |
-| 界面集成测试 | 用 `#[gpui_kit::test]` 驱动真实组件 | 尚未添加，加入第一批编辑功能时开始写 |
+| 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、坐标编辑。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |
 

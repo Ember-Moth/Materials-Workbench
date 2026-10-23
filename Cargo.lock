@@ -4205,6 +4205,7 @@ name = "mw-structure"
 version = "0.0.0"
 dependencies = [
  "gpui-kit",
+ "gpui-pre",
  "mw-crystal",
  "mw-crystal-io",
  "mw-viewport",
@@ -8700,6 +8701,7 @@ dependencies = [
  "gpui-pre-macos",
  "image",
  "log",
+ "mw-crystal",
  "mw-project",
  "mw-structure",
  "rust-i18n",

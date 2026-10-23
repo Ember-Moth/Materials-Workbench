@@ -173,15 +173,20 @@ pub(crate) fn open_add_occupant(
                         div().flex_1().child(field(
                             tr!("panel.site.element"),
                             Select::new(&element)
+                                .id("add-occupant-element")
                                 .placeholder(tr!("dialog.add_occupant.choose_element"))
                                 .menu_max_h(rems(16.))
                                 .into_any_element(),
                         )),
                     )
-                    .child(div().w_32().child(field(
-                        tr!("panel.site.occupancy"),
-                        Input::new(&occupancy).into_any_element(),
-                    ))),
+                    .child(
+                        div().w_32().child(field(
+                            tr!("panel.site.occupancy"),
+                            Input::new(&occupancy)
+                                .id("add-occupant-occupancy")
+                                .into_any_element(),
+                        )),
+                    ),
             )
             .ok_text(tr!("dialog.add_occupant.ok"))
             .cancel_text(tr!("dialog.cancel"))

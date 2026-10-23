@@ -10,3 +10,10 @@ mw-crystal-io.workspace = true
 mw-viewport.workspace = true
 gpui-kit.workspace = true
 rust-i18n.workspace = true
+
+[dev-dependencies]
+# UI integration tests (`#[gpui_kit::test]`, `src/ui_tests.rs`) need GPUI's
+# test support. Turned on directly, as for the screenshot tour: Kit's own
+# `test-support` makes Cargo resolve the optional GPUI Fast backend, whose
+# `cocoa` pin conflicts with GPUI's.
+gpui-pre = { version = "=0.3.9", features = ["test-support"] }

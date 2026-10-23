@@ -11,7 +11,7 @@ use mw_crystal::{
     SiteId, Species, Structure,
 };
 
-use crate::actions::{DeleteSelection, Redo, Undo};
+use crate::actions::{AddMixedOccupant, DeleteSelection, Redo, Undo};
 use crate::workspace::StructureWorkspace;
 use crate::{dialogs, format};
 
@@ -130,8 +130,11 @@ pub(crate) fn parse_number(text: &str, window: &mut Window, cx: &mut App) -> Opt
 
 impl StructureWorkspace {
     /// Runs a command on the document as one undo step and updates the
-    /// view. A refused command changes nothing and says why.
-    pub(crate) fn run(
+    /// view: the fields, the scene, and the selection, which follows the
+    /// change. A refused command changes nothing and says why in a
+    /// notification. The entry point for everything that edits the open
+    /// structure, the interface's own fields included.
+    pub fn execute(
         &mut self,
         command: Command,
         window: &mut Window,
@@ -156,7 +159,7 @@ impl StructureWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Outcome, EditError> {
-        self.run(Command::Edit(edit), window, cx)
+        self.execute(Command::Edit(edit), window, cx)
     }
 
     /// Follows the selection and the atoms picked for a measurement through
@@ -198,6 +201,17 @@ impl StructureWorkspace {
             outcome.warnings.clear();
             self.after_change(&outcome, window, cx);
         }
+    }
+
+    /// Opens the dialog that adds an element to the selected site.
+    pub(crate) fn add_mixed_occupant(
+        &mut self,
+        _: &AddMixedOccupant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity = cx.entity();
+        dialogs::open_add_occupant(self, entity, window, cx);
     }
 
     /// Delete: whole sites go at once and can be undone. Some but not all
