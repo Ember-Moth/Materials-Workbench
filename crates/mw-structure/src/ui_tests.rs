@@ -29,6 +29,21 @@ fn open(
     cx: &mut TestAppContext,
     key: SampleKey,
 ) -> (Entity<StructureWorkspace>, VisualTestContext) {
+    open_document(cx, crate::document::tests::sample_document(key))
+}
+
+/// Opens a structure that is not a sample.
+fn open_structure(
+    cx: &mut TestAppContext,
+    structure: mw_crystal::Structure,
+) -> (Entity<StructureWorkspace>, VisualTestContext) {
+    open_document(cx, crate::document::tests::document_of(structure))
+}
+
+fn open_document(
+    cx: &mut TestAppContext,
+    document: crate::document::StructureDocument,
+) -> (Entity<StructureWorkspace>, VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::bind_keys(cx);
@@ -42,7 +57,6 @@ fn open(
     };
     let (window, workspace) = cx.update(|cx| {
         gpui_kit::open_window(options, cx, |window, cx| {
-            let document = crate::document::tests::sample_document(key);
             cx.new(|cx| StructureWorkspace::new(document, window, cx))
         })
         .expect("open a test window")
@@ -73,6 +87,16 @@ fn type_into(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str)
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input(text);
     cx.simulate_keystrokes("enter");
+    draw(cx);
+}
+
+/// Focuses a field and replaces its text without pressing Enter, which in a
+/// dialog confirms it.
+fn type_text(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str) {
+    cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
+    draw(cx);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input(text);
     draw(cx);
 }
 
@@ -986,4 +1010,169 @@ fn dragging_settles_into_a_full_frame(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(frames(&workspace, &mut cx), before + 4);
     assert!(viewport.read_with(&cx, |viewport, _| viewport.is_current()));
+}
+
+/// Rock salt in F m -3 m, conventional cell: 8 atoms.
+fn rock_salt() -> mw_crystal::Structure {
+    use mw_crystal::{CellParams, Lattice, Measured, Occupant, Site, Species, Structure, Symmetry};
+    let atom = |id: u32, label: &str, element: &str, position: [f64; 3]| {
+        let occupant = Occupant::new(label, Species::element(element), Measured::exact(1.0));
+        Site::new(SiteId(id), position, vec![occupant])
+    };
+    Structure::new(
+        Lattice::new(CellParams::new(5.64, 5.64, 5.64, 90.0, 90.0, 90.0)),
+        Symmetry::from_hm_symbol("F m -3 m").unwrap(),
+        vec![
+            atom(1, "Na1", "Na", [0.0, 0.0, 0.0]),
+            atom(2, "Cl1", "Cl", [0.5, 0.5, 0.5]),
+        ],
+    )
+}
+
+fn cell_dialog(
+    workspace: &Entity<StructureWorkspace>,
+    cx: &mut VisualTestContext,
+) -> Entity<crate::cell_dialog::CellDialog> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .cell_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.upgrade())
+            .expect("the cell dialog is open")
+    })
+}
+
+#[gpui_kit::test]
+fn transforming_the_cell(cx: &mut TestAppContext) {
+    use crate::cell_dialog::Choice;
+    use mw_crystal::CellPreset;
+
+    let (salt, mut cx) = open_structure(cx, rock_salt());
+    // A Cl atom on a face of the conventional cell is selected.
+    let cl = AtomRef::new(SiteId(2), 3, [0; 3]);
+    select(&salt, Selection::atom(cl), &mut cx);
+    let cartesian = |workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            let [Target::Atom(atom)] = workspace.selection.targets()[..] else {
+                panic!("one atom selected");
+            };
+            let x = workspace.document.derived().fractional(atom).unwrap();
+            workspace.document.structure().lattice.to_cartesian(x)
+        })
+    };
+    let before = cartesian(&salt, &mut cx);
+
+    // The dialog opens from the action on the primitive cell, its P in the
+    // fields and the atoms it would hold in the preview.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::TransformCell), cx));
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    let dialog = cell_dialog(&salt, &mut cx);
+    let (choice, atoms, p01, p00) = dialog.read_with(&cx, |dialog, cx| {
+        (
+            dialog.chosen_value(cx),
+            dialog.previewed_atoms(),
+            dialog.matrix[0][1].read(cx).value().to_string(),
+            dialog.matrix[0][0].read(cx).value().to_string(),
+        )
+    });
+    assert_eq!(choice, Some(Choice::Preset(CellPreset::Primitive)));
+    assert_eq!(atoms, Some(2));
+    assert_eq!((p00.as_str(), p01.as_str()), ("0", "1/2"));
+
+    // Typing a value of P makes the choice custom. One whose a′ is no
+    // translation of the crystal is refused in the preview, and Enter, which
+    // confirms the dialog, changes nothing and keeps it open.
+    let field = dialog.read_with(&cx, |dialog, _| dialog.matrix[0][0].clone());
+    type_text(&mut cx, &field, "1/4");
+    let (choice, refusal) = dialog.read_with(&cx, |dialog, cx| {
+        (dialog.chosen_value(cx), dialog.refusal())
+    });
+    assert_eq!(choice, Some(Choice::Custom));
+    assert!(refusal.is_some_and(|reason| reason.contains("a′")));
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    assert_eq!(steps(&salt, &mut cx), 0);
+
+    // Choosing the primitive cell again fills its P back; Enter makes one
+    // step, and the selected atom is the same atom of the new cell.
+    cx.update(|window, cx| {
+        dialog.update(cx, |dialog, cx| {
+            dialog.choose(Choice::Preset(CellPreset::Primitive), window, cx)
+        })
+    });
+    let p00 = dialog.read_with(&cx, |dialog, cx| {
+        dialog.matrix[0][0].read(cx).value().to_string()
+    });
+    assert_eq!(p00, "0");
+    type_text(&mut cx, &field, "0");
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+    assert_eq!(steps(&salt, &mut cx), 1);
+    let (operations, atoms) = salt.read_with(&cx, |workspace, _| {
+        let document = &workspace.document;
+        (
+            document.structure().symmetry.operations().len(),
+            document.derived().atoms_in_cell(),
+        )
+    });
+    assert_eq!((operations, atoms), (48, 2));
+    let after = cartesian(&salt, &mut cx);
+    for (a, b) in after.iter().zip(before) {
+        assert!((a - b).abs() < 1e-9, "{after:?} {before:?}");
+    }
+    assert_eq!(cell(&salt, CellParam::Alpha, &mut cx), 60.0);
+    // The cell field shows the new length.
+    let a = cell_input(&salt, CellParam::A, &mut cx);
+    assert_eq!(text(&a, &mut cx), "3.988");
+
+    // One undo puts the conventional cell and the selection back.
+    focus_workspace(&salt, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(cell(&salt, CellParam::Alpha, &mut cx), 90.0);
+    let selected = salt.read_with(&cx, |workspace, _| workspace.selection.targets());
+    assert_eq!(selected, [Target::Atom(cl)]);
+}
+
+#[gpui_kit::test]
+fn the_cell_dialog_offers_what_the_structure_has(cx: &mut TestAppContext) {
+    use crate::cell_dialog::Choice;
+    use mw_crystal::CellPreset;
+
+    // Rutile is primitive and in its standard setting: the dialog starts on
+    // the Niggli cell, the one change that does something, and Esc closes
+    // it.
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    focus_workspace(&rutile, &mut cx);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::TransformCell), cx));
+    draw(&mut cx);
+    let dialog = cell_dialog(&rutile, &mut cx);
+    let choice = dialog.read_with(&cx, |dialog, cx| dialog.chosen_value(cx));
+    assert_eq!(choice, Some(Choice::Preset(CellPreset::Niggli)));
+    // The custom choice starts from the fields as they are; the identity
+    // changes nothing.
+    cx.update(|window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.choose(Choice::Custom, window, cx))
+    });
+    for (i, row) in [["1", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]]
+        .iter()
+        .enumerate()
+    {
+        for (j, value) in row.iter().enumerate() {
+            let field = dialog.read_with(&cx, |dialog, _| dialog.matrix[i][j].clone());
+            type_text(&mut cx, &field, value);
+        }
+    }
+    let (atoms, refusal) = dialog.read_with(&cx, |dialog, _| {
+        (dialog.previewed_atoms(), dialog.refusal())
+    });
+    assert_eq!((atoms, refusal), (None, None));
+    // Enter with nothing to change closes the dialog and adds no step.
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+    assert_eq!(steps(&rutile, &mut cx), 0);
 }

@@ -17,7 +17,7 @@ use mw_crystal::{
 
 use mw_project_file::{Operation, Provenance};
 
-use crate::actions::{AddMixedOccupant, AddSite, ConvertToP1};
+use crate::actions::{AddMixedOccupant, AddSite, ConvertToP1, TransformCell};
 use crate::workspace::{PanelTab, StructureWorkspace};
 use crate::{dialogs, format};
 
@@ -334,13 +334,24 @@ impl StructureWorkspace {
             v_flex()
                 .gap_2()
                 .text_sm()
-                .child(row(
-                    tr!("panel.symmetry.space_group"),
-                    space_group.map_or_else(
-                        || tr!("panel.symmetry.space_group_unknown"),
-                        |sg: &SpaceGroupType| space_group_name(sg.number, sg.hm_symbol),
-                    ),
-                ))
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .child(row_label(tr!("panel.symmetry.space_group")))
+                        .child(div().flex_1().min_w_0().child(space_group.map_or_else(
+                            || tr!("panel.symmetry.space_group_unknown"),
+                            |sg: &SpaceGroupType| space_group_name(sg.number, sg.hm_symbol),
+                        )))
+                        .child(
+                            Button::new("transform-cell")
+                                .outline()
+                                .xsmall()
+                                .label(tr!("panel.symmetry.transform_cell"))
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    window.dispatch_action(Box::new(TransformCell), cx)
+                                })),
+                        ),
+                )
                 .children(setting.map(|setting| row(tr!("panel.symmetry.setting"), setting)))
                 .child(row(
                     tr!("panel.symmetry.operations"),

@@ -8,7 +8,8 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use mw_crystal::{
     AtomFate, Axis, CellParam, CellValues, Command, Edit, EditError, EditInfo, EditWarning,
-    Measured, Outcome, SiteId, Species, Structure, Target, expand_and_remove,
+    MAX_VOLUME_FACTOR, Measured, Outcome, SiteId, Species, Structure, Target, TransformError,
+    expand_and_remove,
 };
 
 use crate::actions::{AddMixedOccupant, AddSite, DeleteSelection, Redo, Undo};
@@ -51,6 +52,9 @@ pub(crate) fn command_name(command: &Command) -> SharedString {
             Edit::SetCoordinate { .. } => tr!("edit.command.set_coordinate"),
             Edit::AddSite { .. } => tr!("edit.command.add_site"),
             Edit::ExpandToP1 | Edit::RestoreStructure { .. } => tr!("edit.command.expand_to_p1"),
+            Edit::TransformCell { .. } | Edit::RestoreBasis { .. } => {
+                tr!("edit.command.transform_cell")
+            }
             // Batches delete several sites at once, or convert to P1 first.
             Edit::Batch { edits } if matches!(edits.first(), Some(Edit::ExpandToP1)) => {
                 tr!("edit.command.expand_and_remove")
@@ -115,8 +119,37 @@ pub(crate) fn error_text(error: &EditError, structure: &Structure) -> SharedStri
         EditError::CoincidentSite { site } => {
             tr!("edit.error.coincident_site", label = label(*site))
         }
+        EditError::Transform(error) => transform_error_text(error),
         // The rest name sites, atoms or measurements that the interface
         // only offers while they exist.
+        other => tr!("edit.error.other", reason = other.to_string()),
+    }
+}
+
+/// Why a change of cell does not fit the structure (design §7.8).
+fn transform_error_text(error: &TransformError) -> SharedString {
+    match error {
+        TransformError::NotPositive { determinant } if determinant.is_zero() => {
+            tr!("edit.error.transform_singular")
+        }
+        TransformError::NotPositive { determinant } => tr!(
+            "edit.error.transform_left_handed",
+            determinant = determinant.to_string()
+        ),
+        TransformError::Volume { determinant } => tr!(
+            "edit.error.transform_volume",
+            determinant = determinant.to_string(),
+            max = MAX_VOLUME_FACTOR
+        ),
+        TransformError::TooLarge => tr!("edit.error.transform_too_large"),
+        TransformError::NotATranslation { vector } => tr!(
+            "edit.error.transform_not_a_translation",
+            vector = ["a′", "b′", "c′"][(*vector).min(2)]
+        ),
+        TransformError::BreaksSymmetry { operation } => tr!(
+            "edit.error.transform_breaks_symmetry",
+            operation = operation.to_string()
+        ),
         other => tr!("edit.error.other", reason = other.to_string()),
     }
 }

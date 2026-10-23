@@ -147,7 +147,10 @@ pub(crate) mod tests {
     /// A document for a built-in sample, made from nothing in the
     /// application.
     pub(crate) fn sample_document(key: SampleKey) -> StructureDocument {
-        let structure = sample::load(key).structure;
+        document_of(sample::load(key).structure)
+    }
+
+    pub(crate) fn document_of(structure: mw_crystal::Structure) -> StructureDocument {
         StructureDocument::new(
             "Samples",
             "Test",

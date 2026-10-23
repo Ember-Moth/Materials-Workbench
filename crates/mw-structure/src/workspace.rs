@@ -14,7 +14,8 @@ use std::sync::Arc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use mw_crystal::{
-    AtomRef, CellParam, Checkpoint, CoordinateConstraint, EditMode, SiteId, Structure, element,
+    AtomRef, CellParam, CellPreset, CellTransform, Checkpoint, CoordinateConstraint, Edit,
+    EditMode, SiteId, Structure, element,
 };
 use mw_project_file::{
     Camera, DisplayModel as SavedDisplayModel, EntryView, PanelTab as SavedPanelTab, StructureFile,
@@ -22,6 +23,7 @@ use mw_project_file::{
 use mw_viewport::{CameraPose, Viewport};
 
 use crate::actions::*;
+use crate::cell_dialog::{self, CellDialog};
 use crate::document::StructureDocument;
 use crate::moving::AtomDrag;
 use crate::scene::{self, DisplayModel, LineColors};
@@ -124,6 +126,8 @@ pub struct StructureWorkspace {
     /// Whether the project has unsaved changes beyond this document's; the
     /// shell knows, since it saves projects.
     project_modified: bool,
+    /// The cell transform dialog last opened, while it is open.
+    pub(crate) cell_dialog: Option<WeakEntity<CellDialog>>,
     _subscriptions: Vec<Subscription>,
     _occupant_subscriptions: Vec<Subscription>,
 }
@@ -208,6 +212,7 @@ impl StructureWorkspace {
             editing_site: None,
             occupants: Vec::new(),
             project_modified: false,
+            cell_dialog: None,
             _subscriptions: subscriptions,
             _occupant_subscriptions: Vec::new(),
         };
@@ -514,6 +519,46 @@ impl StructureWorkspace {
         dialogs::open_convert_to_p1(self, entity, window, cx);
     }
 
+    fn open_transform_cell(
+        &mut self,
+        _: &TransformCell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity = cx.entity();
+        let dialog = cell_dialog::open(self, entity, window, cx);
+        self.cell_dialog = Some(dialog.downgrade());
+    }
+
+    /// Describes the structure in another cell (crystallography design
+    /// §7.8), as one undo step; the selection and the measurements follow
+    /// the atoms. `false` when the change was refused, which a notification
+    /// explains.
+    pub fn transform_cell(
+        &mut self,
+        transform: CellTransform,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.edit(Edit::TransformCell { transform }, window, cx)
+            .is_ok()
+    }
+
+    /// Changes to the cell a preset gives, as choosing it in the dialog and
+    /// confirming does. `false` when the structure offers no such change or
+    /// it was refused.
+    pub fn transform_cell_to(
+        &mut self,
+        preset: CellPreset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match preset.transform(self.document.structure()) {
+            Some(transform) => self.transform_cell(transform, window, cx),
+            None => false,
+        }
+    }
+
     fn make_supercell(&mut self, _: &MakeSupercell, window: &mut Window, cx: &mut Context<Self>) {
         let entity = cx.entity();
         dialogs::open_supercell(self, entity, window, cx);
@@ -786,6 +831,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::convert_to_p1))
+            .on_action(cx.listener(Self::open_transform_cell))
             .on_action(cx.listener(Self::make_supercell))
             .on_action(cx.listener(Self::export))
             .on_action(cx.listener(Self::show_ball_and_stick))
