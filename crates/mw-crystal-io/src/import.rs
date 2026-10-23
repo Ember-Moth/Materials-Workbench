@@ -11,7 +11,7 @@
 //! Finally the space group type is identified from the operations and
 //! checked against the name the file gives and against the cell.
 //!
-//! Mock: unrecognized fields are not kept for export yet (M5).
+//! The fields this module does not read are kept for export by `kept`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::PI;
@@ -745,10 +745,15 @@ fn read_sites(
         }
 
         let mut position = [0.0; 3];
-        for (coordinate, tag) in position.iter_mut().zip(&required[1..]) {
+        let mut position_su = [None; 3];
+        for ((coordinate, su), tag) in position
+            .iter_mut()
+            .zip(&mut position_su)
+            .zip(&required[1..])
+        {
             let value = table.get(row, tag).expect("required");
             match number(value, tag, diagnostics) {
-                Ok(Some(m)) => *coordinate = m.value(),
+                Ok(Some(m)) => (*coordinate, *su) = (m.value(), m.su()),
                 Ok(None) => {
                     valid = false;
                     diagnostics.push(Diagnostic::at(
@@ -860,7 +865,7 @@ fn read_sites(
 
         labels.insert(label.clone());
         let id = SiteId(sites.len() as u32 + 1);
-        let mut site = Site::new(id, position, vec![occupant]);
+        let mut site = Site::new(id, position, vec![occupant]).with_position_su(position_su);
         let text = |tag: &str| {
             table
                 .get(row, tag)

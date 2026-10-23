@@ -83,6 +83,14 @@ impl SpaceGroupType {
         CrystalSystem::of(self.number)
     }
 
+    /// The Hall symbol of the operations, e.g. `-P 4n 2n`; `None` for
+    /// [`Setting::Transformed`], whose operations no tabulated symbol names.
+    pub fn hall_symbol(&self) -> Option<&'static str> {
+        self.to_table
+            .is_none()
+            .then(|| tables::setting(self.hall_number).hall_symbol)
+    }
+
     /// The Wyckoff position of a point whose site-symmetry group has
     /// `order` operations. Among the tabulated positions with the matching
     /// multiplicity, the one whose coordinate triplet holds an image of the
@@ -341,6 +349,7 @@ mod tests {
         );
         assert_eq!(sg.setting, Setting::Standard);
         assert_eq!(sg.crystal_system(), CrystalSystem::Tetragonal);
+        assert_eq!(sg.hall_symbol(), Some("-P 4n 2n"));
 
         let p21a = group(&["-x+1/2,-y,z+1/2", "-x,-y,-z"]);
         let sg = SpaceGroupType::identify(&p21a, &monoclinic()).unwrap();
@@ -357,6 +366,7 @@ mod tests {
         let shifted = group(&["-x,y+1/2,-z+1/2", "-x+1/2,-y+1/2,-z+1/2"]);
         let sg = SpaceGroupType::identify(&shifted, &monoclinic()).unwrap();
         assert_eq!((sg.number, sg.setting.clone()), (14, Setting::Transformed));
+        assert_eq!(sg.hall_symbol(), None);
 
         // I4/mmm in a face-centered cell twice the size.
         let f4mmm = group(&[

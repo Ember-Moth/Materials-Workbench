@@ -369,9 +369,6 @@ feature:
   polyhedra:
     en: Polyhedra
     zh-CN: 多面体显示
-  export:
-    en: Export
-    zh-CN: 导出
   symmetrize:
     en: Symmetrizing
     zh-CN: 对称化
@@ -659,6 +656,69 @@ diagnostic:
     short_contact:
       en: "Atoms of %{a} and %{b} are only %{distance} Å apart."
       zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance} Å。"
+export:
+  title:
+    en: "Export “%{name}”"
+    zh-CN: "导出“%{name}”"
+  format:
+    cif:
+      label:
+        en: CIF
+        zh-CN: CIF
+      description:
+        en: Keeps the operations, sites, occupancies and ADPs
+        zh-CN: 保留对称操作、位点、占位率和 ADP
+    poscar:
+      label:
+        en: POSCAR (VASP 5)
+        zh-CN: POSCAR（VASP 5）
+      description:
+        en: Expanded to P1, fractional coordinates
+        zh-CN: 展开为 P1，分数坐标
+    xyz:
+      label:
+        en: Extended XYZ
+        zh-CN: 扩展 XYZ
+      description:
+        en: Expanded to P1, Cartesian coordinates with the cell
+        zh-CN: 展开为 P1，笛卡尔坐标，含晶胞
+  unavailable:
+    partial:
+      en: "Partially occupied (%{labels}); order the structure first"
+      zh-CN: "部分占位（%{labels}），需要先有序化"
+    unknown_element:
+      en: "Unknown element (%{labels}); this format needs element symbols"
+      zh-CN: "元素未知（%{labels}），这种格式需要元素符号"
+    no_atoms:
+      en: The structure has no atoms
+      zh-CN: 结构里没有原子
+  list_separator:
+    en: ", "
+    zh-CN: "、"
+  more_labels:
+    en: "%{labels} and %{more} more"
+    zh-CN: "%{labels} 等 %{total} 个位点"
+  save:
+    en: Export…
+    zh-CN: 导出…
+  done:
+    en: "Exported to %{file}."
+    zh-CN: "已导出到 %{file}。"
+  done_dropped:
+    en: "Exported to %{file}. The structure has changed, so %{count} unrecognized fields of the source file were left out: %{tags}."
+    zh-CN: "已导出到 %{file}。结构改动过，源文件中 %{count} 个未识别的字段没有写入：%{tags}。"
+  failed:
+    en: "Couldn't write %{file}: %{reason}"
+    zh-CN: "无法写入 %{file}：%{reason}"
+  panel_unavailable:
+    en: "Couldn't open the save dialog: %{reason}"
+    zh-CN: "无法打开保存对话框：%{reason}"
+  reveal_in_finder:
+    en: Show in Finder
+    zh-CN: 在访达中显示
+  reveal_in_folder:
+    en: Show in folder
+    zh-CN: 在文件夹中显示
 import:
   unsupported:
     en: "Couldn't open %{file}: only CIF files are supported so far."

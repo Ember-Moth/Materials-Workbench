@@ -352,7 +352,7 @@ impl StructureWorkspace {
     }
 
     fn export(&mut self, _: &ExportStructure, window: &mut Window, cx: &mut Context<Self>) {
-        dialogs::not_implemented(tr!("feature.export"), window, cx);
+        self.open_export(window, cx);
     }
 
     fn show_ball_and_stick(
