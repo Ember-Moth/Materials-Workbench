@@ -134,6 +134,41 @@ fn select(
     focus_workspace(workspace, cx);
 }
 
+/// How many atoms the 3D view rings as selected, and whether the image on
+/// screen is the last frame drawn (so it shows those rings).
+fn ringed(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) -> (usize, bool) {
+    workspace.read_with(cx, |workspace, cx| {
+        let viewport = workspace.viewport.read(cx);
+        (viewport.selection().len(), viewport.is_current())
+    })
+}
+
+// An edit replaces the scene and then restores the selection rings, which
+// submits two frames back to back. They finish on background threads in
+// either order; the rings went missing when the older frame finished last
+// and replaced the newer one. Several seeds let the test scheduler run them
+// in both orders.
+#[gpui_kit::test(iterations = 20)]
+fn the_selection_stays_ringed_through_edits(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    // SrTiO₃ opens on Sr1, shown as the 8 corners of the cell.
+    let selected = workspace.read_with(&cx, |workspace, _| workspace.selected_site());
+    assert_eq!(selected, Some(SiteId(1)));
+    assert_eq!(ringed(&workspace, &mut cx), (8, true));
+
+    let a = cell_input(&workspace, CellParam::A, &mut cx);
+    type_into(&mut cx, &a, "4.2");
+    assert_eq!(cell(&workspace, CellParam::A, &mut cx), 4.2);
+    let selected = workspace.read_with(&cx, |workspace, _| workspace.selected_site());
+    assert_eq!(selected, Some(SiteId(1)));
+    assert_eq!(ringed(&workspace, &mut cx), (8, true));
+
+    focus_workspace(&workspace, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(ringed(&workspace, &mut cx), (8, true));
+}
+
 #[gpui_kit::test]
 fn typed_cell_parameters_follow_the_symmetry_and_undo(cx: &mut TestAppContext) {
     let (workspace, mut cx) = open(cx, SampleKey::Rutile);

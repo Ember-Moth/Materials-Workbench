@@ -104,6 +104,10 @@ pub struct Viewport {
     colors: Option<Colors>,
     in_flight: usize,
     needs_render: bool,
+    /// Frames submitted so far; each frame's number is its index.
+    submitted: u64,
+    /// The number of the frame `image` holds.
+    shown: Option<u64>,
     image: Option<Arc<RenderImage>>,
     /// Images replaced since the last paint; paint removes them from GPUI's
     /// sprite atlas so it does not grow by one image per frame.
@@ -139,6 +143,8 @@ impl Viewport {
             colors: None,
             in_flight: 0,
             needs_render: false,
+            submitted: 0,
+            shown: None,
             image: None,
             retired: Rc::default(),
             press: None,
@@ -187,6 +193,17 @@ impl Viewport {
             self.framed = true;
             self.reset_camera(cx);
         }
+    }
+
+    /// Spheres of the current scene that show the selection ring.
+    pub fn selection(&self) -> &[usize] {
+        &self.selected
+    }
+
+    /// Whether the image on screen is the last frame submitted and no frame
+    /// is pending, so it shows the current scene, camera and highlights.
+    pub fn is_current(&self) -> bool {
+        !self.needs_render && self.in_flight == 0 && self.shown == self.submitted.checked_sub(1)
     }
 
     /// Spheres of the current scene that show the selection ring.
@@ -497,9 +514,11 @@ impl Viewport {
             Ok(pending) => {
                 self.needs_render = false;
                 self.in_flight += 1;
+                let number = self.submitted;
+                self.submitted += 1;
                 cx.spawn(async move |this, cx| {
                     let frame = cx.background_spawn(async move { pending.wait() }).await;
-                    this.update(cx, |viewport, cx| viewport.finish_frame(frame, cx))
+                    this.update(cx, |viewport, cx| viewport.finish_frame(number, frame, cx))
                         .ok();
                 })
                 .detach();
@@ -513,14 +532,25 @@ impl Viewport {
         }
     }
 
-    fn finish_frame(&mut self, frame: Result<FrameImage, RenderError>, cx: &mut Context<Self>) {
+    fn finish_frame(
+        &mut self,
+        number: u64,
+        frame: Result<FrameImage, RenderError>,
+        cx: &mut Context<Self>,
+    ) {
         self.in_flight -= 1;
         match frame {
+            // Frames finish on background threads in any order. One older
+            // than the image on screen is out of date: showing it would undo
+            // the newer frame, e.g. drop the rings an edit's second frame
+            // brought back.
+            Ok(_) if self.shown.is_some_and(|shown| number < shown) => {}
             Ok(frame) => {
                 if let Some(buffer) =
                     image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
                 {
                     let image = Arc::new(RenderImage::new([image::Frame::new(buffer)]));
+                    self.shown = Some(number);
                     if let Some(old) = self.image.replace(image) {
                         self.retired.borrow_mut().push(old);
                     }
