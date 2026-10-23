@@ -455,6 +455,33 @@ pub(crate) fn search_atoms(
     })
 }
 
+/// The symmetry moyo finds for atoms, with the change of cell into the
+/// standard setting of its type (design §7.10).
+pub(crate) struct Found {
+    /// The standard setting of the type.
+    pub setting: &'static Setting,
+    /// `(P, p)` from the given cell to the conventional cell of `setting`:
+    /// coordinates there are `P⁻¹·(x − p)`. P is exact up to rounding; p
+    /// holds wherever the atoms put the origin.
+    pub transform: Transform,
+}
+
+/// Searches the symmetry of atoms as [`search_atoms`] does, and gives the
+/// change of cell into its standard setting.
+pub(crate) fn find_symmetry(
+    basis: [[f64; 3]; 3],
+    positions: &[[f64; 3]],
+    species: &[i32],
+    symprec: f64,
+) -> Option<Found> {
+    let dataset = dataset(basis, positions, species, symprec)?;
+    let transform = Transform::new(dataset.std_linear, dataset.std_origin_shift_as_array())?;
+    Some(Found {
+        setting: setting(dataset.hall_number as u16),
+        transform,
+    })
+}
+
 fn dataset(
     basis: [[f64; 3]; 3],
     positions: &[[f64; 3]],

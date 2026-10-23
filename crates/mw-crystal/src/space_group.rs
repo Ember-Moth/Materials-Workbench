@@ -270,7 +270,7 @@ pub struct DetectedSymmetry {
 }
 
 /// Searches the symmetry of the atoms, telling apart sites by their
-/// occupants, with the structure's `symprec`.
+/// occupants and disorder groups, with the structure's `symprec`.
 pub fn detect_symmetry(structure: &Structure, orbits: &[Orbit]) -> Option<DetectedSymmetry> {
     // A left-handed lattice holds the mirror image of what its coordinates
     // describe on a right-handed basis: searching at −x tells apart
@@ -286,12 +286,7 @@ pub fn detect_symmetry(structure: &Structure, orbits: &[Orbit]) -> Option<Detect
     let mut first_atoms = Vec::new();
     for orbit in orbits {
         let site = structure.site(orbit.site)?;
-        let kind = site
-            .occupants
-            .iter()
-            .map(|o| format!("{}:{:.3}", o.species.element, o.occupancy.value()))
-            .collect::<Vec<_>>()
-            .join(",");
+        let kind = crate::symmetrize::kind_key(site);
         let number = match kinds.iter().position(|k| *k == kind) {
             Some(i) => i,
             None => {

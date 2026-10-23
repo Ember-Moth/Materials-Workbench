@@ -4,8 +4,9 @@
 
 use mw_crystal::{
     AtomRef, Axis, CellParam, CellPreset, CellTransform, CellValues, Constraint,
-    CoordinateConstraint, CrystalDocument, Edit, EditError, EditMode, Formula, Measured,
-    Measurement, Outcome, Rational, Setting, SiteId, SpaceGroupType, Species, Structure, Target,
+    CoordinateConstraint, CrystalDocument, DetectSymmetry, Edit, EditError, EditMode, Formula,
+    Measured, Measurement, Outcome, Rational, Setting, SiteId, SpaceGroupType, Species, Structure,
+    Symmetrization, Target,
 };
 
 use crate::registry::{
@@ -487,6 +488,63 @@ schema_struct! {
 }
 
 schema_struct! {
+    pub struct SymmetrizeInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// Å: how far an atom may be from its symmetric image and still count
+        /// as on it. 0 for the structure's own tolerance, 0.01 Å unless set
+        /// otherwise.
+        pub tolerance: f64,
+        /// True to describe the result in the conventional cell of the
+        /// standard setting; false to keep the structure's cell.
+        pub standardize: bool,
+    }
+}
+
+schema_struct! {
+    pub struct SymmetrizationOutput {
+        /// The space group type of the atoms' symmetry.
+        pub detected: DetectedOutput,
+        /// The type of the symmetrized structure's operations: the detected
+        /// type, or a subgroup of it when the kept cell cannot hold all of
+        /// it (a 2a × a × a cell of a cubic crystal; standardizing gives all
+        /// of it). Null if identification failed.
+        pub space_group: Option<SpaceGroupOutput>,
+        /// Sites of the symmetrized asymmetric unit.
+        pub sites: usize,
+        /// Atoms in the symmetrized unit cell.
+        pub atoms_in_cell: usize,
+        /// Symmetry operations, including centering translations.
+        pub operations: usize,
+        /// Å: the largest distance an atom moves, the change of the cell
+        /// included and a shift of the origin not.
+        pub max_displacement: f64,
+        /// The label of the site whose atoms move most; empty when none
+        /// moves.
+        pub moved_most: String,
+        /// Whether the result is described in another cell.
+        pub cell_changed: bool,
+        /// Whether the cell lies differently in Cartesian space.
+        pub orientation_changed: bool,
+        /// Å: how far the origin moves; 0 when it stays.
+        pub origin_shift: f64,
+        /// The symmetrized cell.
+        pub cell: CellOutput,
+    }
+}
+
+schema_struct! {
+    pub struct SymmetrizeOutput {
+        /// False when nothing changed.
+        pub changed: bool,
+        /// The document's revision after the call; it counts changes.
+        pub revision: u64,
+        /// What symmetrizing did.
+        pub result: SymmetrizationOutput,
+    }
+}
+
+schema_struct! {
     pub struct WarningOutput {
         /// Stable, e.g. occupancy_sum or short_contact.
         pub code: String,
@@ -739,6 +797,83 @@ fn cell_transform(
             _ => "change of cell to that setting",
         })
     })
+}
+
+/// The symmetry search a call asks for (crystallography design §7.10).
+fn detect_symmetry(
+    structure: &Structure,
+    input: &SymmetrizeInput,
+) -> Result<DetectSymmetry, CallError> {
+    if !(input.tolerance.is_finite() && input.tolerance >= 0.0) {
+        return Err(invalid("tolerance must be a positive number of Å, or 0"));
+    }
+    Ok(DetectSymmetry {
+        symprec: if input.tolerance == 0.0 {
+            structure.tolerances.symprec
+        } else {
+            input.tolerance
+        },
+        standardize: input.standardize,
+    })
+}
+
+fn symmetrization(result: &Symmetrization) -> SymmetrizationOutput {
+    let document = CrystalDocument::new(result.structure.clone());
+    let structure = document.structure();
+    SymmetrizationOutput {
+        detected: DetectedOutput {
+            number: result.detected_number,
+            symbol: result.detected_symbol.into(),
+        },
+        space_group: result.space_group.as_ref().map(space_group),
+        sites: structure.sites.len(),
+        atoms_in_cell: document.derived().atoms_in_cell(),
+        operations: structure.symmetry.operations().len(),
+        max_displacement: result.max_displacement,
+        moved_most: result
+            .moved_most
+            .map_or_else(String::new, |site| label(structure, site)),
+        cell_changed: result.cell_changed,
+        orientation_changed: result.orientation_changed,
+        origin_shift: result.origin_shift,
+        cell: cell(&document),
+    }
+}
+
+/// E.g. `P m -3 m (No. 221): 3 sites, 5 atoms in the cell; atoms move at
+/// most 0.0040 Å (O1); the cell stays.`
+fn symmetrization_text(output: &SymmetrizationOutput) -> String {
+    let group = output.space_group.as_ref().map_or_else(
+        || "an unidentified space group".to_string(),
+        |sg| format!("{} (No. {})", sg.symbol, sg.number),
+    );
+    let subgroup = match &output.space_group {
+        Some(sg) if sg.number != output.detected.number => format!(
+            ", a subgroup of the detected {} (No. {}) that the cell can hold",
+            output.detected.symbol, output.detected.number
+        ),
+        _ => String::new(),
+    };
+    let moved = if output.moved_most.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", output.moved_most)
+    };
+    let cell_change = if output.cell_changed {
+        format!("the cell becomes {}", cell_text(&output.cell))
+    } else {
+        "the cell stays".into()
+    };
+    let origin = if output.origin_shift > 0.0 {
+        format!("; the origin moves {:.4} Å", output.origin_shift)
+    } else {
+        String::new()
+    };
+    format!(
+        "{group}{subgroup}: {} sites, {} atoms in the cell; atoms move at most {:.4} Å{moved}; \
+         {cell_change}{origin}.",
+        output.sites, output.atoms_in_cell, output.max_displacement
+    )
 }
 
 fn space_group(space_group: &SpaceGroupType) -> SpaceGroupOutput {
@@ -1013,6 +1148,31 @@ pub(crate) fn register(registry: &mut Registry) {
                     )),
                 symmetry.form
             );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        query(
+            "structure.detect_symmetry",
+            "Find the symmetry the structure's atoms have, which can be higher than its own \
+             operations (a structure written out in P1, a supercell), and preview symmetrizing \
+             by it: every atom averaged onto its symmetric position, equivalent atoms merged \
+             into one site, occupancies and displacement parameters averaged. Gives the space \
+             group type found, the result's space group, sites and atoms, the largest distance \
+             an atom moves, and whether the cell, its orientation or the origin change. Atoms of \
+             different elements, occupancies or disorder groups are never equivalent. Keeps the \
+             cell, or with standardize uses the conventional cell of the standard setting. \
+             Nothing changes.",
+        ),
+        |host: &mut dyn Host, input: SymmetrizeInput| {
+            let document = document(host, input.structure)?;
+            let detect = detect_symmetry(document.structure(), &input)?;
+            let result = detect
+                .run(document.structure())
+                .map_err(EditError::Symmetrize)?;
+            let output = symmetrization(&result);
+            let summary = format!("Symmetrizing gives {}", symmetrization_text(&output));
             Ok(Output::new(output, summary))
         },
     );
@@ -1463,6 +1623,44 @@ pub(crate) fn register(registry: &mut Registry) {
                 )
             } else {
                 "Nothing changed: the structure already is in that cell.".into()
+            };
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.symmetrize",
+            "Symmetrize the structure by the symmetry its atoms have, as \
+             structure.detect_symmetry previews it: the operations found within the tolerance, \
+             every atom averaged onto its symmetric position, equivalent atoms merged into one \
+             site (it keeps the label of its first atom, or O1 for O1_1, O1_2, …), occupancies \
+             and displacement parameters averaged, the cell parameters made to fit. Keeps the \
+             cell, or with standardize uses the conventional cell of the standard setting. \
+             Refused when the atoms have no more symmetry than the structure \
+             (symmetrize_no_higher_symmetry); another tolerance may help with \
+             symmetrize_not_found or symmetrize_mismatch. Atom references and measurements follow \
+             the atoms to the nearest atom. Undoable.",
+        ),
+        |host: &mut dyn Host, input: SymmetrizeInput| {
+            let document = document_mut(host, input.structure)?;
+            let detect = detect_symmetry(document.structure(), &input)?;
+            let result = detect
+                .run(document.structure())
+                .map_err(EditError::Symmetrize)?;
+            let outcome = document.edit(Edit::Symmetrize {
+                symprec: (input.tolerance != 0.0).then_some(input.tolerance),
+                standardize: input.standardize,
+            })?;
+            let output = SymmetrizeOutput {
+                changed: outcome.changed,
+                revision: document.revision(),
+                result: symmetrization(&result),
+            };
+            let summary = if output.changed {
+                format!("Symmetrized: {}", symmetrization_text(&output.result))
+            } else {
+                "Nothing changed: the structure already was symmetric.".into()
             };
             Ok(Output::new(output, summary))
         },

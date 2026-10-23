@@ -14,8 +14,9 @@ use crate::constraints::cell_constraints;
 use crate::placement::{self, Placement};
 use crate::{
     AtomFate, AtomRef, Axis, CellParam, CellParams, CellTransform, Constraint,
-    CoordinateConstraint, Derived, EditMode, IdMap, Measured, Occupant, Site, SiteFate, SiteId,
-    Species, Structure, TransformError, element, expand, special_position, transform,
+    CoordinateConstraint, Derived, DetectSymmetry, EditMode, IdMap, Measured, Occupant,
+    PositionMap, Site, SiteFate, SiteId, Species, Structure, SymmetrizeError, TransformError,
+    element, expand, special_position, transform,
 };
 
 /// How far the occupancies of one site may add up above 1 before an edit
@@ -188,6 +189,28 @@ pub enum Edit {
     /// it.
     RestoreBasis {
         transform: CellTransform,
+        structure: Box<Structure>,
+    },
+    /// Symmetrizes the structure by the symmetry its atoms have (design
+    /// §7.10): the operations moyo finds within `symprec` Å (the
+    /// structure's own tolerance when `None`), every atom averaged onto its
+    /// symmetric position and the equivalent atoms merged into one site,
+    /// occupancies and displacement parameters averaged too. The cell is
+    /// kept, or with `standardize` the result is in the conventional cell
+    /// of the standard setting. References to atoms follow them to the
+    /// nearest atom.
+    Symmetrize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        symprec: Option<f64>,
+        #[serde(default)]
+        standardize: bool,
+    },
+    /// Puts back a whole structure, the inverse of [`Edit::Symmetrize`]:
+    /// `mapping` takes fractional coordinates of the current structure to
+    /// those of the restored one, and references to atoms follow them to
+    /// the nearest atom there.
+    RestoreAtoms {
+        mapping: PositionMap,
         structure: Box<Structure>,
     },
 }
@@ -408,6 +431,8 @@ pub enum EditError {
     AlreadyP1,
     /// The change of cell does not fit the structure (design §7.8).
     Transform(TransformError),
+    /// The structure cannot be symmetrized (design §7.10).
+    Symmetrize(SymmetrizeError),
 }
 
 impl EditError {
@@ -448,6 +473,7 @@ impl EditError {
             Self::RepeatedAtom(_) => "repeated_atom",
             Self::AlreadyP1 => "already_p1",
             Self::Transform(error) => error.code(),
+            Self::Symmetrize(error) => error.code(),
         }
     }
 }
@@ -544,6 +570,7 @@ impl fmt::Display for EditError {
             ),
             Self::AlreadyP1 => f.write_str("the structure is in P1 already"),
             Self::Transform(error) => error.fmt(f),
+            Self::Symmetrize(error) => error.fmt(f),
         }
     }
 }
@@ -932,6 +959,42 @@ impl Edit {
                 let old = std::mem::replace(structure, Structure::clone(restored));
                 let inverse = Self::RestoreBasis {
                     transform: forward,
+                    structure: Box::new(old),
+                };
+                (inverse, ids)
+            }
+            Self::Symmetrize {
+                symprec,
+                standardize,
+            } => {
+                let detect = DetectSymmetry {
+                    symprec: symprec.unwrap_or(structure.tolerances.symprec),
+                    standardize: *standardize,
+                };
+                let result = detect.run(structure).map_err(EditError::Symmetrize)?;
+                let ids = result.ids(structure);
+                let back = result
+                    .mapping
+                    .inverse()
+                    .ok_or(EditError::Symmetrize(SymmetrizeError::TooLarge))?;
+                let old = std::mem::replace(structure, result.structure);
+                let inverse = Self::RestoreAtoms {
+                    mapping: back,
+                    structure: Box::new(old),
+                };
+                (inverse, ids)
+            }
+            Self::RestoreAtoms {
+                mapping,
+                structure: restored,
+            } => {
+                let back = mapping
+                    .inverse()
+                    .ok_or(EditError::Symmetrize(SymmetrizeError::TooLarge))?;
+                let ids = IdMap::relocated(structure, restored, *mapping);
+                let old = std::mem::replace(structure, Structure::clone(restored));
+                let inverse = Self::RestoreAtoms {
+                    mapping: back,
                     structure: Box::new(old),
                 };
                 (inverse, ids)

@@ -89,13 +89,14 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 27 个能力（M8 加了 `structure.transform_cell`）：
+- `Registry::standard()` 注册了 29 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`）：
   - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
   - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
   - 结构编辑：`structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`；
   - 对称模式下的几何编辑（M7，晶体学设计稿 7.4–7.6 节）：`structure.move_site`（拖动一个原子，分数位移，`leave_special_position` 决定是否投影到约束子空间）、`structure.set_coordinate`（`axis` 为 `"x"`/`"y"`/`"z"`，跟随坐标联动，常数坐标返回 `fixed_coordinate`）、`structure.add_site`（元素、分数坐标、占位率，吸附到特殊位置；重合时返回 `coincident_site`，引导 `{"kind": "add_occupant", "site": …}`）。`structure.set_position` 在对称模式下也可用，位点取新位置的位点对称性；
   - 晶胞变换（M8，晶体学设计稿 7.8 节）：`structure.transform_cell`，`cell` 取 `primitive`、`conventional`、`niggli`、`setting`（`setting` 给出 H-M 符号，如 `P 1 1 21/a`、`R -3 c :R`）或 `matrix`（`matrix` 是 P 的三行分数文本，`origin` 是 p，空数组表示原点不动）；不用的字段给空字符串或空数组。结果有变换的 ITA 写法（如 `c, b, -a; 0, 0, 0`）、P 和 p、新的空间群设定、晶胞参数、晶胞内原子数和操作数。拒绝时返回 `transform_not_positive`、`transform_volume`、`transform_not_a_translation`、`transform_breaks_symmetry`、`transform_too_large`，名称不对时 `invalid_arguments`，别的类型的设定 `other_type`，moyo 给不出时 `no_transformation`；
+  - 对称性检测与对称化（M9，晶体学设计稿 7.10 节）：只读的 `structure.detect_symmetry` 给出对称化的预览而不改结构：检测到的空间群类型、结果的空间群（保持的晶胞容纳不下全部对称性时是子群）、位点数、晶胞内原子数、操作数、原子的最大位移和移动最大的位点、是否换晶胞或转朝向、原点移了多远、结果的晶胞；可撤销的 `structure.symmetrize` 执行同样的对称化，输出 `changed`、`revision` 和同一份预览（`result`）。输入相同：`tolerance`（Å，0 表示用结构自己的容差，因为输入不用可空类型）和 `standardize`。拒绝时返回 `symmetrize_no_higher_symmetry`、`symmetrize_not_found`、`symmetrize_mismatch`、`symmetrize_position_tolerance`、`symmetrize_too_large`、`symmetrize_no_atoms`，容差为负时 `invalid_arguments`。只读的那个的说明不提 `structure.symmetrize`：MCP Server 不提供编辑工具，提了只会让客户端去找不存在的工具；
   - `history.undo`、`history.redo`。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
@@ -112,7 +113,7 @@ Capability
   - `structure.diagnostics`：结构导入时的诊断，分页；每条有严重程度、稳定代码（如 `atom.snapped`）、源文件行号和英文说明。英文说明由 `diagnostic_message` 生成，写在 `mw-automation` 里，因为它是给模型看的；界面仍用 `mw-structure/src/diagnostics.rs` 的本地化文案。不是从文件来的结构（例如示例）没有诊断。
   - `structure.export`：把结构写成 CIF、POSCAR 或扩展 XYZ 文本并返回，不写文件，所以副作用等级是只读（第 5.2 节）。写法与界面的导出对话框相同：导入的结构写 CIF 时写回源文件的字段，POSCAR 的注释行是"结构名 · 项目名"；部分占位、未知元素被拒绝时返回 `partial_occupancy`、`unknown_element`，前者提示改用 CIF。文本超过 1 MiB 时拒绝（`too_large`），这已远超模型一次能读的量，写大文件属于 v0.3 的写文件能力。
   - 为此新增的接口都是只加不改：`mw-automation` 依赖 `mw-crystal-io`；`Host` 新增带默认实现（返回 `None`）的 `source`，给出结构导入自的数据块；`Documents` 新增 `add_imported`；`CallResult` 新增 `new`（它是 `#[non_exhaustive]`，给注册表之外的入口构造结果用）。
-  - 原型时注册表有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。M7 加了三个几何编辑能力、M11 加了四个项目能力、M8 加了晶胞变换后是 27 个，已超过上限：测试改为检查只读能力（MCP Server 提供的那些）能放进一个严格请求，全部能力每 20 个一组。内置助手要按任务挑选工具子集，不能把全部能力放进一个请求。
+  - 原型时注册表有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。M7 加了三个几何编辑能力、M11 加了四个项目能力、M8 加了晶胞变换后是 27 个，M9 加了对称化的两个后是 29 个，已超过上限：测试改为检查只读能力（MCP Server 提供的那些）能放进一个严格请求，全部能力每 20 个一组。内置助手要按任务挑选工具子集，不能把全部能力放进一个请求。
 
 ## 5. MCP Server（`mw-mcp`）
 
@@ -141,7 +142,7 @@ Capability
 
 **v0.2 连接运行中的应用（M12，2026-10-23，`crates/mw-mcp`、外壳）**：
 
-- **同一个 `Server`，宿主在两处**：`Server::new(host)` 自己持有宿主（无界面的 `Headless`），每次调用在阻塞线程池里拿着它的锁执行，读文件和对称性分析不占协议处理的线程；`Server::dispatching(access, dispatcher)` 的宿主在另一个线程上，每次调用打包成一个 `Call`，经 `Dispatcher` 交给宿主的线程，那里从 `Calls` 里逐个取出、在自己的宿主上运行，结果经单次通道送回（`src/dispatch.rs`）。处理函数 panic 时照旧返回 `internal_error`；宿主的线程不在了（应用退出），调用返回 `unavailable`。交给应用的服务器有窗口：没有 `file_open`，是 12 个工具；服务器说明（`instructions`）也换成"连接到用户打开着的应用"的版本，说 `structure_open` 会在窗口里显示结构。协议处理仍只有一份，转发进程不懂 MCP。
+- **同一个 `Server`，宿主在两处**：`Server::new(host)` 自己持有宿主（无界面的 `Headless`），每次调用在阻塞线程池里拿着它的锁执行，读文件和对称性分析不占协议处理的线程；`Server::dispatching(access, dispatcher)` 的宿主在另一个线程上，每次调用打包成一个 `Call`，经 `Dispatcher` 交给宿主的线程，那里从 `Calls` 里逐个取出、在自己的宿主上运行，结果经单次通道送回（`src/dispatch.rs`）。处理函数 panic 时照旧返回 `internal_error`；宿主的线程不在了（应用退出），调用返回 `unavailable`。交给应用的服务器有窗口：没有 `file_open`，是 13 个工具（M12 时 12 个，M9 加了 `structure_detect_symmetry`）；服务器说明（`instructions`）也换成"连接到用户打开着的应用"的版本，说 `structure_open` 会在窗口里显示结构。协议处理仍只有一份，转发进程不懂 MCP。
 - **通道**（`src/endpoint.rs`、`src/listen.rs`）：
   - **位置**：当前用户运行目录下的 `materials-workbench/`。macOS 是系统给出的用户临时目录（`confstr(_CS_DARWIN_USER_TEMP_DIR)`，即 `$TMPDIR` 所指的目录，但不依赖这个环境变量：有的客户端启动服务器时不传环境变量），Linux 是 `$XDG_RUNTIME_DIR`，没有时用 systemd 的 `/run/user/<uid>`，Windows 是本地应用数据目录；都找不到时用配置目录里的 `run/`。设置了 `MW_CONFIG_DIR` 时是其中的 `run/`，开发、测试和截图巡览的实例互不干扰。目录里是 Unix 域套接字 `mcp.sock`（Windows 上是命名管道 `\\.\pipe\materials-workbench-<目录路径 SHA-256 的前 16 位>`）和令牌文件 `mcp.token`。套接字路径超过系统上限（macOS 103 字节，Linux 107 字节）时不监听，错误里说明。
   - **权限**：目录 0700；已存在而别人能进入时收回权限，属于别的用户时拒绝监听。套接字和令牌文件 0600，令牌经新建的 0600 临时文件写入再改名。两端用 `peer_cred` 确认对方进程属于同一用户；转发进程连接前还检查目录是这个用户的、别人进不去。Windows 的管道用 `first_pipe_instance`（名字已被占用时不监听；应用占住名字之后，别的程序就开不了同名的管道）和 `reject_remote_clients`，令牌文件靠本地应用数据目录继承的权限。
@@ -168,8 +169,8 @@ Capability
 | 分组 | 示例 | 副作用 | 版本 |
 |---|---|---|---|
 | 项目 | `project.list`、`project.open`、`structure.list`、`structure.open`、`file.import` | 读；导入为可撤销写入 | v0.2–v0.3 |
-| 结构查询 | `structure.summary`（化学式、晶胞、空间群、位点）、`structure.sites`、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`、`structure.diagnostics` | 只读 | v0.2 |
-| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.transform_cell`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
+| 结构查询 | `structure.summary`（化学式、晶胞、空间群、位点）、`structure.sites`、`structure.site_symmetry`、`structure.detect_symmetry`（对称化的预览，M9）、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`、`structure.diagnostics` | 只读 | v0.2 |
+| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.transform_cell`、`structure.symmetrize`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
 | 导出 | `structure.export`（CIF / POSCAR / XYZ 文本，或写入文件） | 返回文本为只读；写文件为外部副作用 | v0.2（文本）、v0.3（文件） |
 | 视图（仅连接应用时） | `view.select`、`view.set_display_model`、`view.reset`、`view.snapshot`（返回视口图片，供多模态模型"看"结构） | 不改数据 | v0.3 |
 | XRD | `xrd.simulate`、`xrd.import`、`xrd.find_peaks`、`xrd.match_phases`、`xrd.compare` | 计算为只读；导入为写入 | v0.4 |
@@ -193,7 +194,7 @@ Capability
 
 **M11 暴露的工具**（`mw-mcp`）：
 
-- 无界面时共 13 个，连接应用时没有 `file_open`，是 12 个（M12）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。
+- 无界面时共 14 个，连接应用时没有 `file_open`，是 13 个（M12；M9 加了 `structure_detect_symmetry`）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_detect_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。
 - **工具名**把注册表名称里的 `.` 换成 `_`（`structure.summary` → `structure_summary`）。MCP 允许点号，但不少客户端把工具名原样交给模型 API，而两家都不允许点号（6.2.6 节）。测试确认换名后互不重复。说明、Schema 描述、摘要和错误消息里提到的注册表名称（如"structure.list gives the ids"）一并换成工具名。
 - **注解**：`readOnlyHint: true`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`。`outputSchema` 就是注册表的输出 Schema，输入、输出都在 6.2.6 节的严格子集内（集成测试再查一遍）。
 - **结果**：第一块文本是英文摘要，第二块是输出的 JSON 文本，`structuredContent` 是同一份 JSON（规范要求带结构化内容的工具同时给出序列化的 JSON 文本）。失败时返回 `isError: true` 的工具结果，文本是 `{"code", "message", "guidance"}`，模型可以据此修正调用；只有调用不存在的工具才是协议错误。处理函数 panic 时返回 `internal_error`，不让请求悬空。
@@ -561,7 +562,7 @@ provider 层负责把下面这些差异转换成项目自己的对话类型：
 | 版本 | 内容 | 依赖 |
 |---|---|---|
 | v0.1（随 M4） | 建立能力注册表的基本结构；领域命令可序列化，GPUI 动作改为调用领域命令。已实现，见第 4 节 | M4 命令层 |
-| v0.2 | 实验性 MCP Server：项目与结构的只读工具、导出 CIF / POSCAR 文本、结构资源；支持无界面和连接应用两种模式，都已实现。原型（2026-10-22）之后，M11（2026-10-23，见 5.1、5.2 节）让它读项目文件并并入主程序：`materials-workbench mcp`，stdio，只读；项目工具 `project_list`（含配置目录里的最近项目）、`project_open`、`structure_list`、`structure_open`，项目之外的 CIF 用 `file_open`，共 13 个只读工具；资源 URI 用项目文件里的 ID。M12（2026-10-23，5.1 节）连接运行中的应用：设置里打开后应用在用户运行目录的 Unix 域套接字（Windows 为命名管道）上监听，令牌文件只有用户能读；`materials-workbench mcp` 找到它就在 stdio 和通道之间原样转发，找不到就无界面运行；应用里跑同一个 `Server`，调用派发到主线程，列出和打开的是窗口里的项目和结构，12 个只读工具。`file.import` 评估后留到 v0.3（5.2 节）。测试：`mw-mcp` 的集成测试经 stdio 驱动独立的 `mw-mcp`，通道和转发另有单元测试；应用的 `tests/mcp.rs` 驱动 `materials-workbench mcp`，从配置目录的最近项目走到导出和读资源，以及转接到测试里的监听端；外壳的界面集成测试经 `Server` 调用应用端的宿主。MCP Inspector 2.12.0 只检查过原型。还没做：用 Inspector 重查、在 Claude Code 和 Claude Desktop 里实测、在 Windows 上运行 | M1、M2、M6 |
+| v0.2 | 实验性 MCP Server：项目与结构的只读工具、导出 CIF / POSCAR 文本、结构资源；支持无界面和连接应用两种模式，都已实现。原型（2026-10-22）之后，M11（2026-10-23，见 5.1、5.2 节）让它读项目文件并并入主程序：`materials-workbench mcp`，stdio，只读；项目工具 `project_list`（含配置目录里的最近项目）、`project_open`、`structure_list`、`structure_open`，项目之外的 CIF 用 `file_open`，共 13 个只读工具；资源 URI 用项目文件里的 ID。M12（2026-10-23，5.1 节）连接运行中的应用：设置里打开后应用在用户运行目录的 Unix 域套接字（Windows 为命名管道）上监听，令牌文件只有用户能读；`materials-workbench mcp` 找到它就在 stdio 和通道之间原样转发，找不到就无界面运行；应用里跑同一个 `Server`，调用派发到主线程，列出和打开的是窗口里的项目和结构，12 个只读工具。`file.import` 评估后留到 v0.3（5.2 节）。M9（2026-10-23）加了只读的 `structure_detect_symmetry`（对称化的预览），之后无界面 14 个、连接应用 13 个只读工具。测试：`mw-mcp` 的集成测试经 stdio 驱动独立的 `mw-mcp`，通道和转发另有单元测试；应用的 `tests/mcp.rs` 驱动 `materials-workbench mcp`，从配置目录的最近项目走到导出和读资源，以及转接到测试里的监听端；外壳的界面集成测试经 `Server` 调用应用端的宿主。MCP Inspector 2.12.0 只检查过原型。还没做：用 Inspector 重查、在 Claude Code 和 Claude Desktop 里实测、在 Windows 上运行 | M1、M2、M6 |
 | v0.3 | 完整 MCP：编辑工具、写文件、视图工具、权限设置、审计日志、elicitation；与 Python 绑定、命令行一同发布 | M4–M6 |
 | v0.4 | 内置助手第一版：Claude 与 OpenAI 两类接口（含兼容服务）、工具调用卡片、确认交互、会话撤销；首个重点场景是 XRD 物相分析与结构问答。本地端点可以连接，但标为实验性 | v0.3 的权限与审计 |
 | v0.5–v0.6 | 热力学、显微组织模块发布时一并提供各自的能力（"完成"的定义里包含 MCP 工具和评测任务） | 各模块 |

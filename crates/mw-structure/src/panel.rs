@@ -17,9 +17,9 @@ use mw_crystal::{
 
 use mw_project_file::{Operation, Provenance};
 
-use crate::actions::{AddMixedOccupant, AddSite, ConvertToP1, TransformCell};
+use crate::actions::{AddMixedOccupant, AddSite, ConvertToP1, Symmetrize, TransformCell};
+use crate::format;
 use crate::workspace::{PanelTab, StructureWorkspace};
-use crate::{dialogs, format};
 
 /// What the cell section says about an explicit orientation (crystallography
 /// design §4.2); nothing for the standard one.
@@ -384,9 +384,6 @@ impl StructureWorkspace {
                                         window.dispatch_action(Box::new(ConvertToP1), cx)
                                     })),
                             ),
-                            // Mock: the detected symmetry is real; the
-                            // Symmetrize command it leads to is v0.2
-                            // (design §7.10).
                             EditMode::P1 => this.when(detected.is_some(), |this| {
                                 this.child(
                                     Button::new("symmetrize")
@@ -394,11 +391,7 @@ impl StructureWorkspace {
                                         .xsmall()
                                         .label(tr!("panel.symmetry.symmetrize"))
                                         .on_click(cx.listener(|_, _, window, cx| {
-                                            dialogs::not_implemented(
-                                                tr!("feature.symmetrize"),
-                                                window,
-                                                cx,
-                                            )
+                                            window.dispatch_action(Box::new(Symmetrize), cx)
                                         })),
                                 )
                             }),

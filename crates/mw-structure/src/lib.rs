@@ -35,6 +35,7 @@ mod overlays;
 mod panel;
 mod scene;
 mod selection;
+mod symmetrize_dialog;
 #[cfg(test)]
 mod ui_tests;
 mod workspace;
@@ -43,8 +44,8 @@ pub use actions::{
     AddMixedOccupant, AddSite, ClearSelection, ConvertToP1, DeleteSelection, ExportStructure,
     KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
     ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel,
-    ShowSitesPanel, ShowSpaceFilling, ToggleMeasure, ToggleMoveAtoms, TogglePanel, TransformCell,
-    Undo, bind_keys, palette_commands,
+    ShowSitesPanel, ShowSpaceFilling, Symmetrize, ToggleMeasure, ToggleMoveAtoms, TogglePanel,
+    TransformCell, Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell};

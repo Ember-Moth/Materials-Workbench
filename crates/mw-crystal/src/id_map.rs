@@ -2,8 +2,12 @@
 //! refer to (design §7.11).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use crate::{AtomRef, SiteId};
+use serde::{Deserialize, Serialize};
+
+use crate::lattice::norm;
+use crate::{AtomRef, SiteId, Structure, expand};
 
 /// How an edit changed one site, as far as references to it are concerned.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,6 +28,110 @@ pub enum SiteFate {
     /// The cell changed (`TransformCell`): the site's atoms are the same,
     /// with new member numbers and cells.
     Rebased(Box<Rebasing>),
+    /// The structure was replaced by one with other sites (`Symmetrize`
+    /// and its inverse): each of the site's atoms, at `before` (its orbit
+    /// members in [0, 1)), is now the nearest atom of the new structure,
+    /// and the new sites whose atoms are nearest to its atoms are `sites`.
+    Relocated {
+        before: Vec<[f64; 3]>,
+        sites: Vec<SiteId>,
+        to: Arc<Relocation>,
+    },
+}
+
+/// An affine map of fractional coordinates, `x' = linear·x + shift`: where
+/// a position in one cell lies in another (design §7.10, §7.11).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PositionMap {
+    /// `linear[i][j]` is the entry in row i, column j.
+    linear: [[f64; 3]; 3],
+    shift: [f64; 3],
+}
+
+impl PositionMap {
+    pub const IDENTITY: PositionMap = PositionMap {
+        linear: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        shift: [0.0; 3],
+    };
+
+    pub(crate) fn new(linear: [[f64; 3]; 3], shift: [f64; 3]) -> Self {
+        Self { linear, shift }
+    }
+
+    pub fn apply(&self, x: [f64; 3]) -> [f64; 3] {
+        [0, 1, 2].map(|i| (0..3).map(|j| self.linear[i][j] * x[j]).sum::<f64>() + self.shift[i])
+    }
+
+    /// This map followed by `next`.
+    pub(crate) fn then(&self, next: &PositionMap) -> PositionMap {
+        let linear = [0, 1, 2].map(|i| {
+            [0, 1, 2].map(|j| (0..3).map(|k| next.linear[i][k] * self.linear[k][j]).sum())
+        });
+        let moved = next.apply(self.shift);
+        PositionMap {
+            linear,
+            shift: moved,
+        }
+    }
+
+    /// The map back; `None` when the linear part is singular.
+    pub fn inverse(&self) -> Option<PositionMap> {
+        let inverse = nalgebra::Matrix3::from_fn(|i, j| self.linear[i][j]).try_inverse()?;
+        let linear = [0, 1, 2].map(|i| [0, 1, 2].map(|j| inverse[(i, j)]));
+        let shift = [0, 1, 2].map(|i| -(0..3).map(|j| linear[i][j] * self.shift[j]).sum::<f64>());
+        Some(PositionMap { linear, shift })
+    }
+}
+
+/// The atoms of a structure that replaced another, for finding where the
+/// old atoms went (design §7.11, "`Symmetrize`: by nearest atom").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Relocation {
+    /// From the old structure's fractional coordinates to the new one's.
+    map: PositionMap,
+    /// The new cell's metric tensor, Å².
+    metric: [[f64; 3]; 3],
+    /// Every orbit member of the new structure, in [0, 1).
+    atoms: Vec<(SiteId, u16, [f64; 3])>,
+}
+
+impl Relocation {
+    /// The atom of the new structure nearest to where the old atom at `x`
+    /// (old fractional coordinates, its cell included) lies.
+    fn nearest(&self, x: [f64; 3]) -> Option<AtomRef> {
+        nearest(&self.atoms, &self.metric, self.map.apply(x))
+    }
+}
+
+/// Of `atoms` (orbit members in [0, 1)), the one nearest to `x` under the
+/// metric, with the cell it is in.
+fn nearest(
+    atoms: &[(SiteId, u16, [f64; 3])],
+    metric: &[[f64; 3]; 3],
+    x: [f64; 3],
+) -> Option<AtomRef> {
+    let mut best: Option<(f64, AtomRef)> = None;
+    for &(site, member, position) in atoms {
+        let d = [0, 1, 2].map(|i| x[i] - position[i]);
+        let cell = d.map(f64::round);
+        let distance = norm(metric, [0, 1, 2].map(|i| d[i] - cell[i]));
+        if best.is_none_or(|(nearest, _)| distance < nearest) {
+            let atom = AtomRef::new(site, member, cell.map(|v| v as i32));
+            best = Some((distance, atom));
+        }
+    }
+    best.map(|(_, atom)| atom)
+}
+
+/// Every orbit member of a structure, in [0, 1).
+fn members(structure: &Structure) -> Vec<(SiteId, u16, [f64; 3])> {
+    let mut atoms = Vec::new();
+    for site in &structure.sites {
+        for (member, (_, position)) in expand::members(structure, site).into_iter().enumerate() {
+            atoms.push((site.id, member as u16, position));
+        }
+    }
+    atoms
 }
 
 /// How the atoms of one site are numbered after a change of cell: an atom
@@ -116,6 +224,53 @@ impl IdMap {
         Self::single(fates.into_iter().collect())
     }
 
+    /// `before` replaced by `after`, whose fractional coordinates `map`
+    /// gives for `before`'s: every atom becomes the nearest atom of `after`.
+    pub(crate) fn relocated(before: &Structure, after: &Structure, map: PositionMap) -> Self {
+        let old_atoms = members(before);
+        let to = Arc::new(Relocation {
+            map,
+            metric: after.lattice.params().metric(),
+            atoms: members(after),
+        });
+        // The new sites that hold a site's atoms: every new atom belongs to
+        // the old site of the old atom nearest to it, so a whole site of a
+        // smaller cell takes all its atoms of the larger one.
+        let mut sites: BTreeMap<SiteId, Vec<SiteId>> = BTreeMap::new();
+        let mut add = |old: SiteId, new: SiteId| {
+            let list = sites.entry(old).or_default();
+            if !list.contains(&new) {
+                list.push(new);
+            }
+        };
+        let old_metric = before.lattice.params().metric();
+        if let Some(back) = map.inverse() {
+            for &(site, _, position) in &to.atoms {
+                if let Some(old) = nearest(&old_atoms, &old_metric, back.apply(position)) {
+                    add(old.site, site);
+                }
+            }
+        }
+        for &(site, _, position) in &old_atoms {
+            if let Some(new) = to.nearest(position) {
+                add(site, new.site);
+            }
+        }
+        Self::with_fates(before.sites.iter().map(|site| {
+            let before = old_atoms
+                .iter()
+                .filter(|(id, _, _)| *id == site.id)
+                .map(|(_, _, position)| *position)
+                .collect();
+            let fate = SiteFate::Relocated {
+                before,
+                sites: sites.remove(&site.id).unwrap_or_default(),
+                to: to.clone(),
+            };
+            (site.id, fate)
+        }))
+    }
+
     /// Whether every reference stays valid.
     pub fn is_identity(&self) -> bool {
         self.steps.is_empty()
@@ -133,9 +288,11 @@ impl IdMap {
                     Some(SiteFate::Removed) => Vec::new(),
                     Some(SiteFate::Split(sites)) => sites.clone(),
                     Some(SiteFate::Merged { site, .. }) => vec![*site],
+                    Some(SiteFate::Relocated { sites, .. }) => sites.clone(),
                 })
                 .collect();
-            current.dedup();
+            let mut seen = std::collections::BTreeSet::new();
+            current.retain(|site| seen.insert(*site));
         }
         current
     }
@@ -161,6 +318,12 @@ impl IdMap {
                         Some(atom) => AtomFate::Kept(atom),
                         None => AtomFate::Site(atom.site),
                     },
+                    Some(SiteFate::Relocated { before, to, .. }) => {
+                        let found = before.get(usize::from(atom.member)).and_then(|base| {
+                            to.nearest([0, 1, 2].map(|i| base[i] + f64::from(atom.cell[i])))
+                        });
+                        found.map_or(AtomFate::Removed, AtomFate::Kept)
+                    }
                 },
                 // A reference already reduced to its site follows the site;
                 // of a split site it keeps the first part.
@@ -171,6 +334,10 @@ impl IdMap {
                         .first()
                         .map_or(AtomFate::Removed, |s| AtomFate::Site(*s)),
                     Some(SiteFate::Merged { site, .. }) => AtomFate::Site(*site),
+                    Some(SiteFate::Relocated { before, to, .. }) => before
+                        .first()
+                        .and_then(|x| to.nearest(*x))
+                        .map_or(AtomFate::Removed, |atom| AtomFate::Site(atom.site)),
                 },
             };
         }

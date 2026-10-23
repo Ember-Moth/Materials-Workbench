@@ -741,7 +741,7 @@ fn rotations(structure: &Structure) -> Vec<[[i32; 3]; 3]> {
 ///    keep the new operations, which covers the translations of every
 ///    space group's normalizer; along a polar axis, where any shift keeps
 ///    them, it is 0.
-fn canonical(
+pub(crate) fn canonical(
     structure: &Structure,
     transform: CellTransform,
     target: &crate::Symmetry,
@@ -1548,6 +1548,20 @@ mod tests {
         let tall = apply(&oriented, double).unwrap();
         assert_eq!(tall.lattice.orientation(), oriented.lattice.orientation());
         assert!(same_crystal(&tall, &oriented, [0.0; 3]));
+        // One that turns two axes around turns the cell, not the atoms.
+        let around = transform(
+            [["-1", "0", "0"], ["0", "-1", "0"], ["0", "0", "1"]],
+            ["0"; 3],
+        );
+        for structure in [rutile(), oriented] {
+            let turned = apply(&structure, around).unwrap();
+            assert_ne!(
+                turned.lattice.orientation(),
+                structure.lattice.orientation()
+            );
+            assert_eq!(turned.lattice.params(), structure.lattice.params());
+            assert!(same_crystal(&turned, &structure, [0.0; 3]));
+        }
     }
 
     #[test]

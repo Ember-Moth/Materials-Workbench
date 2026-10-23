@@ -37,6 +37,18 @@ pub(crate) fn cell_param(param: mw_crystal::CellParam, value: f64) -> String {
     }
 }
 
+/// Tolerances in Å with up to four decimals and no trailing zeros, e.g.
+/// `0.01`.
+pub(crate) fn tolerance(value: f64) -> String {
+    coordinate(value)
+}
+
+/// How far symmetrizing moves atoms, in Å without the unit: small, so four
+/// decimals, e.g. `0.0040`.
+pub(crate) fn shift(value: f64) -> String {
+    format!("{value:.4}")
+}
+
 pub(crate) fn occupancy(value: f64) -> String {
     format!("{value:.3}")
 }
