@@ -1,6 +1,6 @@
 # 晶体学模块：数据模型与编辑语义
 
-> 状态：设计稿；M1–M4 和 M5b 已实现（M4 是 7.2、7.11、7.12 节的编辑命令与撤销，M5b 是 7.1、7.9 节的转为 P1 与超胞，各节有实现说明） · 2026-10-22
+> 状态：设计稿；M1–M4、M5b 和 M10 已实现（M4 是 7.2、7.11、7.12 节的编辑命令与撤销，M5b 是 7.1、7.9 节的转为 P1 与超胞，M10 是 4.2 节的晶格朝向和 9.3 节的 POSCAR 导入，各节有实现说明） · 2026-10-23
 > 范围：`mw-crystal`（模型、派生数据、编辑命令），以及它与 `mw-project`、`mw-crystal-render` 的边界。
 > 文中的类型定义只是结构示意，不是实现。
 > 相关：[3D 视口：技术选型与 GPUI 集成](viewport-rendering.md)（渲染器边界、拾取、标注绘制）· [AI 集成](ai-integration.md)（MCP 和内置助手调用 7.12 节的命令）
@@ -520,7 +520,7 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 - 支持缩放因子，负值表示目标体积。
 - 读取 VASP 5 的元素行；VASP 4 没有元素行时，要求用户指定元素。
 - Direct 和 Cartesian 坐标都支持；selective dynamics 标志在 v0.x 中忽略，并给出警告。
-- 结果为 P1 结构，`orientation = Explicit`。
+- 结果为 P1 结构，晶格朝向从基矢反算（4.2 节）：不在标准朝向的为 `Explicit`，按标准朝向写的为 `Standard`。
 
 M10 的实现（`mw-crystal-io/src/poscar_read.rs`，`poscar::read` / `read_str` / `read_with_elements`）：
 
@@ -570,7 +570,7 @@ M5 实现了扩展 XYZ 的导出（`mw-crystal-io/src/xyz.rs`）：一帧，第�
 | 版本 | 内容 |
 |---|---|
 | v0.1 | 完整模型（含对称操作、混合占位、ADP 保留）；CIF 导入；派生数据；查看与测量；POSCAR / 扩展 XYZ 导出；对称模式下的非几何编辑（`SetCellParams`、`SetSpecies`、占位编辑、`RemoveSite`、`RenameLabel`）；`ExpandToP1` 和 P1 模式下的自由编辑；`MakeSupercell` |
-| v0.2 | 对称模式下的几何编辑（`MoveSite`、`SetCoordinate`、`AddSite` 及特殊位置吸附）；`DetectSymmetry` / `Symmetrize`；`TransformCell` |
+| v0.2 | 对称模式下的几何编辑（`MoveSite`、`SetCoordinate`、`AddSite` 及特殊位置吸附）；`DetectSymmetry` / `Symmetrize`；`TransformCell`；POSCAR 导入与晶格的显式朝向（M10，已实现） |
 | 之后 | 降到子群的对称性编辑、ADP 编辑、CIF 2.0、mCIF |
 
 ## 11. 待决策
