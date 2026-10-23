@@ -1,7 +1,6 @@
 //! Dialogs for structure commands: the choices when a deletion would break
-//! the symmetry (design §7.1) and adding a mixed occupant. Converting to P1
-//! and making supercells show their final wording, but their confirm
-//! buttons only report that the operation is not implemented yet (M5).
+//! the symmetry (design §7.1), adding a mixed occupant, converting to P1
+//! and making a supercell (design §7.9).
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
@@ -9,7 +8,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
-use mw_crystal::{EditError, EditMode, SiteId};
+use mw_crystal::{EditError, EditMode, SiteId, Target};
 
 use crate::workspace::{StructureWorkspace, element_picker};
 use crate::{editing, format};
@@ -30,6 +29,7 @@ pub(crate) fn open_partial_delete(
     entity: Entity<StructureWorkspace>,
     error: &EditError,
     sites: Vec<SiteId>,
+    targets: Vec<Target>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -61,7 +61,9 @@ pub(crate) fn open_partial_delete(
     };
     window.open_alert_dialog(cx, move |dialog, _, _| {
         let entity = entity.clone();
+        let one_entity = entity.clone();
         let sites = sites.clone();
+        let targets = targets.clone();
         // The selection can touch several sites; the texts then name them
         // all, as the deletion takes them all.
         let (title, description, one) = match &labels[..] {
@@ -106,16 +108,14 @@ pub(crate) fn open_partial_delete(
                             });
                         }),
                 )
-                .child(
-                    Button::new("delete-one")
-                        .primary()
-                        .label(one)
-                        .on_click(|_, window, cx| {
-                            window.close_dialog(cx);
-                            // Mock: converting to P1 is M5.
-                            not_implemented(tr!("feature.convert_to_p1"), window, cx);
-                        }),
-                ),
+                .child(Button::new("delete-one").primary().label(one).on_click(
+                    move |_, window, cx| {
+                        window.close_dialog(cx);
+                        one_entity.update(cx, |workspace, cx| {
+                            workspace.delete_after_expanding(targets.clone(), window, cx)
+                        });
+                    },
+                )),
         )
     });
 }
@@ -212,6 +212,7 @@ pub(crate) fn open_add_occupant(
 
 pub(crate) fn open_convert_to_p1(
     workspace: &StructureWorkspace,
+    entity: Entity<StructureWorkspace>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -233,24 +234,122 @@ pub(crate) fn open_convert_to_p1(
             .ok_text(tr!("dialog.convert.ok"))
             .cancel_text(tr!("dialog.cancel"))
             .show_cancel(true)
-            .on_ok(|_, window, cx| {
-                not_implemented(tr!("feature.convert_to_p1"), window, cx);
-                true
+            .on_ok({
+                let entity = entity.clone();
+                move |_, window, cx| {
+                    entity.update(cx, |workspace, cx| workspace.expand_to_p1(window, cx));
+                    true
+                }
             })
     });
 }
 
-pub(crate) fn open_supercell(workspace: &StructureWorkspace, window: &mut Window, cx: &mut App) {
+/// The largest repeat along one axis the supercell dialog accepts.
+const MAX_REPEAT: i32 = 20;
+/// Supercells with more atoms are slow to show; the dialog says so.
+const LARGE_SUPERCELL: usize = 100_000;
+
+/// Asks how many times to repeat the cell along a, b and c, then makes the
+/// supercell as a new structure (design §7.9). The matrix is diagonal; the
+/// command takes any integer matrix.
+pub(crate) fn open_supercell(
+    workspace: &StructureWorkspace,
+    entity: Entity<StructureWorkspace>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let name = workspace.document.name.to_string();
-    window.open_alert_dialog(cx, move |dialog, _, _| {
+    let atoms = workspace.document.derived().atoms_in_cell();
+    let inputs: [Entity<InputState>; 3] =
+        [0, 1, 2].map(|_| cx.new(|cx| InputState::new(window, cx).default_value("2")));
+    window.open_alert_dialog(cx, move |dialog, _, cx| {
+        let repeats = || -> Option<[i32; 3]> {
+            let mut repeats = [0; 3];
+            for (repeat, input) in repeats.iter_mut().zip(&inputs) {
+                *repeat = input.read(cx).value().trim().parse().ok()?;
+                if !(1..=MAX_REPEAT).contains(repeat) {
+                    return None;
+                }
+            }
+            Some(repeats)
+        };
+        let summary = match repeats() {
+            Some([a, b, c]) => {
+                let total = atoms * (a * b * c) as usize;
+                if total > LARGE_SUPERCELL {
+                    tr!("dialog.supercell.large", count = total)
+                } else {
+                    tr!("dialog.supercell.count", count = total)
+                }
+            }
+            None => tr!("dialog.supercell.invalid", max = MAX_REPEAT),
+        };
+        let field = |axis: &'static str, input: &Entity<InputState>| {
+            v_flex()
+                .flex_1()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(axis),
+                )
+                .child(Input::new(input).id(SharedString::from(format!("supercell-{axis}"))))
+        };
+        let times = || {
+            div()
+                .pt_5()
+                .text_color(cx.theme().muted_foreground)
+                .child("×")
+        };
+        let inputs = inputs.clone();
+        let entity = entity.clone();
         dialog
             .title(tr!("dialog.supercell.title"))
             .description(tr!("dialog.supercell.description", name = name.clone()))
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_start()
+                            .child(field("a", &inputs[0]))
+                            .child(times())
+                            .child(field("b", &inputs[1]))
+                            .child(times())
+                            .child(field("c", &inputs[2])),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(summary),
+                    ),
+            )
             .ok_text(tr!("dialog.supercell.ok"))
             .cancel_text(tr!("dialog.cancel"))
             .show_cancel(true)
-            .on_ok(|_, window, cx| {
-                not_implemented(tr!("feature.supercell"), window, cx);
+            .on_ok(move |_, window, cx| {
+                let mut repeats = [0; 3];
+                for (repeat, input) in repeats.iter_mut().zip(&inputs) {
+                    match input.read(cx).value().trim().parse::<i32>() {
+                        Ok(value) if (1..=MAX_REPEAT).contains(&value) => *repeat = value,
+                        _ => {
+                            window.push_notification(
+                                Notification::error(tr!(
+                                    "dialog.supercell.invalid",
+                                    max = MAX_REPEAT
+                                )),
+                                cx,
+                            );
+                            return false;
+                        }
+                    }
+                }
+                entity.update(cx, |workspace, cx| {
+                    workspace.make_supercell_of(repeats, window, cx)
+                });
                 true
             })
     });

@@ -9,7 +9,13 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal::{AtomRef, CellParam, Checkpoint, CoordinateConstraint, EditMode, SiteId, element};
+use std::sync::Arc;
+
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::notification::Notification;
+use mw_crystal::{
+    AtomRef, CellParam, Checkpoint, CoordinateConstraint, EditMode, SiteId, Structure, element,
+};
 use mw_project_file::{
     Camera, DisplayModel as SavedDisplayModel, EntryView, PanelTab as SavedPanelTab, StructureFile,
 };
@@ -66,6 +72,26 @@ impl PanelTab {
         PanelTab::Measurements,
         PanelTab::Diagnostics,
     ];
+}
+
+/// A supercell made from the open structure, for the host to add to the
+/// project as a derived structure.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Supercell {
+    /// The default name, e.g. `金红石 2×2×2 超胞`.
+    pub name: SharedString,
+    pub structure: Structure,
+    /// The structure it was made from, as it was.
+    pub source: Arc<Structure>,
+    /// Rows of the matrix M of the new lattice `A·M`.
+    pub matrix: [[i32; 3]; 3],
+}
+
+/// What the workspace asks of the window that hosts it.
+#[derive(Clone, Debug)]
+pub enum StructureWorkspaceEvent {
+    MadeSupercell(Supercell),
 }
 
 /// One open structure: header, 3D view with its overlays, and the side
@@ -442,11 +468,56 @@ impl StructureWorkspace {
     }
 
     fn convert_to_p1(&mut self, _: &ConvertToP1, window: &mut Window, cx: &mut Context<Self>) {
-        dialogs::open_convert_to_p1(self, window, cx);
+        let entity = cx.entity();
+        dialogs::open_convert_to_p1(self, entity, window, cx);
     }
 
     fn make_supercell(&mut self, _: &MakeSupercell, window: &mut Window, cx: &mut Context<Self>) {
-        dialogs::open_supercell(self, window, cx);
+        let entity = cx.entity();
+        dialogs::open_supercell(self, entity, window, cx);
+    }
+
+    /// Makes the supercell repeated `repeats` times along a, b and c in the
+    /// background, then asks the host to add it to the project
+    /// (design §7.9). This structure does not change.
+    pub fn make_supercell_of(
+        &mut self,
+        repeats: [i32; 3],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let [a, b, c] = repeats;
+        let matrix = [[a, 0, 0], [0, b, 0], [0, 0, c]];
+        let name = tr!(
+            "supercell.name",
+            name = self.document.name.to_string(),
+            a = a,
+            b = b,
+            c = c
+        );
+        let source = self.document.crystal.snapshot();
+        let make = cx.background_spawn(async move {
+            mw_crystal::make_supercell(&source, matrix).map(|structure| (structure, source))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = make.await;
+            this.update_in(cx, |_, window, cx| match result {
+                Ok((structure, source)) => {
+                    cx.emit(StructureWorkspaceEvent::MadeSupercell(Supercell {
+                        name,
+                        structure,
+                        source,
+                        matrix,
+                    }))
+                }
+                Err(error) => window.push_notification(
+                    Notification::error(tr!("supercell.failed", reason = error.to_string())),
+                    cx,
+                ),
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn export(&mut self, _: &ExportStructure, window: &mut Window, cx: &mut Context<Self>) {
@@ -641,6 +712,8 @@ impl StructureWorkspace {
         self.set_display_model(model, window, cx);
     }
 }
+
+impl EventEmitter<StructureWorkspaceEvent> for StructureWorkspace {}
 
 impl Focusable for StructureWorkspace {
     fn focus_handle(&self, _: &App) -> FocusHandle {

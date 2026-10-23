@@ -440,7 +440,7 @@ mod tests {
 
         let ti = doc.structure().sites[1].id;
         let outcome = doc.edit(Edit::RemoveSite { site: ti }).unwrap();
-        assert_eq!(outcome.ids.site(ti), None);
+        assert_eq!(outcome.ids.sites(ti), []);
         let stale: Vec<bool> = doc.annotations().iter().map(|a| a.stale).collect();
         assert_eq!(stale, [true, false]);
         assert_eq!(
@@ -550,6 +550,38 @@ mod tests {
         assert_eq!(stale, [false, true]);
         assert!(!restored.is_modified());
         assert_eq!(restored.history().count(), 0);
+    }
+
+    #[test]
+    fn measurements_survive_converting_to_p1() {
+        let mut doc = document(SampleKey::StrontiumTitanate);
+        let sr = atom(&doc, 0, 0);
+        let o = AtomRef::new(doc.structure().sites[2].id, 1, [0, 0, 0]);
+        let distance = Measurement::Distance([sr, o]);
+        doc.execute(Command::AddMeasurement(distance)).unwrap();
+        let length = |doc: &CrystalDocument| {
+            let Measurement::Distance([a, b]) = doc.annotations()[0].measurement else {
+                unreachable!()
+            };
+            let cartesian = |atom| {
+                let x = doc.derived().fractional(atom).unwrap();
+                doc.structure().lattice.to_cartesian(x)
+            };
+            crate::distance(cartesian(a), cartesian(b))
+        };
+        let before = length(&doc);
+        doc.edit(Edit::ExpandToP1).unwrap();
+        assert_eq!(doc.edit_mode(), EditMode::P1);
+        assert!(!doc.annotations()[0].stale);
+        assert_ne!(doc.annotations()[0].measurement, distance);
+        assert_eq!(length(&doc), before);
+        doc.undo().unwrap();
+        assert_eq!(doc.edit_mode(), EditMode::Symmetric);
+        assert_eq!(doc.annotations()[0].measurement, distance);
+        assert!(!doc.annotations()[0].stale);
+        doc.redo().unwrap();
+        assert_eq!(doc.edit_mode(), EditMode::P1);
+        assert_eq!(length(&doc), before);
     }
 
     #[test]

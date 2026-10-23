@@ -33,6 +33,7 @@ mod space_group;
 mod structure;
 mod symmetry;
 mod tables;
+mod transform;
 
 pub use atom_ref::{AtomRef, Measurement, angle, distance};
 pub use bonds::{Bond, BondRules, covalent_radius, display_bonds};
@@ -44,7 +45,7 @@ pub use derived::{
 pub use document::{Annotation, Checkpoint, Command, CrystalDocument, Outcome};
 pub use edit::{
     Applied, CellValues, Edit, EditError, EditWarning, Guidance, OCCUPANCY_TOLERANCE, Target,
-    target_sites,
+    expand_and_remove, target_sites,
 };
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
@@ -62,3 +63,4 @@ pub use structure::{
     StructureError, Tolerances,
 };
 pub use symmetry::{Rational, SymOp, SymOpError, Symmetry, SymmetryError};
+pub use transform::{SupercellError, make_supercell};

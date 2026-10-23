@@ -292,3 +292,52 @@ fn imported_files_are_saved_with_their_copy(cx: &mut TestAppContext) {
     let file = dir.read_structure(entry.id).unwrap();
     assert_eq!(block.structure, Some(file.structure));
 }
+
+#[gpui_kit::test]
+fn supercells_join_the_project_as_derived_structures(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let projects = install_samples(temp.path());
+    let (workbench, mut cx) = start_with(cx, temp.path(), &projects[1..]);
+    let srtio3 = workspace(&workbench, &mut cx);
+    cx.update(|window, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.make_supercell_of([2, 2, 1], window, cx)
+        })
+    });
+    draw(&mut cx);
+    let name = shown(&workbench, &mut cx).expect("the supercell is open").1;
+    assert!(name.starts_with("SrTiO₃ 2×2×1 "), "{name}");
+    assert!(unsaved(&workbench, &mut cx));
+    let names: Vec<String> = workbench.read_with(&cx, |workbench, cx| {
+        let project = workbench.catalog(cx).projects()[0].clone();
+        project
+            .structures()
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect()
+    });
+    assert_eq!(names, ["SrTiO₃".to_string(), name.clone()]);
+
+    focus(&workspace(&workbench, &mut cx), &mut cx);
+    cx.simulate_keystrokes("cmd-s");
+    draw(&mut cx);
+    assert!(!unsaved(&workbench, &mut cx));
+
+    let (dir, manifest) = mw_project_file::read_manifest(&projects[1]).unwrap();
+    let entry = &manifest.entries[1];
+    assert_eq!(entry.name, name);
+    let Provenance::Derived(derived) = &entry.provenance else {
+        panic!("derived");
+    };
+    assert_eq!(derived.from, manifest.entries[0].id);
+    assert_eq!(derived.from_name, "SrTiO₃");
+    assert_eq!(
+        derived.operation,
+        mw_project_file::Operation::MakeSupercell {
+            matrix: [[2, 0, 0], [0, 2, 0], [0, 0, 1]]
+        }
+    );
+    let file = dir.read_structure(entry.id).unwrap();
+    assert_eq!(file.structure.sites.len(), 20);
+    assert!(file.structure.symmetry.is_p1());
+}

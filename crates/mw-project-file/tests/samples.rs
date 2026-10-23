@@ -13,7 +13,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mw_crystal::sample::{self, SampleKey};
 use mw_project_file::{
     Derived, Entry, EntryId, EntryKind, Import, Manifest, Operation, ProjectId, Provenance, Save,
     Sha256, Source, SourceFormat, StructureFile, Timestamp, ViewState, read_manifest, samples,
@@ -104,14 +103,13 @@ fn build(dir: &Path) {
         EntryId::from_u128(0x6d2a_51c0_93e4_4b7a_8f10_2c4e_5a6b_7c01),
         "金红石",
     );
-    let supercell = sample::load(SampleKey::RutileSupercell).structure;
+    let matrix = [[2, 0, 0], [0, 2, 0], [0, 0, 2]];
+    let supercell = mw_crystal::make_supercell(&rutile.file.structure, matrix).unwrap();
     let derived = Derived::new(
         rutile.entry.id,
         rutile.entry.name.clone(),
         structure_sha256(&rutile.file.structure),
-        Operation::MakeSupercell {
-            matrix: [[2, 0, 0], [0, 2, 0], [0, 0, 2]],
-        },
+        Operation::MakeSupercell { matrix },
         Timestamp::from_unix(MADE),
     );
     let supercell = (

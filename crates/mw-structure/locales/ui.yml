@@ -336,8 +336,17 @@ dialog:
       en: Make supercell
       zh-CN: 生成超胞
     description:
-      en: "Creates a new structure from %{name}, repeated 2 × 2 × 2. The original stays unchanged."
-      zh-CN: "由「%{name}」按 2 × 2 × 2 重复生成一个新结构，原结构保持不变。"
+      en: "Creates a new structure in P1 from “%{name}”, repeated along a, b and c. The original stays unchanged."
+      zh-CN: "由「%{name}」沿 a、b、c 重复生成一个 P1 的新结构，原结构保持不变。"
+    count:
+      en: "The supercell has %{count} atoms."
+      zh-CN: "超胞共有 %{count} 个原子。"
+    large:
+      en: "The supercell has %{count} atoms; showing it will be slow."
+      zh-CN: "超胞共有 %{count} 个原子，显示会比较慢。"
+    invalid:
+      en: "Each repeat is a whole number from 1 to %{max}."
+      zh-CN: "每个方向的倍数是 1 到 %{max} 之间的整数。"
     ok:
       en: Make supercell
       zh-CN: 生成超胞
@@ -397,13 +406,10 @@ feature:
   move_site:
     en: Moving sites in symmetry mode
     zh-CN: 对称模式下移动位点
-  convert_to_p1:
-    en: Converting to P1
-    zh-CN: 转为 P1
-  supercell:
-    en: Supercells
-    zh-CN: 生成超胞
 edit:
+  expanded_and_deleted:
+    en: "Converted to P1 and deleted %{count} atoms. You can undo both at once."
+    zh-CN: "已转为 P1 并删除 %{count} 个原子，撤销一次即可全部恢复。"
   deleted_site:
     en: "Deleted %{label} (%{count} atoms). You can undo this."
     zh-CN: "已删除 %{label}（%{count} 个原子），可以撤销。"
@@ -411,6 +417,12 @@ edit:
     en: "Deleted %{sites} sites (%{count} atoms). You can undo this."
     zh-CN: "已删除 %{sites} 个位点（共 %{count} 个原子），可以撤销。"
   command:
+    expand_to_p1:
+      en: Convert to P1
+      zh-CN: 转为 P1
+    expand_and_remove:
+      en: Convert to P1 and delete
+      zh-CN: 转为 P1 后删除
     set_cell:
       en: Change cell parameters
       zh-CN: 修改晶胞参数
@@ -769,3 +781,10 @@ import:
     close:
       en: Close
       zh-CN: 关闭
+supercell:
+  name:
+    en: "%{name} %{a}×%{b}×%{c} supercell"
+    zh-CN: "%{name} %{a}×%{b}×%{c} 超胞"
+  failed:
+    en: "Couldn’t make the supercell: %{reason}"
+    zh-CN: "无法生成超胞：%{reason}"

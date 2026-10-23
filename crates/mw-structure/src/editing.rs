@@ -8,7 +8,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use mw_crystal::{
     AtomFate, CellParam, CellValues, Command, Edit, EditError, EditWarning, Measured, Outcome,
-    SiteId, Species, Structure,
+    SiteId, Species, Structure, Target, expand_and_remove,
 };
 
 use crate::actions::{AddMixedOccupant, DeleteSelection, Redo, Undo};
@@ -45,7 +45,11 @@ pub(crate) fn command_name(command: &Command) -> SharedString {
             Edit::RemoveOccupant { .. } => tr!("edit.command.remove_occupant"),
             Edit::RenameLabel { .. } => tr!("edit.command.rename_label"),
             Edit::SetPosition { .. } => tr!("edit.command.set_position"),
-            // Batches only delete several sites at once so far.
+            Edit::ExpandToP1 | Edit::RestoreStructure { .. } => tr!("edit.command.expand_to_p1"),
+            // Batches delete several sites at once, or convert to P1 first.
+            Edit::Batch { edits } if matches!(edits.first(), Some(Edit::ExpandToP1)) => {
+                tr!("edit.command.expand_and_remove")
+            }
             Edit::RemoveSite { .. } | Edit::RestoreSite { .. } | Edit::Batch { .. } => {
                 tr!("edit.command.remove_site")
             }
@@ -91,6 +95,7 @@ pub(crate) fn error_text(error: &EditError, structure: &Structure) -> SharedStri
         EditError::DuplicateLabel { label } => {
             tr!("edit.error.duplicate_label", label = label)
         }
+        EditError::AlreadyP1 => tr!("dialog.convert.already_p1"),
         // The rest name sites, atoms or measurements that the interface
         // only offers while they exist.
         other => tr!("edit.error.other", reason = other.to_string()),
@@ -232,7 +237,7 @@ impl StructureWorkspace {
             Err(error @ EditError::BreaksSymmetry { .. }) => {
                 let sites = self.selection.sites();
                 let entity = cx.entity();
-                dialogs::open_partial_delete(self, entity, &error, sites, window, cx);
+                dialogs::open_partial_delete(self, entity, &error, sites, targets, window, cx);
             }
             Err(error) => {
                 let text = error_text(&error, self.document.structure());
@@ -272,6 +277,40 @@ impl StructureWorkspace {
         };
         if self.edit(edit, window, cx).is_ok() {
             window.push_notification(Notification::info(message), cx);
+        }
+    }
+
+    /// Converts the structure to P1 (design §7.1), as one undo step. The
+    /// selection and the measurements follow the atoms.
+    pub(crate) fn expand_to_p1(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = self.edit(Edit::ExpandToP1, window, cx);
+    }
+
+    /// Converts the structure to P1 and deletes only what `targets` name,
+    /// as one undo step: the delete dialog's way forward (design §7.1).
+    pub(crate) fn delete_after_expanding(
+        &mut self,
+        targets: Vec<Target>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let edit = match expand_and_remove(self.document.structure(), &targets) {
+            Ok(edit) => edit,
+            Err(error) => {
+                let text = error_text(&error, self.document.structure());
+                window.push_notification(Notification::error(text), cx);
+                return;
+            }
+        };
+        let removed = match &edit {
+            Edit::Batch { edits } => edits.len() - 1,
+            _ => 0,
+        };
+        if self.edit(edit, window, cx).is_ok() {
+            window.push_notification(
+                Notification::info(tr!("edit.expanded_and_deleted", count = removed)),
+                cx,
+            );
         }
     }
 

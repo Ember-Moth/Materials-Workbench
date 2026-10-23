@@ -1,13 +1,17 @@
 //! Development aid: walks through the main screens and renders each to a PNG
 //! with `Window::render_to_image`, which needs no screen-recording
 //! permission. Enabled by the `screenshot` feature and `MW_SCREENSHOT_DIR`.
+//! The tour draws the window itself, so a window that is not in front still
+//! gives current frames.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
-use mw_crystal::{CellParam, CellValues, Command, Edit, Measured, SiteId, Species};
+use mw_crystal::{
+    AtomRef, CellParam, CellValues, Command, Edit, Measured, SiteId, Species, Target,
+};
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
 
@@ -109,6 +113,15 @@ fn point_at(workbench: &Workbench, actions: &'static [Pointer], window: &Window,
             );
         }
     });
+}
+
+/// Moves focus to the open structure, so that dispatched actions reach it.
+/// A structure switched to must have been drawn first: steps whose name
+/// starts with `_` set up without a screenshot.
+fn focus_workspace(workbench: &Workbench, window: &mut Window, cx: &mut App) {
+    if let Some(workspace) = workbench.workspace() {
+        workspace.focus_handle(cx).focus(window, cx);
+    }
 }
 
 /// Runs a command on the open structure, as its fields do.
@@ -215,17 +228,30 @@ const TOUR: &[(&str, Step)] = &[
             window.dispatch_action(Box::new(mw_structure::Undo), cx);
         }
     }),
-    ("16-supercell", |workbench, window, cx| {
+    // The delete dialog's default for one O of SrTiO₃: convert to P1, then
+    // delete that atom alone, as one step.
+    ("16-p1-delete", |workbench, window, cx| {
+        let Some(workspace) = workbench.workspace().cloned() else {
+            return;
+        };
+        let (file, _) = workspace.read(cx).file_to_save();
+        let one = Target::Atom(AtomRef::new(SiteId(3), 2, [0; 3]));
+        if let Ok(edit) = mw_crystal::expand_and_remove(&file.structure, &[one]) {
+            execute(workbench, Command::Edit(edit), window, cx);
+        }
+        window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
+    }),
+    ("17-supercell", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(2), window, cx);
     }),
     // ⌘S: the measurements made on rutile are saved, its unsaved mark goes.
-    ("17-saved", |workbench, window, cx| {
+    ("18-saved", |workbench, window, cx| {
         workbench.save_active_project(&crate::actions::SaveProject, window, cx);
     }),
     // Opening files goes through the same path as the file dialog and drops.
     // Several at once, as when dropping a selection: the first opens, the
     // rest join the open structure's project, unsaved until ⌘S.
-    ("18-import-files", |workbench, window, cx| {
+    ("19-import-files", |workbench, window, cx| {
         let files = [
             "bst_su_aniso.cif",
             "rutile.cif",
@@ -235,57 +261,89 @@ const TOUR: &[(&str, Step)] = &[
         workbench.import_paths(files.map(fixture).to_vec(), window, cx);
     }),
     // Entry 5 is the imported rutile, after the three samples and BST.
-    ("19-imported-rutile", |workbench, window, cx| {
+    ("20-imported-rutile", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(5), window, cx);
     }),
-    ("20-import-zincite", |workbench, window, cx| {
+    ("21-import-zincite", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
     }),
-    ("21-import-diagnostics", |_, window, cx| {
+    ("22-import-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
     // Sites snapped onto special positions, rows merged and dropped.
-    ("22-import-snapped", |workbench, window, cx| {
+    ("23-import-snapped", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("rutile_near_special.cif")], window, cx);
     }),
-    ("23-snapped-diagnostics", |_, window, cx| {
+    ("24-snapped-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
-    ("24-import-failed", |workbench, window, cx| {
+    ("25-import-failed", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("malformed.cif")], window, cx);
     }),
-    ("25-import-errors", |_, window, cx| {
+    ("26-import-errors", |_, window, cx| {
         OpenedFile::read(fixture("malformed.cif")).show_errors(window, cx);
     }),
-    // The imports are not saved yet: closing their project asks first.
-    ("26-unsaved-dialog", |workbench, window, cx| {
+    // Converting rutile to P1: the dialog, then the six sites it gives.
+    ("_show-rutile", |workbench, window, cx| {
+        window.close_dialog(cx);
+        workbench.open_structure(StructureEntryId(1), window, cx);
+    }),
+    ("27-convert-dialog", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+        window.dispatch_action(Box::new(mw_structure::ConvertToP1), cx);
+    }),
+    ("28-converted", |workbench, window, cx| {
+        window.close_dialog(cx);
+        execute(workbench, Command::Edit(Edit::ExpandToP1), window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
+    }),
+    // Back to P4₂/mnm in one undo, then the supercell dialog.
+    ("29-supercell-dialog", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::Undo), cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+        window.dispatch_action(Box::new(mw_structure::MakeSupercell), cx);
+    }),
+    // A new derived structure after rutile's other supercell, opened.
+    ("30-supercell-made", |workbench, window, cx| {
+        window.close_dialog(cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.make_supercell_of([3, 3, 1], window, cx)
+            });
+        }
+    }),
+    // The imports and the supercell are not saved yet: closing their
+    // project asks first.
+    ("31-unsaved-dialog", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_active_project(&crate::actions::CloseProject, window, cx);
     }),
-    ("27-settings", |_, window, cx| {
+    ("32-settings", |_, window, cx| {
         window.close_dialog(cx);
         settings::open(window, cx)
     }),
-    ("28-no-sidebar", |workbench, window, cx| {
+    ("33-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    // The structure from step 22 shares a site between Ti and V, so the
-    // formats that list atoms are unavailable and say why.
-    ("29-export-dialog", |workbench, window, cx| {
+    // The structure from step 23 (entry 10) shares a site between Ti and
+    // V, so the formats that list atoms are unavailable and say why.
+    ("_show-snapped", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
-        if let Some(workspace) = workbench.workspace() {
-            workspace.focus_handle(cx).focus(window, cx);
-        }
+        workbench.open_structure(StructureEntryId(10), window, cx);
+    }),
+    ("34-export-dialog", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::ExportStructure), cx);
     }),
     // The empty state lists the recent projects.
-    ("30-empty", |workbench, window, cx| {
+    ("35-empty", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_structure(window, cx);
     }),
     // A new project is untitled and empty until files are opened into it.
-    ("31-new-project", |workbench, window, cx| {
+    ("36-new-project", |workbench, window, cx| {
         workbench.new_project(&crate::actions::NewProject, window, cx);
     }),
 ];
@@ -316,17 +374,31 @@ pub fn start(window: AnyWindowHandle, workbench: Entity<Workbench>, cx: &mut App
     .detach();
 }
 
+/// Draws the window now. The system stops drawing a window that is hidden
+/// or not in front, and the tour captures the last drawn frame, so it draws
+/// itself rather than wait for the system.
+fn draw(window: &mut Window, cx: &mut App) {
+    window.draw(cx).clear(cx);
+}
+
 /// Waits for a step's background work, then until the viewport shows its
-/// newest frame (`Viewport::is_current`) and the window has drawn it.
+/// newest frame (`Viewport::is_current`), drawing as it goes so that the
+/// viewport renders and paints its frames.
 async fn settle(
     window: AnyWindowHandle,
     workbench: &Entity<Workbench>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
-    cx.background_executor().timer(SETTLE).await;
+    let mut waited = Duration::ZERO;
+    while waited < SETTLE {
+        cx.update_window(window, |_, window, cx| draw(window, cx))?;
+        cx.background_executor().timer(POLL).await;
+        waited += POLL;
+    }
     let mut waited = Duration::ZERO;
     while waited < FRAME_TIMEOUT {
-        let current = cx.update_window(window, |_, _, cx| {
+        let current = cx.update_window(window, |_, window, cx| {
+            draw(window, cx);
             workbench
                 .read(cx)
                 .workspace()
@@ -341,9 +413,8 @@ async fn settle(
     if waited >= FRAME_TIMEOUT {
         log::warn!("screenshot tour: the viewport frame did not land in time");
     }
-    // One more redraw with the landed frame.
-    cx.update_window(window, |_, window, _| window.refresh())?;
-    cx.background_executor().timer(POLL * 2).await;
+    // One more draw with the landed frame, which the capture uses.
+    cx.update_window(window, |_, window, cx| draw(window, cx))?;
     Ok(())
 }
 
@@ -360,6 +431,9 @@ async fn tour(
             workbench.update(cx, |workbench, cx| step(workbench, window, cx));
         })?;
         settle(window, workbench, cx).await?;
+        if name.starts_with('_') {
+            continue;
+        }
         let image = cx.update_window(window, |_, window, _| window.render_to_image())??;
         let path = dir.join(format!("{name}.png"));
         image.save(&path)?;

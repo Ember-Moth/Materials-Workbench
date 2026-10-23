@@ -13,11 +13,14 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal_io::ImportedBlock;
 use mw_project::{
-    ImportedEntry, ProjectCatalog, ProjectId, ProjectSidebar, ProjectSidebarEvent, StructureEntryId,
+    DerivedEntry, ImportedEntry, ProjectCatalog, ProjectId, ProjectSidebar, ProjectSidebarEvent,
+    StructureEntryId,
 };
-use mw_project_file::{EntryId, EntryView, ProjectDir, Provenance, ReadError, StructureFile};
+use mw_project_file::{
+    EntryId, EntryView, Operation, ProjectDir, Provenance, ReadError, StructureFile,
+};
 use mw_structure::import::OpenedFile;
-use mw_structure::{StructureDocument, StructureWorkspace};
+use mw_structure::{StructureDocument, StructureWorkspace, StructureWorkspaceEvent, Supercell};
 
 use crate::actions::*;
 use crate::config::{AppPaths, Session};
@@ -29,7 +32,7 @@ use crate::{palette, settings};
 pub(crate) struct Opened {
     pub id: StructureEntryId,
     pub workspace: Entity<StructureWorkspace>,
-    _observer: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 /// The main window: project sidebar on the window background, and the open
@@ -189,16 +192,78 @@ impl Workbench {
             workspace.update(cx, |workspace, cx| workspace.set_view(&view, cx));
         }
         workspace.focus_handle(cx).focus(window, cx);
-        // Edits change what the header and the sidebar say about saving.
-        let observer = cx.observe(&workspace, |this, _, cx| this.refresh_status(cx));
+        let subscriptions = [
+            // Edits change what the header and the sidebar say about saving.
+            cx.observe(&workspace, |this, _, cx| this.refresh_status(cx)),
+            cx.subscribe_in(&workspace, window, move |this, _, event, window, cx| {
+                this.on_workspace_event(id, event, window, cx)
+            }),
+        ];
         self.opened.push(Opened {
             id,
             workspace,
-            _observer: observer,
+            _subscriptions: subscriptions,
         });
         self.current = Some(id);
         self.refresh_status(cx);
         cx.notify();
+    }
+
+    fn on_workspace_event(
+        &mut self,
+        from: StructureEntryId,
+        event: &StructureWorkspaceEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            StructureWorkspaceEvent::MadeSupercell(supercell) => {
+                self.add_supercell(from, supercell, window, cx)
+            }
+        }
+    }
+
+    /// Adds a supercell to the project of the structure it was made from,
+    /// after it, as a derived structure (`docs/design/project-format.md`
+    /// §13.2), and opens it.
+    fn add_supercell(
+        &mut self,
+        from: StructureEntryId,
+        supercell: &Supercell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((project, _)) = self.catalog(cx).structure(from) else {
+            return;
+        };
+        let names: Vec<&str> = project.structures().iter().map(|s| s.name()).collect();
+        let base = supercell.name.to_string();
+        let name = (1..)
+            .map(|n| {
+                if n == 1 {
+                    base.clone()
+                } else {
+                    format!("{base} {n}")
+                }
+            })
+            .find(|name| !names.contains(&name.as_str()))
+            .expect("some name is free");
+        let derived = DerivedEntry::new(
+            name,
+            supercell.structure.clone(),
+            Operation::MakeSupercell {
+                matrix: supercell.matrix,
+            },
+        );
+        let added = self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.update_catalog(cx, |catalog| {
+                catalog.add_derived(from, &supercell.source, derived)
+            })
+        });
+        if let Some(id) = added {
+            self.open_structure(id, window, cx);
+        }
+        self.refresh_status(cx);
     }
 
     /// Tells the sidebar which structures have unsaved edits, and each open

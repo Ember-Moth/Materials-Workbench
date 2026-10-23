@@ -6,7 +6,7 @@
 //! That is exact for distances below half the smallest spacing between
 //! lattice planes, which holds for the tolerances used here in any real cell.
 
-use crate::{AtomRef, DisplayAtom, SiteId, Structure};
+use crate::{AtomRef, DisplayAtom, Site, SiteId, Structure};
 
 /// One site's equivalent atoms in the unit cell.
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +59,7 @@ impl Metric {
 }
 
 /// Wraps fractional coordinates into [0, 1).
-fn wrap(x: [f64; 3]) -> [f64; 3] {
+pub(crate) fn wrap(x: [f64; 3]) -> [f64; 3] {
     x.map(|v| {
         let w = v - v.floor();
         // A tiny negative value wraps to exactly 1.0 in floating point.
@@ -67,25 +67,36 @@ fn wrap(x: [f64; 3]) -> [f64; 3] {
     })
 }
 
+/// One site's equivalent atoms in the cell, each with the index of the
+/// operation that first produced it: the members of its orbit, in order.
+pub(crate) fn members(structure: &Structure, site: &Site) -> Vec<(usize, [f64; 3])> {
+    let metric = Metric::new(structure);
+    let tolerance = structure.tolerances.position;
+    let mut members: Vec<(usize, [f64; 3])> = Vec::new();
+    for (index, op) in structure.symmetry.operations().iter().enumerate() {
+        let image = wrap(op.apply(site.position));
+        if members
+            .iter()
+            .all(|(_, p)| metric.distance(*p, image) >= tolerance)
+        {
+            members.push((index, image));
+        }
+    }
+    members
+}
+
 /// Applies every operation to every site, wraps the results into the cell
 /// and keeps one atom per position within the position tolerance.
 pub fn orbits(structure: &Structure) -> Vec<Orbit> {
     let metric = Metric::new(structure);
-    let tolerance = structure.tolerances.position;
     structure
         .sites
         .iter()
         .map(|site| {
-            let mut positions: Vec<[f64; 3]> = Vec::new();
-            for op in structure.symmetry.operations() {
-                let image = wrap(op.apply(site.position));
-                if positions
-                    .iter()
-                    .all(|p| metric.distance(*p, image) >= tolerance)
-                {
-                    positions.push(image);
-                }
-            }
+            let positions: Vec<[f64; 3]> = members(structure, site)
+                .into_iter()
+                .map(|(_, position)| position)
+                .collect();
             let nearest_image = positions
                 .iter()
                 .skip(1)

@@ -15,10 +15,10 @@ use gpui_kit::{
     WindowOptions, px, size,
 };
 use mw_crystal::sample::SampleKey;
-use mw_crystal::{AtomRef, CellParam, SiteId};
+use mw_crystal::{AtomRef, CellParam, EditMode, SiteId, Target};
 
 use crate::selection::Selection;
-use crate::workspace::StructureWorkspace;
+use crate::workspace::{StructureWorkspace, StructureWorkspaceEvent};
 
 /// Opens a sample in a workspace, the way the shell does, and renders it.
 fn open(
@@ -342,5 +342,105 @@ fn coordinates_under_symmetry_stay_for_now(cx: &mut TestAppContext) {
     let x = rutile.read_with(&cx, |workspace, _| workspace.coordinate_inputs[0].clone());
     type_into(&mut cx, &x, "0.31");
     assert_eq!(text(&x, &mut cx), "0.3048");
+    assert_eq!(steps(&rutile, &mut cx), 0);
+}
+
+#[gpui_kit::test]
+fn converting_to_p1_follows_the_selection_and_undoes_at_once(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let o = AtomRef::new(SiteId(2), 3, [0; 3]);
+    select(&rutile, Selection::atom(o), &mut cx);
+    cx.update(|window, cx| rutile.update(cx, |workspace, cx| workspace.expand_to_p1(window, cx)));
+    draw(&mut cx);
+    let (mode, selected, label) = rutile.read_with(&cx, |workspace, _| {
+        let structure = workspace.document.structure();
+        let selected = workspace.selected_site().unwrap();
+        (
+            structure.edit_mode(),
+            workspace.selection.targets(),
+            structure.site(selected).unwrap().label().to_string(),
+        )
+    });
+    assert_eq!(mode, EditMode::P1);
+    assert_eq!(sites(&rutile, &mut cx).len(), 6);
+    // The selected O is the fourth member of O1: now site O1_4, member 0.
+    assert_eq!(label, "O1_4");
+    assert!(matches!(selected[..], [Target::Atom(atom)] if atom.member == 0));
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    // The coordinate fields of a P1 site are free.
+    assert_eq!(ringed(&rutile, &mut cx), (1, true));
+
+    focus_workspace(&rutile, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(sites(&rutile, &mut cx), [SiteId(1), SiteId(2)]);
+    let selected = rutile.read_with(&cx, |workspace, _| workspace.selection.targets());
+    assert_eq!(selected, [Target::Atom(o)]);
+}
+
+#[gpui_kit::test]
+fn the_delete_dialog_converts_to_p1_and_deletes_one_atom(cx: &mut TestAppContext) {
+    let (srtio3, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    let o = AtomRef::new(SiteId(3), 1, [0; 3]);
+    select(&srtio3, Selection::atom(o), &mut cx);
+    cx.simulate_keystrokes("delete");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    // "Convert to P1 and delete this one", the dialog's default.
+    cx.update(|window, cx| {
+        window.close_dialog(cx);
+        srtio3.update(cx, |workspace, cx| {
+            let targets = workspace.selection.targets();
+            workspace.delete_after_expanding(targets, window, cx)
+        })
+    });
+    draw(&mut cx);
+    let labels = srtio3.read_with(&cx, |workspace, _| {
+        let structure = workspace.document.structure();
+        assert_eq!(structure.edit_mode(), EditMode::P1);
+        structure
+            .sites
+            .iter()
+            .map(|s| s.label().to_string())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(labels, ["Sr1", "Ti1", "O1_1", "O1_3"]);
+    assert_eq!(steps(&srtio3, &mut cx), 1);
+    focus_workspace(&srtio3, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(sites(&srtio3, &mut cx), [SiteId(1), SiteId(2), SiteId(3)]);
+}
+
+#[gpui_kit::test]
+fn supercells_go_to_the_host(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let made = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _subscription = cx.update(|_, cx| {
+        let made = made.clone();
+        cx.subscribe(&rutile, move |_, event: &StructureWorkspaceEvent, _| {
+            made.borrow_mut().push(event.clone())
+        })
+    });
+    cx.update(|window, cx| {
+        rutile.update(cx, |workspace, cx| {
+            workspace.make_supercell_of([1, 1, 3], window, cx)
+        })
+    });
+    draw(&mut cx);
+    let made = made.borrow();
+    let [StructureWorkspaceEvent::MadeSupercell(supercell)] = &made[..] else {
+        panic!("one supercell");
+    };
+    // Named in the interface language, after the structure.
+    assert!(
+        supercell.name.starts_with("Test 1×1×3 "),
+        "{}",
+        supercell.name
+    );
+    assert_eq!(supercell.matrix, [[1, 0, 0], [0, 1, 0], [0, 0, 3]]);
+    assert_eq!(supercell.structure.sites.len(), 18);
+    assert!(supercell.source.symmetry.operations().len() > 1);
+    // The structure itself does not change.
     assert_eq!(steps(&rutile, &mut cx), 0);
 }

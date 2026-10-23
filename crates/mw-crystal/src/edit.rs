@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::constraints::cell_constraints;
 use crate::{
-    AtomRef, CellParam, CellParams, Constraint, Derived, EditMode, IdMap, Measured, Occupant, Site,
-    SiteId, Species, Structure, element, expand,
+    AtomFate, AtomRef, CellParam, CellParams, Constraint, Derived, EditMode, IdMap, Measured,
+    Occupant, Site, SiteFate, SiteId, Species, Structure, element, expand, transform,
 };
 
 /// How far the occupancies of one site may add up above 1 before an edit
@@ -121,6 +121,13 @@ pub enum Edit {
     RestoreSite { index: usize, site: Site },
     /// Several edits as one, applied in order; all of them or none.
     Batch { edits: Vec<Edit> },
+    /// Expands the structure to P1 (design §7.1): every equivalent atom
+    /// becomes a site of its own, labeled `label_k` when its site had
+    /// several. References to atoms follow them to their new sites.
+    ExpandToP1,
+    /// Puts back a whole structure: the inverse of [`Edit::ExpandToP1`].
+    /// References to atoms follow them to the atoms at the same positions.
+    RestoreStructure { structure: Box<Structure> },
 }
 
 /// The result of applying an [`Edit`].
@@ -253,6 +260,8 @@ pub enum EditError {
     UnknownMeasurement,
     /// A measurement that names the same atom twice.
     RepeatedAtom(AtomRef),
+    /// The structure is in P1 already.
+    AlreadyP1,
 }
 
 impl EditError {
@@ -289,6 +298,7 @@ impl EditError {
             Self::InvalidIndex { .. } => "invalid_index",
             Self::UnknownMeasurement => "unknown_measurement",
             Self::RepeatedAtom(_) => "repeated_atom",
+            Self::AlreadyP1 => "already_p1",
         }
     }
 }
@@ -370,6 +380,7 @@ impl fmt::Display for EditError {
                 "the measurement names atom {} of site {} twice",
                 atom.member, atom.site.0
             ),
+            Self::AlreadyP1 => f.write_str("the structure is in P1 already"),
         }
     }
 }
@@ -622,8 +633,99 @@ impl Edit {
                 inverses.reverse();
                 (Self::Batch { edits: inverses }, ids)
             }
+            Self::ExpandToP1 => {
+                if structure.edit_mode() == EditMode::P1 {
+                    return Err(EditError::AlreadyP1);
+                }
+                let expanded = transform::expand_to_p1(structure);
+                let old = std::mem::replace(structure, expanded.structure);
+                let ids = IdMap::with_fates(
+                    expanded
+                        .splits
+                        .into_iter()
+                        .map(|(site, sites)| (site, SiteFate::Split(sites))),
+                );
+                let inverse = Self::RestoreStructure {
+                    structure: Box::new(old),
+                };
+                (inverse, ids)
+            }
+            Self::RestoreStructure {
+                structure: restored,
+            } => {
+                let ids = restore_map(structure, restored);
+                let old = std::mem::replace(structure, Structure::clone(restored));
+                let inverse = Self::RestoreStructure {
+                    structure: Box::new(old),
+                };
+                (inverse, ids)
+            }
         })
     }
+}
+
+/// What a structure being replaced by `after` does to references: a site
+/// that `after` has keeps them; one whose atom sits exactly where an atom
+/// of `after` sits (a P1 site of an expansion being undone) becomes that
+/// atom; the others are removed.
+fn restore_map(before: &Structure, after: &Structure) -> IdMap {
+    let key = |p: [f64; 3]| p.map(f64::to_bits);
+    let mut atoms = std::collections::HashMap::new();
+    for site in &after.sites {
+        for (member, (_, position)) in expand::members(after, site).into_iter().enumerate() {
+            atoms
+                .entry(key(position))
+                .or_insert((site.id, member as u16));
+        }
+    }
+    let fates = before
+        .sites
+        .iter()
+        .filter(|site| after.site(site.id).is_none())
+        .map(|site| {
+            let members = expand::members(before, site);
+            let found = match members.as_slice() {
+                [(_, position)] => atoms.get(&key(*position)),
+                _ => None,
+            };
+            let fate = match found {
+                Some(&(site, member)) => SiteFate::Merged { site, member },
+                None => SiteFate::Removed,
+            };
+            (site.id, fate)
+        });
+    IdMap::with_fates(fates)
+}
+
+/// The edit that converts the structure to P1 and then removes what
+/// `targets` name (design §7.1, "convert to P1, then delete this one"), as
+/// one step: an atom removes the site it became, a whole site all of them.
+pub fn expand_and_remove(structure: &Structure, targets: &[Target]) -> Result<Edit, EditError> {
+    let expanded = Edit::ExpandToP1.apply(structure)?;
+    let mut sites = Vec::new();
+    for target in targets {
+        let removed = match *target {
+            Target::Site(site) => {
+                structure.site(site).ok_or(EditError::UnknownSite(site))?;
+                expanded.ids.sites(site)
+            }
+            Target::Atom(atom) => match expanded.ids.atom(atom) {
+                AtomFate::Kept(kept) => vec![kept.site],
+                AtomFate::Site(_) | AtomFate::Removed => {
+                    return Err(EditError::UnknownAtom(atom));
+                }
+            },
+        };
+        for site in removed {
+            if !sites.contains(&site) {
+                sites.push(site);
+            }
+        }
+    }
+    let edits = std::iter::once(Edit::ExpandToP1)
+        .chain(sites.into_iter().map(|site| Edit::RemoveSite { site }))
+        .collect();
+    Ok(Edit::Batch { edits })
 }
 
 /// The cell after setting `values` under the structure's cell constraints
@@ -1139,7 +1241,7 @@ mod tests {
         let ti = site(&srtio3, "Ti1");
         let applied = round_trip(&srtio3, Edit::RemoveSite { site: ti });
         assert_eq!(applied.structure.sites.len(), 2);
-        assert_eq!(applied.ids.site(ti), None);
+        assert_eq!(applied.ids.sites(ti), []);
         assert_eq!(
             applied.ids.atom(AtomRef::new(ti, 0, [0; 3])),
             AtomFate::Removed
@@ -1168,7 +1270,7 @@ mod tests {
         let applied = round_trip(&srtio3, both);
         assert_eq!(applied.structure.sites.len(), 1);
         assert_eq!(applied.structure.sites[0].id, ti);
-        assert_eq!((applied.ids.site(sr), applied.ids.site(o)), (None, None));
+        assert!(applied.ids.sites(sr).is_empty() && applied.ids.sites(o).is_empty());
 
         let failing = Edit::Batch {
             edits: vec![Edit::RemoveSite { site: sr }, Edit::RemoveSite { site: sr }],
@@ -1280,6 +1382,64 @@ mod tests {
     }
 
     #[test]
+    fn converting_to_p1_is_one_undoable_step() {
+        let (rutile, derived) = load(SampleKey::Rutile);
+        let applied = round_trip(&rutile, Edit::ExpandToP1);
+        assert!(applied.structure.symmetry.is_p1());
+        assert_eq!(applied.structure.sites.len(), 6);
+        // Every atom follows to the site it became, in the same cell.
+        let expanded = Derived::compute(&applied.structure);
+        for atom in &derived.atoms {
+            let AtomFate::Kept(kept) = applied.ids.atom(atom.atom) else {
+                panic!("{:?} lost", atom.atom);
+            };
+            assert_eq!(kept.member, 0);
+            let before = derived.fractional(atom.atom).unwrap();
+            let after = expanded.fractional(kept).unwrap();
+            assert_eq!(before, after);
+        }
+        // And back: the P1 atoms become members of the symmetric sites again.
+        let undone = applied.inverse.apply(&applied.structure).unwrap();
+        for atom in &derived.atoms {
+            let AtomFate::Kept(kept) = applied.ids.atom(atom.atom) else {
+                unreachable!()
+            };
+            assert_eq!(undone.ids.atom(kept), AtomFate::Kept(atom.atom));
+        }
+        assert_eq!(
+            Edit::ExpandToP1.apply(&applied.structure).unwrap_err(),
+            EditError::AlreadyP1
+        );
+    }
+
+    #[test]
+    fn converting_to_p1_then_deleting_one_atom() {
+        let (rutile, derived) = load(SampleKey::Rutile);
+        let o1 = site(&rutile, "O1");
+        let one = derived
+            .atoms
+            .iter()
+            .map(|a| a.atom)
+            .find(|a| a.site == o1 && a.member == 2)
+            .unwrap();
+        let edit = expand_and_remove(&rutile, &[Target::Atom(one)]).unwrap();
+        let applied = round_trip(&rutile, edit);
+        assert_eq!(applied.structure.sites.len(), 5);
+        let labels: Vec<&str> = applied.structure.sites.iter().map(Site::label).collect();
+        assert_eq!(labels, ["Ti1_1", "Ti1_2", "O1_1", "O1_2", "O1_4"]);
+        assert_eq!(applied.ids.atom(one), AtomFate::Removed);
+        // A whole site removes all the sites it became.
+        let ti = site(&rutile, "Ti1");
+        let edit = expand_and_remove(&rutile, &[Target::Site(ti)]).unwrap();
+        let applied = round_trip(&rutile, edit);
+        assert!(applied.structure.sites.iter().all(|s| s.element() == "O"));
+        assert_eq!(
+            expand_and_remove(&rutile, &[Target::Atom(AtomRef::new(o1, 9, [0; 3]))]).unwrap_err(),
+            EditError::UnknownAtom(AtomRef::new(o1, 9, [0; 3]))
+        );
+    }
+
+    #[test]
     fn edits_serialize_as_tagged_json() {
         let edits = [
             Edit::SetCell {
@@ -1310,6 +1470,14 @@ mod tests {
             let json = serde_json::to_string(&edit).unwrap();
             assert_eq!(serde_json::from_str::<Edit>(&json).unwrap(), edit, "{json}");
         }
+        let json = serde_json::to_value(Edit::ExpandToP1).unwrap();
+        assert_eq!(json, serde_json::json!({"command": "expand_to_p1"}));
+        let (rutile, _) = load(SampleKey::Rutile);
+        let restore = Edit::RestoreStructure {
+            structure: Box::new(rutile),
+        };
+        let json = serde_json::to_string(&restore).unwrap();
+        assert_eq!(serde_json::from_str::<Edit>(&json).unwrap(), restore);
         let json = serde_json::to_value(Edit::RemoveSite { site: SiteId(2) }).unwrap();
         assert_eq!(
             json,

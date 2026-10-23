@@ -82,18 +82,19 @@ impl Selection {
     pub fn remap(&self, ids: &IdMap) -> Self {
         let mut items = Vec::new();
         for item in &self.0 {
-            let mapped = match *item {
-                Selected::Site(site) => ids.site(site).map(Selected::Site),
+            let mapped: Vec<Selected> = match *item {
+                // A site split into P1 sites selects them all.
+                Selected::Site(site) => ids.sites(site).into_iter().map(Selected::Site).collect(),
                 Selected::Atom(atom) => match ids.atom(atom) {
-                    AtomFate::Kept(atom) => Some(Selected::Atom(atom)),
-                    AtomFate::Site(site) => Some(Selected::Site(site)),
-                    AtomFate::Removed => None,
+                    AtomFate::Kept(atom) => vec![Selected::Atom(atom)],
+                    AtomFate::Site(site) => vec![Selected::Site(site)],
+                    AtomFate::Removed => Vec::new(),
                 },
             };
-            if let Some(mapped) = mapped
-                && !items.contains(&mapped)
-            {
-                items.push(mapped);
+            for mapped in mapped {
+                if !items.contains(&mapped) {
+                    items.push(mapped);
+                }
             }
         }
         Self(items)
