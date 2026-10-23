@@ -155,4 +155,71 @@ mod tests {
         let m = Measurement::Angle([present, missing, present]);
         assert_eq!(m.value(&sample.structure.lattice, &sample.derived), None);
     }
+
+    #[test]
+    fn the_orientation_moves_atoms_but_changes_no_distance() {
+        let rutile = sample::load(SampleKey::Rutile).structure;
+        let standard = Derived::compute(&rutile);
+        let ti = standard.orbits[0].site;
+        let o = standard.orbits[1].site;
+        let atoms = [
+            AtomRef::new(ti, 0, [0; 3]),
+            AtomRef::new(o, 0, [0; 3]),
+            AtomRef::new(o, 1, [0, 0, 1]),
+        ];
+        let distance = Measurement::Distance([atoms[0], atoms[1]]);
+        let angle = Measurement::Angle(atoms);
+        let (s, c) = 0.7f64.sin_cos();
+        for rows in [
+            [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+            // Left-handed: a mirror in the xz plane.
+            [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]],
+        ] {
+            let mut turned = rutile.clone();
+            turned.lattice = Lattice::with_orientation(
+                *rutile.lattice.params(),
+                crate::Orientation::new(crate::Rotation::new(rows).unwrap()),
+            );
+            let derived = Derived::compute(&turned);
+            // The O atom moved in Cartesian space...
+            let before = standard.cartesian(&rutile.lattice, atoms[1]).unwrap();
+            let after = derived.cartesian(&turned.lattice, atoms[1]).unwrap();
+            assert!((0..3).any(|i| (before[i] - after[i]).abs() > 0.1));
+            // ...but distances, angles, bonds and neighbors stay.
+            for m in [distance, angle] {
+                let (a, b) = (
+                    m.value(&rutile.lattice, &standard).unwrap(),
+                    m.value(&turned.lattice, &derived).unwrap(),
+                );
+                assert!((a - b).abs() < 1e-9, "{m:?}: {a} vs {b}");
+            }
+            // The same bonds; their order within one first atom follows
+            // the Cartesian search grid.
+            let sorted = |derived: &Derived| {
+                let mut bonds: Vec<_> =
+                    derived.bonds.iter().map(|b| (b.a, b.b, b.length)).collect();
+                bonds.sort_by_key(|(a, b, _)| (*a, *b));
+                bonds
+            };
+            let (a, b) = (sorted(&derived), sorted(&standard));
+            assert_eq!(a.len(), b.len());
+            for (a, b) in a.iter().zip(&b) {
+                assert_eq!((a.0, a.1), (b.0, b.1));
+                assert!((a.2 - b.2).abs() < 1e-9);
+            }
+            let neighbors = |lattice: &Lattice, derived: &Derived| {
+                derived.neighbors(lattice, atoms[0], 4.0).unwrap()
+            };
+            let (a, b) = (
+                neighbors(&rutile.lattice, &standard),
+                neighbors(&turned.lattice, &derived),
+            );
+            assert_eq!(a.len(), b.len());
+            assert!(
+                a.iter()
+                    .zip(&b)
+                    .all(|(a, b)| (a.distance - b.distance).abs() < 1e-9)
+            );
+        }
+    }
 }

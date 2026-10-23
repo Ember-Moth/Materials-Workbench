@@ -272,6 +272,14 @@ pub struct DetectedSymmetry {
 /// Searches the symmetry of the atoms, telling apart sites by their
 /// occupants, with the structure's `symprec`.
 pub fn detect_symmetry(structure: &Structure, orbits: &[Orbit]) -> Option<DetectedSymmetry> {
+    // A left-handed lattice holds the mirror image of what its coordinates
+    // describe on a right-handed basis: searching at −x tells apart
+    // enantiomorphic types such as P3₁21 and P3₂21.
+    let sign = if structure.lattice.is_left_handed() {
+        -1.0
+    } else {
+        1.0
+    };
     let mut kinds: Vec<String> = Vec::new();
     let mut positions = Vec::new();
     let mut species = Vec::new();
@@ -293,15 +301,18 @@ pub fn detect_symmetry(structure: &Structure, orbits: &[Orbit]) -> Option<Detect
         };
         first_atoms.push((site.id, positions.len()));
         for position in &orbit.positions {
-            positions.push(*position);
+            positions.push(position.map(|v| sign * v));
             species.push(number as i32);
         }
     }
     if positions.is_empty() {
         return None;
     }
+    // The search needs only the metric and the fractional positions; the
+    // standard orientation hands moyo a right-handed basis whatever the
+    // lattice's own orientation.
     let search = tables::search_atoms(
-        structure.lattice.params().matrix(),
+        structure.lattice.params().standard_matrix(),
         &positions,
         &species,
         structure.tolerances.symprec,
@@ -383,6 +394,34 @@ mod tests {
         let wyckoff = |x| sg.wyckoff(&params, x, 16, 0.01).map(|w| w.to_string());
         assert_eq!(wyckoff([0.0, 0.0, 0.0]).as_deref(), Some("2a"));
         assert_eq!(wyckoff([0.0, 0.0, 0.5]).as_deref(), Some("2b"));
+    }
+
+    #[test]
+    fn left_handed_lattices_hold_the_other_enantiomorph() {
+        // Atoms of P3₁21 written out in P1.
+        let hexagonal = CellParams::new(4.9, 4.9, 5.4, 90.0, 90.0, 120.0);
+        let structure = Structure::new(
+            crate::Lattice::new(hexagonal),
+            Symmetry::from_hm_symbol("P 31 2 1").unwrap(),
+            vec![
+                crate::Site::single(1, "Si1", "Si", [0.47, 0.0, 1.0 / 3.0]),
+                crate::Site::single(2, "O1", "O", [0.41, 0.27, 0.12]),
+            ],
+        );
+        let p1 = crate::transform::expand_to_p1(&structure).structure;
+        let detected = |structure: &Structure| {
+            detect_symmetry(structure, &crate::orbits(structure))
+                .unwrap()
+                .number
+        };
+        assert_eq!(detected(&p1), 152);
+        // The same coordinates on a left-handed basis: the mirror image.
+        let mirror = crate::Rotation::new([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]);
+        let mut mirrored = p1.clone();
+        mirrored.lattice =
+            crate::Lattice::with_orientation(hexagonal, crate::Orientation::new(mirror.unwrap()));
+        assert_eq!(detected(&mirrored), 154);
+        assert_eq!(detected(&crate::right_handed(&mirrored)), 154);
     }
 
     #[test]

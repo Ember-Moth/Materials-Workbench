@@ -18,8 +18,9 @@ pub fn write(structure: &Structure, comment: &str) -> Result<String, ExportError
     let mut out = String::new();
     out.push_str(&comment.replace(['\n', '\r'], " "));
     out.push_str("\n1.0\n");
-    // Only the standard orientation exists so far (design §4.2).
-    for basis in structure.lattice.params().matrix() {
+    // The basis vectors in the lattice's orientation (design §4.2), as a
+    // POSCAR import gave them.
+    for basis in structure.lattice.matrix() {
         for component in basis {
             out.push_str(&fixed(component, 20));
         }

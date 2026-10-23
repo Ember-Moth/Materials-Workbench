@@ -3,13 +3,15 @@
 //! supercells. Displacement parameters and coordinate uncertainties follow
 //! the atoms through the operations and the change of basis.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use nalgebra::Matrix3;
 
 use crate::{
-    Adp, CellParams, Measured, Occupant, Site, SiteId, SpaceGroup, Structure, Symmetry, expand,
+    Adp, CellParams, Lattice, Measured, Occupant, Orientation, Rotation, Site, SiteId, SpaceGroup,
+    Structure, SymOp, Symmetry, expand,
 };
 
 /// Coefficients this close to an integer are that integer, so that values
@@ -243,11 +245,10 @@ pub fn make_supercell(
         }
     }
 
-    let old = *structure.lattice.params();
-    let new_params = supercell_params(&old, &m);
+    let lattice = supercell_lattice(&structure.lattice, &m);
     let atoms = p1_atoms(structure);
-    let old_reciprocal = old.reciprocal_lengths();
-    let new_reciprocal = new_params.reciprocal_lengths();
+    let old_reciprocal = structure.lattice.params().reciprocal_lengths();
+    let new_reciprocal = lattice.params().reciprocal_lengths();
     let inverse = rows.map(|(coefficients, divisor)| coefficients.map(|c| c / divisor));
     let mut labels = Labels::default();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -295,8 +296,6 @@ pub fn make_supercell(
         }
     }
     debug_assert_eq!(sites.len(), atoms.len() * det as usize);
-    let mut lattice = structure.lattice;
-    lattice.set_params(new_params);
     Ok(Structure {
         lattice,
         symmetry: Symmetry::p1(),
@@ -306,12 +305,71 @@ pub fn make_supercell(
     })
 }
 
+/// The same crystal on a right-handed basis, for formats that describe a
+/// cell by its parameters and so imply one (CIF). A left-handed lattice
+/// (design §4.2) is described by −a, −b, −c instead: the cell parameters,
+/// displacement parameters and uncertainties stay as they are, coordinates
+/// become −x (moved into [0, 1) when they were in it) and operations
+/// (W, w) become (W, −w). Every atom stays where it was in Cartesian space.
+pub fn right_handed(structure: &Structure) -> Cow<'_, Structure> {
+    let Some(rotation) = structure
+        .lattice
+        .orientation()
+        .rotation()
+        .filter(|r| r.determinant() < 0.0)
+    else {
+        return Cow::Borrowed(structure);
+    };
+    let turned = Rotation::new(rotation.rows().map(|row| row.map(|v| -v)))
+        .expect("the negative of a rotation is a rotation");
+    let mut inverted = structure.clone();
+    inverted.lattice =
+        Lattice::with_orientation(*structure.lattice.params(), Orientation::new(turned));
+    inverted.symmetry = Symmetry::from_group(
+        structure
+            .symmetry
+            .operations()
+            .iter()
+            .map(|op| SymOp::new(*op.rotation(), op.translation().map(|t| -t)))
+            .collect(),
+    );
+    for site in &mut inverted.sites {
+        site.position = site.position.map(|x| {
+            let v = -x;
+            // `+ 0.0` turns −0 into 0.
+            if v < 0.0 { v + 1.0 } else { v + 0.0 }
+        });
+    }
+    Cow::Owned(inverted)
+}
+
+/// The lattice `A·M`, oriented so that every atom stays where it was in
+/// Cartesian space (design §4.2): a diagonal matrix keeps the orientation,
+/// others turn the standard orientation of the new parameters onto the new
+/// basis vectors.
+fn supercell_lattice(old: &Lattice, m: &[[i64; 3]; 3]) -> Lattice {
+    let params = supercell_params(old.params(), m);
+    let mut lattice = *old;
+    lattice.set_params(params);
+    if is_diagonal(m) {
+        return lattice;
+    }
+    let basis = old.matrix();
+    let new_basis =
+        [0, 1, 2].map(|j| [0, 1, 2].map(|k| (0..3).map(|i| m[i][j] as f64 * basis[i][k]).sum()));
+    // The parameters come from these very vectors, so the rotation exists.
+    Lattice::oriented_as(params, new_basis).unwrap_or(lattice)
+}
+
+fn is_diagonal(m: &[[i64; 3]; 3]) -> bool {
+    (0..3).all(|i| (0..3).all(|j| i == j || m[i][j] == 0))
+}
+
 /// The cell parameters of the lattice `A·M`. A diagonal matrix multiplies
 /// the lengths, uncertainties included, and keeps the angles exactly; other
 /// matrices go through the metric tensor `Mᵀ·G·M`, with right and 60°/120°
 /// angles kept exact.
 fn supercell_params(old: &CellParams, m: &[[i64; 3]; 3]) -> CellParams {
-    let diagonal = (0..3).all(|i| (0..3).all(|j| i == j || m[i][j] == 0));
     let scale = |value: Measured, n: i64| {
         let n = n as f64;
         match value.su() {
@@ -319,7 +377,7 @@ fn supercell_params(old: &CellParams, m: &[[i64; 3]; 3]) -> CellParams {
             None => Measured::exact(value.value() * n),
         }
     };
-    if diagonal {
+    if is_diagonal(m) {
         return CellParams {
             a: scale(old.a, m[0][0]),
             b: scale(old.b, m[1][1]),
@@ -330,34 +388,7 @@ fn supercell_params(old: &CellParams, m: &[[i64; 3]; 3]) -> CellParams {
     let g = Matrix3::from(old.metric()).transpose();
     let mm = Matrix3::from_fn(|i, j| m[i][j] as f64);
     let g2 = mm.transpose() * g * mm;
-    let lengths = [0, 1, 2].map(|i| g2[(i, i)].sqrt());
-    let angle = |i: usize, j: usize| {
-        let cosine = snap_cosine(g2[(i, j)] / (lengths[i] * lengths[j]));
-        let degrees = cosine.acos().to_degrees();
-        let rounded = degrees.round();
-        if (degrees - rounded).abs() < 1e-9 {
-            rounded
-        } else {
-            degrees
-        }
-    };
-    CellParams::new(
-        lengths[0],
-        lengths[1],
-        lengths[2],
-        angle(1, 2),
-        angle(0, 2),
-        angle(0, 1),
-    )
-}
-
-fn snap_cosine(cosine: f64) -> f64 {
-    for exact in [0.0, 0.5, -0.5] {
-        if (cosine - exact).abs() < SNAP {
-            return exact;
-        }
-    }
-    cosine
+    CellParams::from_metric([0, 1, 2].map(|i| [0, 1, 2].map(|j| g2[(i, j)])))
 }
 
 /// The (i, j) pairs of the six stored components: U11, U22, U33, U12, U13,
@@ -427,6 +458,7 @@ fn transform_su(su: [Option<f64>; 3], t: &[[f64; 3]; 3]) -> [Option<f64>; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Rotation;
     use crate::sample::{self, SampleKey};
     use crate::{Derived, Species};
 
@@ -560,6 +592,13 @@ mod tests {
         assert!((params.a.value() - 3.905 * 2f64.sqrt()).abs() < 1e-12);
         assert_eq!(params.gamma.value(), 90.0);
         assert_eq!(params.alpha.value(), 90.0);
+        // The new basis vectors are a − b and a + b where they were: the
+        // lattice is turned by −45° about z, not put in standard orientation.
+        let basis = rotated.lattice.matrix();
+        let expected = [[3.905, -3.905, 0.0], [3.905, 3.905, 0.0], [0.0, 0.0, 3.905]];
+        for (got, want) in basis.iter().flatten().zip(expected.iter().flatten()) {
+            assert!((got - want).abs() < 1e-12, "{basis:?}");
+        }
         let derived = Derived::compute(&rotated);
         assert_eq!(derived.atoms_in_cell(), 10);
         let density = Derived::compute(&srtio3).density.unwrap();
@@ -581,5 +620,100 @@ mod tests {
             Err(SupercellError::NotPositive { determinant: 0 })
         );
         assert!(make_supercell(&srtio3, [[-1, 0, 0], [0, 1, 0], [0, 0, 1]]).is_err());
+    }
+
+    #[test]
+    fn left_handed_lattices_turn_right_handed_in_place() {
+        let rutile = sample::load(SampleKey::Rutile).structure;
+        assert!(matches!(right_handed(&rutile), Cow::Borrowed(_)));
+        let mut mirrored = rutile.clone();
+        let rotation = Rotation::new([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]).unwrap();
+        mirrored.lattice =
+            Lattice::with_orientation(*rutile.lattice.params(), Orientation::new(rotation));
+        // Shift the O site so that coordinates of both signs occur.
+        mirrored.sites[1].position = [0.3048, 0.3048, 0.0];
+        let turned = right_handed(&mirrored).into_owned();
+        assert!(!turned.lattice.is_left_handed());
+        assert_eq!(turned.lattice.params(), mirrored.lattice.params());
+        assert_eq!(turned.sites[0].position, [0.0, 0.0, 0.0]);
+        assert_eq!(turned.sites[1].position, [1.0 - 0.3048, 1.0 - 0.3048, 0.0]);
+        assert!(
+            turned.sites[0]
+                .position
+                .iter()
+                .all(|v| v.is_sign_positive())
+        );
+        // The screw axis -y+1/2,x+1/2,z+1/2 keeps its translation modulo 1.
+        assert!(
+            turned
+                .symmetry
+                .operations()
+                .contains(&SymOp::parse("-y+1/2,x+1/2,z+1/2").unwrap())
+        );
+        assert_eq!(turned.symmetry.operations().len(), 16);
+        // The same atoms in Cartesian space, up to lattice translations.
+        let atoms = |structure: &Structure| -> Vec<[f64; 3]> {
+            crate::orbits(structure)
+                .iter()
+                .flat_map(|o| o.positions.clone())
+                .map(|x| structure.lattice.to_cartesian(x))
+                .collect()
+        };
+        let before = atoms(&mirrored);
+        let after = atoms(&turned);
+        assert_eq!(before.len(), after.len());
+        for r in after {
+            assert!(before.iter().any(|a| {
+                let d = mirrored
+                    .lattice
+                    .to_fractional([0, 1, 2].map(|i| r[i] - a[i]));
+                d.iter().all(|v| (v - v.round()).abs() < 1e-9)
+            }));
+        }
+    }
+
+    #[test]
+    fn supercells_keep_the_atoms_in_place() {
+        // Rutile with its cell given as left-handed vectors turned about z.
+        let mut rutile = sample::load(SampleKey::Rutile).structure;
+        let (s, c) = 0.3f64.sin_cos();
+        let rotation = Rotation::new([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, -1.0]]).unwrap();
+        rutile.lattice =
+            Lattice::with_orientation(*rutile.lattice.params(), crate::Orientation::new(rotation));
+        assert!(rutile.lattice.is_left_handed());
+        let before = Derived::compute(&rutile);
+        let cartesian = |structure: &Structure, derived: &Derived| -> Vec<[f64; 3]> {
+            derived
+                .orbits
+                .iter()
+                .flat_map(|o| o.positions.clone())
+                .map(|x| structure.lattice.to_cartesian(x))
+                .collect()
+        };
+        let atoms = cartesian(&rutile, &before);
+        for matrix in [
+            [[2, 0, 0], [0, 1, 0], [0, 0, 3]],
+            [[1, 1, 0], [-1, 1, 0], [0, 0, 1]],
+            [[1, 0, 1], [0, 1, 0], [-1, 0, 1]],
+        ] {
+            let supercell = make_supercell(&rutile, matrix).unwrap();
+            assert!(supercell.lattice.is_left_handed(), "{matrix:?}");
+            if matrix[0][1] == 0 && matrix[0][2] == 0 {
+                assert_eq!(
+                    supercell.lattice.orientation(),
+                    rutile.lattice.orientation()
+                );
+            }
+            // Every atom of the supercell sits on an atom of the original
+            // crystal, some lattice translation away.
+            let derived = Derived::compute(&supercell);
+            for r in cartesian(&supercell, &derived) {
+                let found = atoms.iter().any(|a| {
+                    let d = rutile.lattice.to_fractional([0, 1, 2].map(|i| r[i] - a[i]));
+                    d.iter().all(|v| (v - v.round()).abs() < 1e-9)
+                });
+                assert!(found, "{matrix:?}: {r:?}");
+            }
+        }
     }
 }

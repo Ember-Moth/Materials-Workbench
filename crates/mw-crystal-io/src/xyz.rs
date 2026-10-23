@@ -18,7 +18,6 @@ pub fn write(structure: &Structure) -> Result<String, ExportError> {
     let count: usize = groups.iter().map(|(_, positions)| positions.len()).sum();
     let lattice: Vec<String> = structure
         .lattice
-        .params()
         .matrix()
         .iter()
         .flatten()

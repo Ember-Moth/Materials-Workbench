@@ -58,6 +58,9 @@ pub struct Written {
 
 /// Writes one data block for the structure.
 pub fn write(structure: &Structure, options: &WriteOptions) -> Written {
+    // The cell parameters imply a right-handed basis: a left-handed lattice
+    // is written as −a, −b, −c, or the file would hold the mirror image.
+    let structure = &*mw_crystal::right_handed(structure);
     let orbits = mw_crystal::orbits(structure);
     let analysis = SymmetryAnalysis::compute(structure, &orbits);
     let space_group = analysis.space_group.as_ref();

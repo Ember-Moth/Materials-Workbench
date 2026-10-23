@@ -34,9 +34,8 @@ impl Derived {
         cutoff: f64,
     ) -> Option<Vec<Neighbor>> {
         let center = self.fractional(atom)?;
-        let params = lattice.params();
-        let matrix = params.matrix();
-        let volume = params.volume();
+        let matrix = lattice.matrix();
+        let volume = lattice.params().volume();
         if !(volume > 0.0 && cutoff > 0.0) {
             return Some(Vec::new());
         }
