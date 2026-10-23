@@ -89,12 +89,13 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 26 个能力：
+- `Registry::standard()` 注册了 27 个能力（M8 加了 `structure.transform_cell`）：
   - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
   - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
   - 结构编辑：`structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`；
   - 对称模式下的几何编辑（M7，晶体学设计稿 7.4–7.6 节）：`structure.move_site`（拖动一个原子，分数位移，`leave_special_position` 决定是否投影到约束子空间）、`structure.set_coordinate`（`axis` 为 `"x"`/`"y"`/`"z"`，跟随坐标联动，常数坐标返回 `fixed_coordinate`）、`structure.add_site`（元素、分数坐标、占位率，吸附到特殊位置；重合时返回 `coincident_site`，引导 `{"kind": "add_occupant", "site": …}`）。`structure.set_position` 在对称模式下也可用，位点取新位置的位点对称性；
+  - 晶胞变换（M8，晶体学设计稿 7.8 节）：`structure.transform_cell`，`cell` 取 `primitive`、`conventional`、`niggli`、`setting`（`setting` 给出 H-M 符号，如 `P 1 1 21/a`、`R -3 c :R`）或 `matrix`（`matrix` 是 P 的三行分数文本，`origin` 是 p，空数组表示原点不动）；不用的字段给空字符串或空数组。结果有变换的 ITA 写法（如 `c, b, -a; 0, 0, 0`）、P 和 p、新的空间群设定、晶胞参数、晶胞内原子数和操作数。拒绝时返回 `transform_not_positive`、`transform_volume`、`transform_not_a_translation`、`transform_breaks_symmetry`、`transform_too_large`，名称不对时 `invalid_arguments`，别的类型的设定 `other_type`，moyo 给不出时 `no_transformation`；
   - `history.undo`、`history.redo`。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
@@ -150,7 +151,7 @@ Capability
 |---|---|---|---|
 | 项目 | `project.list`、`project.open`、`structure.list`、`structure.open`、`file.import` | 读；导入为可撤销写入 | v0.2–v0.3 |
 | 结构查询 | `structure.summary`（化学式、晶胞、空间群、位点）、`structure.sites`、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`、`structure.diagnostics` | 只读 | v0.2 |
-| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
+| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.transform_cell`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
 | 导出 | `structure.export`（CIF / POSCAR / XYZ 文本，或写入文件） | 返回文本为只读；写文件为外部副作用 | v0.2（文本）、v0.3（文件） |
 | 视图（仅连接应用时） | `view.select`、`view.set_display_model`、`view.reset`、`view.snapshot`（返回视口图片，供多模态模型"看"结构） | 不改数据 | v0.3 |
 | XRD | `xrd.simulate`、`xrd.import`、`xrd.find_peaks`、`xrd.match_phases`、`xrd.compare` | 计算为只读；导入为写入 | v0.4 |
