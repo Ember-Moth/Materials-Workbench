@@ -89,14 +89,26 @@ fn schemas_are_in_the_strict_subset() {
         let stats = check_schema(&capability.input_schema).unwrap();
         assert_eq!(stats.union_parameters, 0, "{name}");
         // Tool names cannot contain dots; the assistant maps them.
-        tools.push(ToolDefinition::new(
+        let tool = ToolDefinition::new(
             name.replace('.', "__"),
             capability.description,
             capability.input_schema.clone(),
-        ));
+        );
+        tools.push((capability.effect, tool));
     }
-    // All of them fit in one strict request.
-    check_tools(&tools, true).unwrap();
+    // A strict request holds at most 20 tools, fewer than there are
+    // capabilities, so the assistant picks them by task (design §4). The
+    // read-only ones, which the MCP server offers, fit in one request.
+    let read_only: Vec<ToolDefinition> = tools
+        .iter()
+        .filter(|(effect, _)| *effect == Effect::ReadOnly)
+        .map(|(_, tool)| tool.clone())
+        .collect();
+    check_tools(&read_only, true).unwrap();
+    let tools: Vec<ToolDefinition> = tools.into_iter().map(|(_, tool)| tool).collect();
+    for request in tools.chunks(20) {
+        check_tools(request, true).unwrap();
+    }
 }
 
 #[test]
@@ -107,6 +119,14 @@ fn effects() {
     // Returns text; writing files would be External.
     assert_eq!(effect("structure.export"), Effect::ReadOnly);
     assert_eq!(effect("structure.delete_sites"), Effect::Undoable);
+    // Write tools for MCP come with v0.3; the server offers none yet.
+    for name in [
+        "structure.move_site",
+        "structure.set_coordinate",
+        "structure.add_site",
+    ] {
+        assert_eq!(effect(name), Effect::Undoable, "{name}");
+    }
     assert_eq!(effect("history.undo"), Effect::Undoable);
 }
 
@@ -486,6 +506,161 @@ fn moving_atoms() {
     // Onto site 2: allowed, with a warning.
     assert_eq!(moved.output["warnings"][0]["code"], "short_contact");
     assert!(moved.summary.contains("Warning"), "{}", moved.summary);
+}
+
+fn site_position(
+    registry: &Registry,
+    documents: &mut Documents,
+    structure: StructureEntryId,
+    index: u32,
+) -> Value {
+    let sites = call(
+        registry,
+        documents,
+        "structure.sites",
+        json!({ "structure": structure, "offset": index, "limit": 1 }),
+    )
+    .unwrap();
+    sites.output["sites"][0]["position"].clone()
+}
+
+#[test]
+fn moving_sites_under_symmetry() {
+    let (registry, mut documents, [rutile, ..]) = session();
+    let mut move_site = |displacement: Value, leave: bool| {
+        call(
+            &registry,
+            &mut documents,
+            "structure.move_site",
+            json!({
+                "structure": rutile,
+                "atom": atom(2, 0),
+                "displacement": displacement,
+                "leave_special_position": leave,
+            }),
+        )
+    };
+    // Along x, x, 0 only: half of the x displacement, none of z.
+    let moved = move_site(json!([0.01, 0.0, 0.02]), false).unwrap();
+    assert_eq!(moved.output["sites"], json!([2]));
+    assert_eq!(moved.output["info"], json!([]));
+    assert_eq!(
+        moved.summary,
+        "Moved O1 at (0.3098, 0.3098, 0.0000), 4 equivalent atoms (4f)."
+    );
+    // Off the mirror z = 0, still on the mirror x = y: 8j, with two
+    // of its atoms 0.3 Å apart across z = 0.
+    let left = move_site(json!([0.0, 0.0, 0.05]), true).unwrap();
+    assert_eq!(left.output["info"][0]["code"], "multiplicity");
+    assert_eq!(left.output["warnings"][0]["code"], "close_images");
+    assert_eq!(
+        left.summary,
+        "Moved O1 at (0.3098, 0.3098, 0.0500), 8 equivalent atoms (8j). Note: site 2 now has \
+         8 equivalent atoms in the cell instead of 4. Warning: equivalent atoms of site 2 are \
+         0.296 Å apart."
+    );
+}
+
+#[test]
+fn setting_coordinates() {
+    let (registry, mut documents, [rutile, ..]) = session();
+    let mut set = |axis: &str, value: f64| {
+        call(
+            &registry,
+            &mut documents,
+            "structure.set_coordinate",
+            json!({ "structure": rutile, "site": 2, "axis": axis, "value": value }),
+        )
+    };
+    // y of x, x, 0 follows x: setting it sets x.
+    let set_y = set("y", 0.3125).unwrap();
+    assert_eq!(
+        set_y.summary,
+        "Set y = 0.3125: O1 at (0.3125, 0.3125, 0.0000), 4 equivalent atoms (4f)."
+    );
+    let fixed = set("z", 0.1).unwrap_err();
+    assert_eq!(fixed.code, "fixed_coordinate");
+    assert_eq!(fixed.message, "z of site 2 is fixed by its site symmetry");
+    // Its own value changes nothing.
+    assert_eq!(set("z", 0.0).unwrap().output["changed"], false);
+    // x near 0 puts O1 on 2a, where Ti1 is.
+    let snapped = set("x", 0.0001).unwrap();
+    let codes: Vec<&Value> = snapped.output["info"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|info| &info["code"])
+        .collect();
+    assert_eq!(codes, [&json!("snapped"), &json!("multiplicity")]);
+    assert_eq!(snapped.output["warnings"][0]["code"], "short_contact");
+    assert_eq!(
+        site_position(&registry, &mut documents, rutile, 1),
+        json!([0.0, 0.0, 0.0])
+    );
+
+    let unknown_axis = registry.call(
+        &mut documents,
+        "structure.set_coordinate",
+        json!({ "structure": rutile, "site": 2, "axis": "w", "value": 0.1 }),
+    );
+    assert_eq!(unknown_axis.unwrap_err().code, "invalid_arguments");
+}
+
+#[test]
+fn adding_sites() {
+    let (registry, mut documents, [rutile, ..]) = session();
+    let mut add = |element: &str, position: Value| {
+        call(
+            &registry,
+            &mut documents,
+            "structure.add_site",
+            json!({
+                "structure": rutile,
+                "element": element,
+                "position": position,
+                "occupancy": 1.0,
+            }),
+        )
+    };
+    // 0.003 Å off 4f: snapped onto it and reported.
+    let added = add("o", json!([0.2046, 0.2050, 0.001])).unwrap();
+    assert_eq!(added.output["sites"], json!([3]));
+    assert_eq!(added.output["info"][0]["code"], "snapped");
+    assert!(
+        added
+            .summary
+            .starts_with("Added O2 at (0.2048, 0.2048, 0.0000), 4 equivalent atoms (4f)."),
+        "{}",
+        added.summary
+    );
+    // On an atom of O1: add an occupant to O1 instead.
+    let refused = add("F", json!([0.6952, 0.6952, 0.0])).unwrap_err();
+    assert_eq!(refused.code, "coincident_site");
+    assert_eq!(
+        refused.to_json()["guidance"],
+        json!([{ "kind": "add_occupant", "site": 2 }])
+    );
+    assert_eq!(
+        add("Zz", json!([0.5, 0.0, 0.0])).unwrap_err().code,
+        "unknown_element"
+    );
+
+    let undone = call(
+        &registry,
+        &mut documents,
+        "history.undo",
+        json!({ "structure": rutile }),
+    )
+    .unwrap();
+    assert!(undone.summary.contains("Undid"), "{}", undone.summary);
+    let sites = call(
+        &registry,
+        &mut documents,
+        "structure.sites",
+        json!({ "structure": rutile, "offset": 0, "limit": 10 }),
+    )
+    .unwrap();
+    assert_eq!(sites.output["total"], 2);
 }
 
 /// Ba and Sr on one position, operations from the H-M symbol and γ left

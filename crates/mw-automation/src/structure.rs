@@ -397,8 +397,62 @@ schema_struct! {
 }
 
 schema_struct! {
+    pub struct MoveSiteInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// The atom to drag, as structure.neighbors gives atoms; all its
+        /// equivalent atoms move with it.
+        pub atom: AtomRef,
+        /// The atom's displacement in fractional coordinates, multiples of
+        /// the cell vectors a, b and c.
+        pub displacement: [f64; 3],
+        /// False to keep the site on its special position: only the part of
+        /// the displacement along it counts. True to move by the whole
+        /// displacement, leaving the special position; the site then has
+        /// more equivalent atoms.
+        pub leave_special_position: bool,
+    }
+}
+
+schema_struct! {
+    pub struct SetCoordinateInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// The site's id, from structure.sites.
+        pub site: SiteId,
+        /// The fractional coordinate to set; structure.site_symmetry tells
+        /// which can be set.
+        pub axis: Axis,
+        /// Its new value, in fractions of the cell vector.
+        pub value: f64,
+    }
+}
+
+schema_struct! {
+    pub struct AddSiteInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// Element symbol, e.g. O or Fe.
+        pub element: String,
+        /// Fractional coordinates.
+        pub position: [f64; 3],
+        /// More than 0 and at most 1; 1 for a fully occupied site.
+        pub occupancy: f64,
+    }
+}
+
+schema_struct! {
     pub struct WarningOutput {
         /// Stable, e.g. occupancy_sum or short_contact.
+        pub code: String,
+        pub message: String,
+    }
+}
+
+schema_struct! {
+    pub struct InfoOutput {
+        /// Stable: snapped (a site was pulled onto a special position) or
+        /// multiplicity (a site's number of equivalent atoms changed).
         pub code: String,
         pub message: String,
     }
@@ -413,6 +467,8 @@ schema_struct! {
         /// The sites the edit applied to.
         pub sites: Vec<SiteId>,
         pub warnings: Vec<WarningOutput>,
+        /// What the edit did besides what was asked.
+        pub info: Vec<InfoOutput>,
     }
 }
 
@@ -508,20 +564,51 @@ fn edit_output(document: &CrystalDocument, outcome: Outcome, sites: Vec<SiteId>)
                 message: warning.to_string(),
             })
             .collect(),
+        info: outcome
+            .info
+            .iter()
+            .map(|info| InfoOutput {
+                code: info.code().into(),
+                message: info.to_string(),
+            })
+            .collect(),
     }
 }
 
-/// The summary of an edit, with its warnings.
+/// The summary of an edit, with what else it did and its warnings.
 fn edit_summary(output: &EditOutput, done: String) -> String {
     let mut summary = if output.changed {
         done
     } else {
         "Nothing changed: the structure already was as asked.".into()
     };
+    for info in &output.info {
+        summary.push_str(&format!(" Note: {}.", info.message));
+    }
     for warning in &output.warnings {
         summary.push_str(&format!(" Warning: {}.", warning.message));
     }
     summary
+}
+
+/// Where a site is after an edit, with its multiplicity and Wyckoff
+/// position, e.g. `O1 at (0.3148, 0.3148, 0.0000), 4 equivalent atoms (4f)`.
+fn site_text(document: &CrystalDocument, site: SiteId) -> String {
+    let derived = document.derived();
+    let Some(position) = document.structure().site(site).map(|s| s.position) else {
+        return String::new();
+    };
+    let [x, y, z] = position;
+    let count = derived.multiplicity(site).unwrap_or(0);
+    let wyckoff = derived
+        .site_symmetry(site)
+        .and_then(|s| s.wyckoff.as_ref())
+        .map_or_else(String::new, |w| format!(" ({w})"));
+    format!(
+        "{} at ({x:.4}, {y:.4}, {z:.4}), {count} equivalent {}{wyckoff}",
+        label(document.structure(), site),
+        if count == 1 { "atom" } else { "atoms" }
+    )
 }
 
 fn space_group(space_group: &SpaceGroupType) -> SpaceGroupOutput {
@@ -1142,7 +1229,7 @@ pub(crate) fn register(registry: &mut Registry) {
             "Move a site to new fractional coordinates. Under symmetry all its equivalent \
              atoms move with it and the site takes the site symmetry of the new position: \
              within 0.01 Å of a special position it snaps onto it, so its number of equivalent \
-             atoms can change. Warns when an atom comes closer to another than the \
+             atoms can change, as info reports. Warns when an atom comes closer to another than the \
              short-contact distance, 0.5 Å by default. Undoable.",
         ),
         |host: &mut dyn Host, input: SetPositionInput| {
@@ -1152,12 +1239,100 @@ pub(crate) fn register(registry: &mut Registry) {
                 position: input.position,
             })?;
             let output = edit_output(document, outcome, vec![input.site]);
-            let [x, y, z] = input.position;
+            let summary = edit_summary(
+                &output,
+                format!("Moved {}.", site_text(document, input.site)),
+            );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.move_site",
+            "Drag an atom by a fractional displacement, as with the mouse; all its equivalent \
+             atoms move with it. With leave_special_position false, the site stays on its \
+             special position: only the part of the displacement along it counts, the nearest \
+             allowed move. With true, it moves by the whole displacement and may leave the \
+             special position, which gives it more equivalent atoms. Either way, a site that \
+             ends within 0.01 Å of a special position with more symmetry snaps onto it. Changes \
+             in the number of equivalent atoms are reported in info. Warns when atoms come \
+             closer than 0.5 Å. Undoable.",
+        ),
+        |host: &mut dyn Host, input: MoveSiteInput| {
+            let document = document_mut(host, input.structure)?;
+            let site = input.atom.site;
+            let outcome = document.edit(Edit::MoveSite {
+                atom: input.atom,
+                displacement: input.displacement,
+                leave_special_position: input.leave_special_position,
+            })?;
+            let output = edit_output(document, outcome, vec![site]);
+            let summary = edit_summary(&output, format!("Moved {}.", site_text(document, site)));
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.set_coordinate",
+            "Set one fractional coordinate of a site, keeping the site on its special \
+             position: a free coordinate, or one that follows a single free coordinate, as \
+             structure.site_symmetry reports. The coordinates that depend on it follow: setting \
+             x of x, 2x, 1/4 sets y to 2x, and setting y sets x to y/2. A fixed coordinate \
+             (fixed_coordinate) or a combination of free ones (combined_coordinate) cannot be \
+             set; structure.set_position moves a site off its special position. Snaps onto a \
+             special position with more symmetry within 0.01 Å. Undoable.",
+        ),
+        |host: &mut dyn Host, input: SetCoordinateInput| {
+            let document = document_mut(host, input.structure)?;
+            let outcome = document.edit(Edit::SetCoordinate {
+                site: input.site,
+                axis: input.axis,
+                value: input.value,
+            })?;
+            let output = edit_output(document, outcome, vec![input.site]);
             let summary = edit_summary(
                 &output,
                 format!(
-                    "Moved {} to ({x}, {y}, {z}).",
-                    label(document.structure(), input.site)
+                    "Set {} = {}: {}.",
+                    input.axis.name(),
+                    input.value,
+                    site_text(document, input.site)
+                ),
+            );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.add_site",
+            "Add a site to the asymmetric unit: an element at fractional coordinates, with an \
+             occupancy, and all the atoms symmetry makes of it. Under symmetry it snaps onto \
+             the special position within 0.01 Å, which sets its number of equivalent atoms. A \
+             position on an atom of another site is refused (coincident_site): add the element \
+             to that site with structure.add_occupant instead. The label is the element symbol \
+             and the smallest unused number, e.g. O2. Warns when atoms come closer than 0.5 Å. \
+             Undoable.",
+        ),
+        |host: &mut dyn Host, input: AddSiteInput| {
+            let element = element_symbol(&input.element);
+            let document = document_mut(host, input.structure)?;
+            let outcome = document.edit(Edit::AddSite {
+                position: input.position,
+                species: Species::element(&element),
+                occupancy: Measured::exact(input.occupancy),
+                label: None,
+            })?;
+            // A new site goes to the end of the asymmetric unit.
+            let site = document.structure().sites.last().map(|s| s.id);
+            let output = edit_output(document, outcome, site.into_iter().collect());
+            let summary = edit_summary(
+                &output,
+                format!(
+                    "Added {}.",
+                    site.map_or_else(String::new, |site| site_text(document, site))
                 ),
             );
             Ok(Output::new(output, summary))

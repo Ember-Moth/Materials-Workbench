@@ -6,7 +6,7 @@
 //! others, an optional value is one type plus `null`, and ranges and units
 //! go in descriptions, checked by the handlers.
 
-use mw_crystal::{AtomRef, CellParam, SiteId};
+use mw_crystal::{AtomRef, Axis, CellParam, SiteId};
 use serde_json::{Map, Value, json};
 
 /// A type with a JSON Schema for its serde form.
@@ -126,6 +126,12 @@ impl Schema for CellParam {
             "type": "string",
             "enum": ["a", "b", "c", "alpha", "beta", "gamma"],
         })
+    }
+}
+
+impl Schema for Axis {
+    fn schema() -> Value {
+        json!({ "type": "string", "enum": ["x", "y", "z"] })
     }
 }
 
