@@ -51,7 +51,7 @@
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
 | `mw-automation` | 能力注册表：每个能力有名称、说明、输入输出 JSON Schema、副作用等级和处理函数。各领域 crate 注册自己的能力。Python 绑定和命令行也从这里取能力 | 否 |
-| `mw-mcp` | 把注册表映射成 MCP 的 tools、resources、prompts；处理传输、会话、权限和审计。v0.2 的只读无界面模式已实现（M11，第 5 节），由 `materials-workbench mcp` 启动 | 否 |
+| `mw-mcp` | 把注册表映射成 MCP 的 tools、resources、prompts；处理传输、会话、权限和审计。v0.2 的只读无界面模式（M11）和连接运行中的应用（M12）已实现（第 5 节），都由 `materials-workbench mcp` 启动 | 否 |
 | `mw-assistant` | 内置助手：Agent 循环、上下文组装 | 否 |
 | `mw-llm` | 模型服务客户端：`ChatProvider` 接口，Anthropic、OpenAI Chat Completions、OpenAI Responses 三个后端（第 6.2 节） | 否 |
 | 助手面板 | 对话界面、工具调用卡片、确认交互 | 是（放在外壳或单独的界面 crate） |
@@ -102,7 +102,7 @@ Capability
 - `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。
 - **Schema 由 Rust 类型生成**：输入输出都是用 `schema_struct!` 声明的结构体，同一份字段列表同时生成 serde 类型和 Schema，字段的文档注释就是给模型看的说明，两者不会不一致。没有用 schemars：它生成的 Schema 带有严格子集之外的关键字（`format`、`minimum`、`$schema` 等），还得再改写一遍。
 - **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部只读能力（MCP Server 暴露的那些）放进一个严格请求也合规；能力总数已超过一个严格请求的 20 个工具，所以测试按每 20 个一组检查其余的。输出 Schema 同样在子集内，可以有可空字段。
-- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11）。`Documents` 是放在内存里、没有项目的实现，供测试使用；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时由界面实现（M12）。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11）。`Documents` 是放在内存里、没有项目的实现，供测试使用；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），它只读：`document_mut` 返回 `None`，注册表的编辑能力在这样的宿主上返回 `read_only`。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
 - **参数先按类型反序列化**（拒绝多余字段），类型不对时返回 `invalid_arguments`；范围和单位由处理函数检查。元素符号不区分大小写（`zr` 即 Zr）。
 - **编辑的结果**：`EditOutput` 有 `changed`、`revision`、作用到的 `sites`、`warnings`，以及 `info`（M7）：编辑在要求之外做了什么，`snapped`（吸附到特殊位置）或 `multiplicity`（等效原子数变了）。摘要里写成 `Note: …`；移动位点的摘要写明它最后的位置、等效原子数和 Wyckoff 位置。
 - **错误可恢复**：`CallError` 有稳定的 `code`、英文的 `message` 和引导 `guidance`。例如对称模式下只给 Ti1 的一个等效原子换元素，返回 `breaks_symmetry`，引导为"改整个位点"或"转为 P1"（晶体学设计稿 7.1 节）。
@@ -137,11 +137,29 @@ Capability
 - **读项目文件，只读**：客户端用 `project_open` 按路径打开 `.mwproj` 目录。打开时只读清单、给每个结构分配会话里的结构 ID，结构文件等 `structure_open` 时再读（与界面相同，项目文件设计稿第 5 节）。服务器不写任何文件：项目文件、视图状态、配置目录里的最近项目都不动，所以不用加锁（项目文件设计稿第 1 节：写项目文件时再加锁，v0.3）。读到的是打开那一刻的内容；应用之后保存的改动，要重新启动服务器才能看到。
 - **项目之外的 CIF 文件**仍可以用 `file_open` 打开：结构放进进程里的一个未命名项目，与界面里没有项目时打开文件一样（项目文件设计稿第 9 节），只是永远不保存。它不是导入，理由见 5.2 节"项目工具"。
 - **结构 ID 是句柄**：工具参数里的结构 ID 是打开项目或文件时分配的整数，在进程存活期间稳定。2026-07-28 版规范去掉了协议层会话，要求跨调用的状态用服务器发出的句柄放在工具参数里，结构 ID 正是这样用的。资源 URI 则用项目文件里的 UUID，跨进程稳定（5.2 节）。
-- **为连接应用留的接口**：`Server<H: Host>` 对 `Host` 泛型，协议处理不知道结构从哪里来。无界面的实现是 `mw_mcp::Headless`，它同时实现 `mw_automation::Projects`（项目的列出与打开，见第 4 节）。每次能力调用在阻塞线程池里拿着 `Host` 的锁执行，读文件和对称性分析不占协议处理的线程。工具列表按 `Host::has_window` 取可用的能力，所以同一个 `Server` 跑在应用里时自动去掉只在无界面时可用的 `file_open`。
-- **以后连接运行中的应用（M12）**：
-  - 应用启动时在本机进程间通道上监听：macOS 和 Linux 用当前用户运行目录里的 Unix 域套接字（权限 0600），Windows 用命名管道；每次启动生成随机令牌，写进只有当前用户能读的文件。
-  - `materials-workbench mcp` 先找这个通道：找到就只在 stdio 和通道之间原样转发 JSON-RPC，找不到才自己无界面运行。
-  - 协议仍由 `mw-mcp` 的同一个 `Server` 处理，只是跑在应用进程里。为此 `Server` 要从"自己持有 `Documents`"改成对 `Host` 泛型；应用实现 `Host`，把调用派发到 GPUI 主线程，写操作进入同一个撤销栈，确认弹窗出现在应用里。这样协议处理只有一份，转发进程不需要懂 MCP。
+- **为连接应用留的接口**：M11 的 `Server<H: Host>` 对 `Host` 泛型，协议处理不知道结构从哪里来；M12 改为下面的两种宿主位置。无界面的实现是 `mw_mcp::Headless`，它同时实现 `mw_automation::Projects`（项目的列出与打开，见第 4 节）。工具列表按是否有窗口取可用的能力，所以同一个 `Server` 跑在应用里时自动去掉只在无界面时可用的 `file_open`。
+
+**v0.2 连接运行中的应用（M12，2026-10-23，`crates/mw-mcp`、外壳）**：
+
+- **同一个 `Server`，宿主在两处**：`Server::new(host)` 自己持有宿主（无界面的 `Headless`），每次调用在阻塞线程池里拿着它的锁执行，读文件和对称性分析不占协议处理的线程；`Server::dispatching(access, dispatcher)` 的宿主在另一个线程上，每次调用打包成一个 `Call`，经 `Dispatcher` 交给宿主的线程，那里从 `Calls` 里逐个取出、在自己的宿主上运行，结果经单次通道送回（`src/dispatch.rs`）。处理函数 panic 时照旧返回 `internal_error`；宿主的线程不在了（应用退出），调用返回 `unavailable`。交给应用的服务器有窗口：没有 `file_open`，是 12 个工具；服务器说明（`instructions`）也换成"连接到用户打开着的应用"的版本，说 `structure_open` 会在窗口里显示结构。协议处理仍只有一份，转发进程不懂 MCP。
+- **通道**（`src/endpoint.rs`、`src/listen.rs`）：
+  - **位置**：当前用户运行目录下的 `materials-workbench/`。macOS 是系统给出的用户临时目录（`confstr(_CS_DARWIN_USER_TEMP_DIR)`，即 `$TMPDIR` 所指的目录，但不依赖这个环境变量：有的客户端启动服务器时不传环境变量），Linux 是 `$XDG_RUNTIME_DIR`，没有时用 systemd 的 `/run/user/<uid>`，Windows 是本地应用数据目录；都找不到时用配置目录里的 `run/`。设置了 `MW_CONFIG_DIR` 时是其中的 `run/`，开发、测试和截图巡览的实例互不干扰。目录里是 Unix 域套接字 `mcp.sock`（Windows 上是命名管道 `\\.\pipe\materials-workbench-<目录路径 SHA-256 的前 16 位>`）和令牌文件 `mcp.token`。套接字路径超过系统上限（macOS 103 字节，Linux 107 字节）时不监听，错误里说明。
+  - **权限**：目录 0700；已存在而别人能进入时收回权限，属于别的用户时拒绝监听。套接字和令牌文件 0600，令牌经新建的 0600 临时文件写入再改名。两端用 `peer_cred` 确认对方进程属于同一用户；转发进程连接前还检查目录是这个用户的、别人进不去。Windows 的管道用 `first_pipe_instance`（名字已被占用时不监听；应用占住名字之后，别的程序就开不了同名的管道）和 `reject_remote_clients`，令牌文件靠本地应用数据目录继承的权限。
+  - **令牌**：每次开始监听时新生成：两个 UUID v4 的随机位，共 256 位，来自系统的随机数生成器（`uuid` 经 `getrandom`），十六进制写进令牌文件。比较时不在第一个不同的字节处提前返回。
+  - **握手**：转发进程先发一行 JSON `{"materials-workbench-mcp": 1, "token": …, "allow": […], "cwd": …}`：`allow` 是它命令行允许的目录（已是规范路径），`cwd` 是它的工作目录。应用回一行 `{"ok": true}`，或 `{"ok": false, "error": …}` 后断开；之后连接上就是 MCP 的按行 JSON-RPC，与 stdio 相同。5 秒内没有握手或一行超过 64 KiB 时断开。应用按 `allow` 和 `cwd` 为这个连接建 `Access`（`Access::with_base`：相对路径从客户端的工作目录算），每个 `Call` 带着它，所以 `--allow` 在两种模式下含义相同，最近项目也只列范围内的。
+  - **生命周期**：监听在自己的线程上跑一个 tokio 运行时（应用用 GPUI 的执行器）。同一个目录里已有实例在监听时，后启动的不接管、报错；没正常退出的实例留下的套接字在下次启动时清掉，令牌文件被新令牌覆盖。停止监听（关掉设置或退出）时关闭所有连接，删除套接字和令牌文件。
+- **`materials-workbench mcp`**（`src/relay.rs`、`src/cli.rs`）：解析参数、建好 `Access` 之后先找通道。没有目录或令牌文件、套接字不存在或连不上（遗留的）时，照 M11 无界面运行；连上并通过握手后，只在 stdio 和连接之间原样复制字节。客户端关掉 stdin 时关闭连接的写端，等应用答完；应用关闭连接（退出或关掉设置）时转发进程随之结束，不再等 stdin（`tokio` 的 stdin 读取取消不了，所以用 `shutdown_background` 结束运行时）。连接被拒绝（令牌不对、握手版本不同）或目录不安全时在标准错误里警告，再无界面运行。开发用的独立 `mw-mcp` 不找通道。
+- **应用端**（`apps/workbench/src/mcp.rs`、`host.rs`）：设置里"允许 MCP 客户端连接"打开时，外壳调用 `mw_mcp::listen`，并在主线程上起一个任务逐个运行 `Calls`。每个调用拿到一个 `AppHost`：借用 `Workbench`、窗口和 `Context`，实现 `Host` 和 `Projects`：
+  - 结构 ID 是应用里的 ID（`ProjectCatalog` 分配的），应用运行期间稳定，几个客户端同时连接时看到的相同，打开的状态也共用；
+  - `project.list` 列出窗口里打开着的项目（未命名项目的路径为空）和最近项目（只列客户端允许范围内的）；`structure.list` 列出它们的全部结构，外壳已为之建了工作区的算打开着；
+  - `project.open` 像"打开项目…"一样把项目加进边栏、记进最近项目，但不切换显示的结构；已打开的路径返回原来的 ID，复制的项目（ID 相同、路径不同）拒绝。错误的措辞与无界面时相同：`read_error`、`duplicate_project`、`unknown_structure` 从 `Headless` 移到 `mw_automation`，两个宿主共用；
+  - `structure.open` 在窗口里显示这个结构，与点击边栏相同；没打开过的在主线程上同步读取（用户自己打开时在后台读），调用返回时结构已经可用。用户正在后台打开的同一个结构由这次读取代替；
+  - 查询读的是工作区里的 `CrystalDocument`（`StructureWorkspace::crystal`），用户还没保存的编辑立刻可见。`Host::source` 给出导入时的数据块（`StructureWorkspace::source`）；外壳读结构时按清单里的哈希标明结构是否还是导入的那个，与 `Headless` 相同，所以 CIF 导出写回源文件字段的判断在两种模式下一致；
+  - 只读：`document_mut` 返回 `None`，因为编辑必须经工作区（`StructureWorkspace::execute`）才能同时更新字段、场景和选区。写操作、撤销栈和确认弹窗留给 v0.3。
+- **资源列表变化**：每次调用后与客户端上次知道的列表比较（`resources/list` 或上一次调用之后），不只比较这次调用前后，所以用户在界面里打开的结构会在下一次调用后通知。界面里打开、关闭结构时还不会立即通知。
+- **默认关**：监听是对本机同一用户的其他进程开放的入口，所以设置默认关。开关立即生效，保存在 `settings.json` 的 `mcp` 字段（没有这个字段的旧设置读作关）。启动时或打开开关时监听失败（另一个实例在监听、路径太长），用通知说明，应用照常使用。
+- **测试**：令牌、令牌文件和目录的权限、目录别人能进入时转发进程不信任它、令牌不对时拒绝、第二个实例不接管、停止后文件清掉、路径太长时什么都不留；用一个只回显的假应用确认转发进程把任意字节（含非 JSON、非 UTF-8、20 万字节）原样转发；经通道用 rmcp 的客户端调用宿主线程上的 `Headless`（`crates/mw-mcp/src/relay.rs`）；`Server::dispatching` 的调用在宿主线程上执行、线程不在时返回 `unavailable`（`src/server.rs`）。外壳的界面集成测试在无头窗口里打开示例项目，经 `Server::dispatching` 调用：只有只读工具、没有 `file_open`；列出打开的项目和结构；没打开的结构先报 `structure_not_open`，打开后窗口显示它；用户的编辑立刻读到；`project_open` 加进边栏而不切换显示、记进最近项目，允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不会让应用崩溃（`apps/workbench/src/ui_tests.rs`）。`apps/workbench/tests/mcp.rs` 在测试里启动监听端，用 rmcp 的客户端驱动 `materials-workbench mcp`：转接到监听端（相对路径从它的工作目录算）、读资源，监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用。另在真实的应用里手动走过一遍（打开设置的临时配置目录，按行发 JSON-RPC）。
+- **还没做**：Windows 的命名管道只做过编译检查（`cargo check --target x86_64-pc-windows-msvc`），没在 Windows 上运行；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用。
 
 ### 5.2 暴露的内容
 
@@ -166,7 +184,7 @@ Capability
 - `project.list`：打开着的项目（ID、名称、路径、结构数），加上应用记住的最近项目（ID、名称、路径、上次打开的时间、现在是否打开着）。无界面模式下最近项目来自配置目录的 `state.json`（项目文件设计稿第 10 节），**只列访问范围内的**（见下面的 `--allow`）；范围外的只给出个数，不给路径，因为路径本身就会透露用户名和项目名。
 - `project.open`：按路径打开 `.mwproj` 目录，返回项目 ID、名称和其中的结构（结构 ID、名称、来源、是否已打开、资源 URI）。已经打开的项目再打开一次返回原来的 ID，所以是幂等的；另一个路径上有同一个项目 ID 的目录（项目被复制过）拒绝打开（`duplicate_project`），否则资源 URI 会重复。更新版本格式的项目按项目文件设计稿第 4 节拒绝；旧格式在内存里迁移，不写回。
 - `structure.list`：所有打开的项目里的结构，打开了的和没打开的都列，带是否已打开和资源 URI。原来在 `structure.rs` 里，移到这里；没有项目的 `Host`（`Documents`）照旧列出它的文档。
-- `structure.open`：读结构文件；导入的结构再重新解析项目里的源文件副本，得到导入诊断和 CIF 要写回的字段。副本缺失或被改动时结构照常打开，结果里说明这一点（与界面的诊断标签页相同）。之后其他结构工具才能用它；对没打开的结构调用它们返回 `structure_not_open`，引导先调用 `structure.open`。连接应用时它在界面里打开这个结构。
+- `structure.open`：读结构文件；导入的结构再重新解析项目里的源文件副本，得到导入诊断和 CIF 要写回的字段。副本缺失或被改动时结构照常打开，结果里说明这一点（与界面的诊断标签页相同）。之后其他结构工具才能用它；对没打开的结构调用它们返回 `structure_not_open`，引导先调用 `structure.open`。连接应用时（M12）它在窗口里显示这个结构，与点击边栏相同。
 - `file.open`：打开项目之外的 CIF 文件，见 5.1 节；只在无界面时可用（`Availability::Headless`）。结构的命名和文件级诊断的归属与界面打开文件时相同。
 - 以上都是只读：打开是把文件读进服务器，不改磁盘上的任何东西。
 - **`file.import` 的评估**：不在本里程碑实现，留到 v0.3 与编辑工具一起做。导入是往项目里加条目，第 7.1 节定为可撤销写入；只读的服务器里"导入"只能留在内存里、永远不写回，结果工具说结构已加入某个项目，项目文件里却没有它，客户端和用户看到的项目就与磁盘不一致。把同一个能力在无界面时降为只读也不行：副作用等级是能力的属性，客户端据它决定是否要确认，不能因模式而变。所以无界面模式保留只读的 `file.open`：结构放进明确标为未命名、不会保存的项目，不冒充导入。v0.3 无界面模式能写项目文件（加锁、先备份）后再加 `file.import`；连接应用时（M12）导入走界面的"打开文件"，那时 `file.open` 不可用。
@@ -175,7 +193,7 @@ Capability
 
 **M11 暴露的工具**（`mw-mcp`）：
 
-- 共 13 个，`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。
+- 无界面时共 13 个，连接应用时没有 `file_open`，是 12 个（M12）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。
 - **工具名**把注册表名称里的 `.` 换成 `_`（`structure.summary` → `structure_summary`）。MCP 允许点号，但不少客户端把工具名原样交给模型 API，而两家都不允许点号（6.2.6 节）。测试确认换名后互不重复。说明、Schema 描述、摘要和错误消息里提到的注册表名称（如"structure.list gives the ids"）一并换成工具名。
 - **注解**：`readOnlyHint: true`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`。`outputSchema` 就是注册表的输出 Schema，输入、输出都在 6.2.6 节的严格子集内（集成测试再查一遍）。
 - **结果**：第一块文本是英文摘要，第二块是输出的 JSON 文本，`structuredContent` 是同一份 JSON（规范要求带结构化内容的工具同时给出序列化的 JSON 文本）。失败时返回 `isError: true` 的工具结果，文本是 `{"code", "message", "guidance"}`，模型可以据此修正调用；只有调用不存在的工具才是协议错误。处理函数 panic 时返回 `internal_error`，不让请求悬空。
@@ -543,7 +561,7 @@ provider 层负责把下面这些差异转换成项目自己的对话类型：
 | 版本 | 内容 | 依赖 |
 |---|---|---|
 | v0.1（随 M4） | 建立能力注册表的基本结构；领域命令可序列化，GPUI 动作改为调用领域命令。已实现，见第 4 节 | M4 命令层 |
-| v0.2 | 实验性 MCP Server：项目与结构的只读工具、导出 CIF / POSCAR 文本、结构资源；支持无界面和连接应用两种模式。无界面模式已实现：原型（2026-10-22）之后，M11（2026-10-23，见 5.1、5.2 节）让它读项目文件并并入主程序：`materials-workbench mcp`，stdio，只读；项目工具 `project_list`（含配置目录里的最近项目）、`project_open`、`structure_list`、`structure_open`，项目之外的 CIF 用 `file_open`，共 13 个只读工具；资源 URI 用项目文件里的 ID；`Server` 对 `Host` 泛型。`file.import` 评估后留到 v0.3（5.2 节）。测试：`mw-mcp` 的集成测试经 stdio 驱动独立的 `mw-mcp`，应用的 `tests/mcp.rs` 驱动 `materials-workbench mcp`、从配置目录的最近项目走到导出和读资源。MCP Inspector 2.12.0 只检查过原型。还没做：连接应用（M12）、用 Inspector 重查 M11、在 Claude Desktop 里实测 | M1、M2、M6 |
+| v0.2 | 实验性 MCP Server：项目与结构的只读工具、导出 CIF / POSCAR 文本、结构资源；支持无界面和连接应用两种模式，都已实现。原型（2026-10-22）之后，M11（2026-10-23，见 5.1、5.2 节）让它读项目文件并并入主程序：`materials-workbench mcp`，stdio，只读；项目工具 `project_list`（含配置目录里的最近项目）、`project_open`、`structure_list`、`structure_open`，项目之外的 CIF 用 `file_open`，共 13 个只读工具；资源 URI 用项目文件里的 ID。M12（2026-10-23，5.1 节）连接运行中的应用：设置里打开后应用在用户运行目录的 Unix 域套接字（Windows 为命名管道）上监听，令牌文件只有用户能读；`materials-workbench mcp` 找到它就在 stdio 和通道之间原样转发，找不到就无界面运行；应用里跑同一个 `Server`，调用派发到主线程，列出和打开的是窗口里的项目和结构，12 个只读工具。`file.import` 评估后留到 v0.3（5.2 节）。测试：`mw-mcp` 的集成测试经 stdio 驱动独立的 `mw-mcp`，通道和转发另有单元测试；应用的 `tests/mcp.rs` 驱动 `materials-workbench mcp`，从配置目录的最近项目走到导出和读资源，以及转接到测试里的监听端；外壳的界面集成测试经 `Server` 调用应用端的宿主。MCP Inspector 2.12.0 只检查过原型。还没做：用 Inspector 重查、在 Claude Code 和 Claude Desktop 里实测、在 Windows 上运行 | M1、M2、M6 |
 | v0.3 | 完整 MCP：编辑工具、写文件、视图工具、权限设置、审计日志、elicitation；与 Python 绑定、命令行一同发布 | M4–M6 |
 | v0.4 | 内置助手第一版：Claude 与 OpenAI 两类接口（含兼容服务）、工具调用卡片、确认交互、会话撤销；首个重点场景是 XRD 物相分析与结构问答。本地端点可以连接，但标为实验性 | v0.3 的权限与审计 |
 | v0.5–v0.6 | 热力学、显微组织模块发布时一并提供各自的能力（"完成"的定义里包含 MCP 工具和评测任务） | 各模块 |

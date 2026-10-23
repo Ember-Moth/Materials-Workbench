@@ -89,6 +89,16 @@ settings:
   language:
     en: Language
     zh-CN: 界面语言
+  mcp:
+    en: Allow MCP clients
+    zh-CN: 允许 MCP 客户端连接
+  mcp_description:
+    en: AI tools such as Claude Code that start materials-workbench mcp can list, open and read the projects and structures here, but not edit them.
+    zh-CN: Claude Code 等 AI 工具启动 materials-workbench mcp 后，可以列出、打开和读取这里的项目与结构，但不能编辑。
+mcp:
+  listen_failed:
+    en: "Couldn't let MCP clients connect: %{reason}"
+    zh-CN: "无法让 MCP 客户端连接：%{reason}"
 project:
   untitled:
     en: Untitled project

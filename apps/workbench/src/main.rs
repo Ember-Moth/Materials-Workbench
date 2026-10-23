@@ -13,6 +13,7 @@ macro_rules! tr {
 mod actions;
 mod assets;
 mod config;
+mod host;
 mod mcp;
 mod palette;
 mod projects;

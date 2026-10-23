@@ -7,13 +7,14 @@ use std::sync::Arc;
 
 use mw_automation::{
     CallError, EntryInfo, Host, OpenedFile, Opening, ProjectInfo, Projects, RecentProject,
-    RecentProjects, SkippedBlock, StructureEntryId, StructureInfo,
+    RecentProjects, SkippedBlock, StructureEntryId, StructureInfo, duplicate_project, read_error,
+    unknown_structure,
 };
 use mw_crystal::CrystalDocument;
 use mw_crystal_io::{ImportedBlock, cif};
 use mw_project_file::{
-    EntryId, EntryKind, Import, ProjectDir, ProjectId, Provenance, ReadError, Sha256, SourceFormat,
-    Timestamp, read_manifest, structure_sha256,
+    EntryId, EntryKind, Import, ProjectDir, ProjectId, Provenance, Sha256, SourceFormat, Timestamp,
+    read_manifest, structure_sha256,
 };
 
 use crate::access::Access;
@@ -110,24 +111,6 @@ impl Headless {
         };
         &mut self.projects[index]
     }
-}
-
-/// Why a project or one of its structures could not be read, for a model.
-fn read_error(error: ReadError) -> CallError {
-    let code = match &error {
-        ReadError::NotAProject(_) => "not_a_project",
-        ReadError::Newer { .. } => "newer_format",
-        ReadError::Io { .. } => "io_error",
-        _ => "corrupt_project",
-    };
-    let hint = match &error {
-        ReadError::NotAProject(_) => {
-            ": projects are directories named name.mwproj with a project.json"
-        }
-        ReadError::Newer { .. } => "; a newer Materials Workbench reads it",
-        _ => "",
-    };
-    CallError::new(code, format!("{error}{hint}"))
 }
 
 /// Reads a structure of a project and, for an imported one, the data block
@@ -232,21 +215,7 @@ impl Projects for Headless {
         }
         let (dir, manifest) = read_manifest(&path).map_err(read_error)?;
         if let Some(open) = self.projects.iter().find(|p| p.info.id == manifest.id) {
-            let elsewhere = open
-                .info
-                .path
-                .as_ref()
-                .map_or_else(String::new, |p| format!(" from {}", p.display()));
-            return Err(CallError::new(
-                "duplicate_project",
-                format!(
-                    "{} is a copy of the open project {}{elsewhere}: both have the id {}. Only \
-                     one of them can be open.",
-                    path.display(),
-                    open.info.name,
-                    manifest.id
-                ),
-            ));
+            return Err(duplicate_project(&path, &open.info));
         }
         let entries = manifest
             .entries
@@ -277,16 +246,7 @@ impl Projects for Headless {
                 let index = project.entries.iter().position(|e| e.id == id)?;
                 Some((p, index))
             })
-            .ok_or_else(|| {
-                CallError::new(
-                    "unknown_structure",
-                    format!(
-                        "no structure with id {}; structure.list gives the ids of the open \
-                         projects' structures",
-                        id.0
-                    ),
-                )
-            })?;
+            .ok_or_else(|| unknown_structure(id))?;
         let project = &mut self.projects[project];
         let entry = &project.entries[index];
         if entry.document.is_some() {

@@ -1,8 +1,10 @@
 //! Where the application keeps its own files (`docs/design/project-format.md`
 //! §10): settings and the session in the system's configuration directory,
-//! writable copies of the sample projects in its data directory. Both files
-//! are JSON with a version; a file that cannot be read gives the defaults,
-//! never a failed start.
+//! writable copies of the sample projects in its data directory, and the
+//! channel MCP clients connect through in the user's runtime directory
+//! (`docs/design/ai-integration.md` §5.1). Settings and session are JSON
+//! with a version; a file that cannot be read gives the defaults, never a
+//! failed start.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub struct AppPaths {
     config: PathBuf,
     data: PathBuf,
+    runtime: PathBuf,
 }
 
 impl Global for AppPaths {}
@@ -36,13 +39,20 @@ impl AppPaths {
         let data = dirs::data_dir()
             .unwrap_or_else(|| config.clone())
             .join(name);
-        Self { config, data }
+        let runtime = mw_mcp::user_runtime_dir().unwrap_or_else(|| config.join("run"));
+        Self {
+            config,
+            data,
+            runtime,
+        }
     }
 
-    /// Both kinds of files in one directory.
+    /// All kinds of files in one directory, the channel for MCP clients in
+    /// `run` there.
     pub fn in_dir(dir: PathBuf) -> Self {
         Self {
             config: dir.clone(),
+            runtime: dir.join("run"),
             data: dir,
         }
     }
@@ -58,6 +68,12 @@ impl AppPaths {
     /// Where the sample projects are installed.
     pub fn samples_dir(&self) -> PathBuf {
         self.data.join("samples")
+    }
+
+    /// Where the application listens for `materials-workbench mcp`, and
+    /// where that command looks for it.
+    pub fn mcp_endpoint(&self) -> mw_mcp::Endpoint {
+        mw_mcp::Endpoint::in_dir(&self.runtime)
     }
 }
 
@@ -100,12 +116,17 @@ fn write<T: Serialize>(path: &Path, value: &T) {
     }
 }
 
-/// The interface's appearance and language.
+/// The interface's appearance and language, and whether MCP clients may
+/// connect.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub(crate) version: u32,
     pub dark: bool,
     pub language: String,
+    /// Whether the application listens for `materials-workbench mcp`. Off
+    /// by default: listening lets the user's other processes in.
+    #[serde(default)]
+    pub mcp: bool,
 }
 
 impl Default for Settings {
@@ -114,6 +135,7 @@ impl Default for Settings {
             version: VERSION,
             dark: false,
             language: "zh-CN".into(),
+            mcp: false,
         }
     }
 }
@@ -216,6 +238,7 @@ mod tests {
         let settings = Settings {
             dark: true,
             language: "en".into(),
+            mcp: true,
             ..Settings::default()
         };
         settings.save(&paths);
@@ -228,6 +251,20 @@ mod tests {
         session.remember(Path::new("/p/a.mwproj"), ProjectId::from_u128(1), "a");
         session.save(&paths);
         assert_eq!(Session::load(&paths), Some(session));
+    }
+
+    #[test]
+    fn settings_from_before_mcp_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::in_dir(temp.path().to_path_buf());
+        fs::write(
+            paths.settings_file(),
+            r#"{"version": 1, "dark": true, "language": "en"}"#,
+        )
+        .unwrap();
+        let settings = Settings::load(&paths);
+        assert!(settings.dark);
+        assert!(!settings.mcp);
     }
 
     #[test]

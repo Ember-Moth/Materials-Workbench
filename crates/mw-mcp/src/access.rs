@@ -15,6 +15,10 @@ pub const MAX_FILE_BYTES: u64 = 64 << 20;
 pub struct Access {
     /// Canonical paths.
     allowed: Vec<PathBuf>,
+    /// Where relative paths are taken from, when not from this process's
+    /// working directory: the running application serves clients started
+    /// elsewhere (design §5.1).
+    base: Option<PathBuf>,
 }
 
 impl Access {
@@ -35,7 +39,10 @@ impl Access {
                 }
             })
             .collect::<std::io::Result<_>>()?;
-        Ok(Self { allowed })
+        Ok(Self {
+            allowed,
+            base: None,
+        })
     }
 
     /// Allows the working directory, unless it is the file system root,
@@ -47,11 +54,28 @@ impl Access {
         } else {
             vec![dir]
         };
-        Ok(Self { allowed })
+        Ok(Self {
+            allowed,
+            base: None,
+        })
+    }
+
+    /// Takes relative paths from `dir`, an absolute path, instead of the
+    /// working directory.
+    pub fn with_base(mut self, dir: PathBuf) -> Self {
+        self.base = Some(dir);
+        self
     }
 
     pub fn allowed(&self) -> &[PathBuf] {
         &self.allowed
+    }
+
+    fn absolute(&self, path: &Path) -> std::io::Result<PathBuf> {
+        match &self.base {
+            Some(base) if path.is_relative() => std::path::absolute(base.join(path)),
+            _ => std::path::absolute(path),
+        }
     }
 
     fn contains(&self, path: &Path) -> bool {
@@ -61,9 +85,11 @@ impl Access {
     /// Whether clients may open `path`, a project the application
     /// remembers. One that is gone counts by its name.
     pub fn permits(&self, path: &Path) -> bool {
-        match path.canonicalize() {
+        match self.absolute(path).and_then(|p| p.canonicalize()) {
             Ok(resolved) => self.contains(&resolved),
-            Err(_) => std::path::absolute(path).is_ok_and(|p| self.contains(&as_far_as_exists(&p))),
+            Err(_) => self
+                .absolute(path)
+                .is_ok_and(|p| self.contains(&as_far_as_exists(&p))),
         }
     }
 
@@ -91,8 +117,8 @@ impl Access {
     /// Paths are resolved, symbolic links included, before they are
     /// checked, so a link cannot lead outside the allowed directories.
     fn resolve(&self, path: &str) -> Result<PathBuf, CallError> {
-        let given = Path::new(path);
-        let absolute = std::path::absolute(given)
+        let absolute = self
+            .absolute(Path::new(path))
             .map_err(|e| CallError::new("invalid_arguments", format!("{path}: {e}")))?;
         let resolved = match absolute.canonicalize() {
             Ok(resolved) => resolved,
@@ -244,5 +270,15 @@ mod tests {
         assert!(access.permits(&allowed.join("gone.mwproj")));
         assert!(!access.permits(&temp.path().join("other.mwproj")));
         assert!(!access.permits(&allowed.join("../other.mwproj")));
+    }
+
+    #[test]
+    fn relative_paths_from_another_directory() {
+        let access = Access::new(&[fixtures()])
+            .unwrap()
+            .with_base(fixtures().join("../.."));
+        let (resolved, _) = access.read("tests/fixtures/rutile.cif").unwrap();
+        assert!(resolved.ends_with("rutile.cif"));
+        assert_eq!(access.read("Cargo.toml").unwrap_err().code, "not_allowed");
     }
 }

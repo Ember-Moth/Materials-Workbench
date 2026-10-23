@@ -535,7 +535,14 @@ pub(crate) fn document_mut(
     if host.document(id).is_none() {
         return Err(missing(host, id));
     }
-    Ok(host.document_mut(id).expect("the document is there"))
+    // The application edits through its interface, which updates what it
+    // shows; capabilities get to edit there with v0.3 (design §5.1).
+    host.document_mut(id).ok_or_else(|| {
+        CallError::new(
+            "read_only",
+            format!("structure {} cannot be edited from here", id.0),
+        )
+    })
 }
 
 /// Why there is no document: a structure of a project that is not open

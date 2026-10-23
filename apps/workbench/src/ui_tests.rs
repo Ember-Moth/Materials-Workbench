@@ -13,6 +13,7 @@ use gpui_kit::{
     WindowBounds, WindowOptions, px, size,
 };
 use mw_crystal::{CellParam, CellValues, Command, CrystalDocument, Edit, Measurement};
+use mw_project::StructureEntryId;
 use mw_project_file::{Camera, DisplayModel, EntryView, PanelTab, Provenance, SourceFormat};
 use mw_structure::StructureWorkspace;
 
@@ -416,4 +417,233 @@ fn supercells_join_the_project_as_derived_structures(cx: &mut TestAppContext) {
     let file = dir.read_structure(entry.id).unwrap();
     assert_eq!(file.structure.sites.len(), 20);
     assert!(file.structure.symmetry.is_p1());
+}
+
+/// Calls a tool through `server` as an MCP client would; the call runs on
+/// the workbench, as with a client connected over the channel.
+fn call_tool(
+    server: &mw_mcp::Server,
+    tool: &str,
+    arguments: serde_json::Value,
+    cx: &mut VisualTestContext,
+) -> rmcp::model::CallToolResult {
+    let serde_json::Value::Object(arguments) = arguments else {
+        panic!("arguments are an object");
+    };
+    let answer = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let (server, tool) = (server.clone(), tool.to_owned());
+    let slot = answer.clone();
+    cx.update(|_, cx| {
+        cx.spawn(async move |_| {
+            *slot.borrow_mut() = Some(server.call(&tool, arguments).await);
+        })
+        .detach()
+    });
+    draw(cx);
+    let answer = answer.borrow_mut().take();
+    answer
+        .expect("the call was answered")
+        .expect("a tool result")
+}
+
+/// The output of a call that succeeds.
+fn call(
+    server: &mw_mcp::Server,
+    tool: &str,
+    arguments: serde_json::Value,
+    cx: &mut VisualTestContext,
+) -> serde_json::Value {
+    let result = call_tool(server, tool, arguments, cx);
+    assert_ne!(result.is_error, Some(true), "{tool}: {result:#?}");
+    result.structured_content.expect("structured")
+}
+
+/// The code of a call that fails.
+fn refusal(
+    server: &mw_mcp::Server,
+    tool: &str,
+    arguments: serde_json::Value,
+    cx: &mut VisualTestContext,
+) -> String {
+    let result = call_tool(server, tool, arguments, cx);
+    assert_eq!(result.is_error, Some(true), "{tool}: {result:#?}");
+    let text = serde_json::to_value(&result.content[0]).unwrap();
+    let error: serde_json::Value = serde_json::from_str(text["text"].as_str().unwrap()).unwrap();
+    error["code"].as_str().unwrap().to_owned()
+}
+
+/// Milestone M12: an MCP client connected to the application lists its
+/// open projects, opens structures in its window and reads them as shown,
+/// edits included; it cannot edit.
+#[gpui_kit::test]
+fn mcp_clients_work_on_the_open_projects(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    let temp = tempfile::tempdir().unwrap();
+    let projects = install_samples(temp.path());
+    let (workbench, mut cx) = start_with(cx, temp.path(), &projects[..1]);
+    let (dispatcher, calls) = mw_mcp::dispatcher();
+    let _calls = cx.update(|window, cx| {
+        workbench.update(cx, |_, cx| crate::mcp::run_calls(calls, window, cx))
+    });
+    let allowed = temp.path().join("projects");
+    let access = mw_mcp::Access::new(std::slice::from_ref(&allowed)).unwrap();
+    let server = mw_mcp::Server::dispatching(access, dispatcher);
+    let tools: Vec<String> = server.tools().iter().map(|t| t.name.to_string()).collect();
+    assert!(tools.contains(&"structure_summary".to_string()));
+    assert!(!tools.contains(&"file_open".to_string()));
+    assert!(!tools.contains(&"structure_set_cell".to_string()));
+
+    let list = call(&server, "project_list", json!({}), &mut cx);
+    assert_eq!(list["open"].as_array().unwrap().len(), 1);
+    assert_eq!(list["open"][0]["name"], "TiO₂ 相研究");
+    assert_eq!(list["open"][0]["structures"], 2);
+    assert_eq!(list["recent"][0]["open"], true);
+
+    let structures = call(&server, "structure_list", json!({}), &mut cx);
+    let structures = structures["structures"].as_array().unwrap().clone();
+    let id = |name: &str| {
+        structures
+            .iter()
+            .find(|s| s["name"] == name)
+            .map(|s| s["structure"].clone())
+            .unwrap()
+    };
+    let (rutile, supercell) = (id("金红石"), id("金红石 2×2×2 超胞"));
+    assert_eq!(structures[0]["open"], true);
+    assert_eq!(structures[1]["open"], false);
+
+    // A structure the user has not opened: the client opens it, and the
+    // window shows it.
+    let code = refusal(
+        &server,
+        "structure_summary",
+        json!({ "structure": supercell }),
+        &mut cx,
+    );
+    assert_eq!(code, "structure_not_open");
+    call(
+        &server,
+        "structure_open",
+        json!({ "structure": supercell }),
+        &mut cx,
+    );
+    assert_eq!(
+        shown(&workbench, &mut cx),
+        Some(("TiO₂ 相研究".into(), "金红石 2×2×2 超胞".into()))
+    );
+    let summary = call(
+        &server,
+        "structure_summary",
+        json!({ "structure": supercell }),
+        &mut cx,
+    );
+    assert_eq!(summary["atoms_in_cell"], 48);
+
+    // What the user edits, the client reads.
+    let rutile_id = StructureEntryId(rutile.as_u64().unwrap() as u32);
+    cx.update(|window, cx| {
+        workbench.update(cx, |workbench, cx| {
+            workbench.open_structure(rutile_id, window, cx)
+        })
+    });
+    draw(&mut cx);
+    let a = CellValues::default().with(CellParam::A, 4.7);
+    let shown_rutile = workspace(&workbench, &mut cx);
+    execute(
+        &shown_rutile,
+        Command::Edit(Edit::SetCell { values: a }),
+        &mut cx,
+    );
+    let summary = call(
+        &server,
+        "structure_summary",
+        json!({ "structure": rutile }),
+        &mut cx,
+    );
+    assert_eq!(summary["cell"]["a"], 4.7);
+    assert_eq!(summary["cell"]["b"], 4.7);
+    let cif = call(
+        &server,
+        "structure_export",
+        json!({ "structure": rutile, "format": "cif" }),
+        &mut cx,
+    );
+    assert!(cif["text"].as_str().unwrap().contains("_cell_length_a"));
+    // Still unsaved: clients do not save.
+    assert!(unsaved(&workbench, &mut cx));
+
+    // A project from disk joins the open ones without taking the window.
+    let opened = call(
+        &server,
+        "project_open",
+        json!({ "path": projects[1] }),
+        &mut cx,
+    );
+    assert_eq!(opened["name"], "钙钛矿氧化物");
+    assert_eq!(project_count(&workbench, &mut cx), 2);
+    assert_eq!(
+        shown(&workbench, &mut cx),
+        Some(("TiO₂ 相研究".into(), "金红石".into()))
+    );
+    let again = call(
+        &server,
+        "project_open",
+        json!({ "path": projects[1] }),
+        &mut cx,
+    );
+    assert_eq!(again["project"], opened["project"]);
+    let recent = workbench.read_with(&cx, |workbench, _| workbench.session.recent.clone());
+    assert_eq!(recent[0].name, "钙钛矿氧化物");
+    // Only inside the directories the client allows.
+    let code = refusal(
+        &server,
+        "project_open",
+        json!({ "path": temp.path().join("config") }),
+        &mut cx,
+    );
+    assert_eq!(code, "not_allowed");
+}
+
+/// The setting lets MCP clients connect at once, and stops them when it is
+/// turned off; it is saved.
+#[gpui_kit::test]
+fn the_mcp_setting_starts_and_stops_listening(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (workbench, mut cx) = start(cx, temp.path());
+    let paths = AppPaths::in_dir(temp.path().join("config"));
+    let endpoint = paths.mcp_endpoint();
+    let listening = |workbench: &Entity<Workbench>, cx: &mut VisualTestContext| {
+        workbench.read_with(cx, |workbench, _| workbench.mcp.is_some())
+    };
+    assert!(!listening(&workbench, &mut cx));
+    assert!(!endpoint.token_file().exists());
+
+    cx.update(|_, cx| crate::settings::set_mcp(true, cx));
+    draw(&mut cx);
+    assert!(listening(&workbench, &mut cx));
+    assert!(endpoint.token_file().exists());
+    #[cfg(unix)]
+    assert!(endpoint.socket().exists());
+    assert!(crate::config::Settings::load(&paths).mcp);
+
+    cx.update(|_, cx| crate::settings::set_mcp(false, cx));
+    draw(&mut cx);
+    assert!(!listening(&workbench, &mut cx));
+    assert!(!endpoint.token_file().exists());
+    assert!(!crate::config::Settings::load(&paths).mcp);
+}
+
+/// With the setting on from the start and listening impossible (here the
+/// socket's path is too long), the window opens and nothing listens.
+#[gpui_kit::test]
+fn a_failure_to_listen_at_start_is_no_crash(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("x".repeat(100));
+    cx.update(|cx| cx.set_global(crate::settings::McpSetting(true)));
+    let (workbench, mut cx) = start(cx, &dir);
+    assert!(workbench.read_with(&cx, |workbench, _| workbench.mcp.is_none()));
+    let endpoint = AppPaths::in_dir(dir.join("config")).mcp_endpoint();
+    assert!(!endpoint.token_file().exists());
+    assert_eq!(project_count(&workbench, &mut cx), 2);
 }

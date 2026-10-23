@@ -23,7 +23,7 @@ mod structure;
 pub use files::{MAX_EXPORT_BYTES, diagnostic_message};
 pub use project::{
     EntryInfo, OpenedFile, Opening, ProjectInfo, Projects, RecentProject, RecentProjects,
-    SkippedBlock, resource_uri,
+    SkippedBlock, duplicate_project, read_error, resource_uri, unknown_structure,
 };
 pub use registry::{
     Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output, Registry,

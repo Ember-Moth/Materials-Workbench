@@ -14,9 +14,10 @@ use std::sync::Arc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use mw_crystal::{
-    AtomRef, CellParam, CellPreset, CellTransform, Checkpoint, CoordinateConstraint, Edit,
-    EditMode, SiteId, Structure, element,
+    AtomRef, CellParam, CellPreset, CellTransform, Checkpoint, CoordinateConstraint,
+    CrystalDocument, Edit, EditMode, SiteId, Structure, element,
 };
+use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
     Camera, DisplayModel as SavedDisplayModel, EntryView, PanelTab as SavedPanelTab, StructureFile,
 };
@@ -229,6 +230,21 @@ impl StructureWorkspace {
     /// waits for it.
     pub fn viewport_is_current(&self, cx: &App) -> bool {
         self.viewport.read(cx).is_current()
+    }
+
+    // MARK: Automation
+
+    /// The domain document, for capabilities that read it (MCP clients
+    /// connected to the application). Edits go through [`Self::execute`],
+    /// which updates what the workspace shows.
+    pub fn crystal(&self) -> &CrystalDocument {
+        &self.document.crystal
+    }
+
+    /// The data block an imported structure was read from, when its copy
+    /// could be read.
+    pub fn source(&self) -> Option<&ImportedBlock> {
+        self.document.source.as_deref()
     }
 
     // MARK: Saving
