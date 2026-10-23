@@ -1154,6 +1154,65 @@ mod tests {
         assert_eq!(codes, ["symmetry.missing_operations"]);
     }
 
+    /// The name the operations of a one-atom block came from, and how many
+    /// there are.
+    fn symmetry_source(header: &str, cell: [f64; 6]) -> (Option<DiagnosticKind>, Option<usize>) {
+        let mut text = format!("data_test\n{header}\n");
+        for (tag, value) in ["a", "b", "c"].iter().zip(&cell[..3]) {
+            text.push_str(&format!("_cell_length_{tag} {value}\n"));
+        }
+        for (tag, value) in ["alpha", "beta", "gamma"].iter().zip(&cell[3..]) {
+            text.push_str(&format!("_cell_angle_{tag} {value}\n"));
+        }
+        text.push_str(
+            "loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n\
+             _atom_site_fract_z\nC1 0.1 0.2 0.3\n",
+        );
+        let report = crate::cif::read_str(&text);
+        let block = &report.blocks[0];
+        (
+            block.diagnostics.first().map(|d| d.kind().clone()),
+            block
+                .structure
+                .as_ref()
+                .map(|s| s.symmetry.operations().len()),
+        )
+    }
+
+    #[test]
+    fn hall_symbols_with_the_axis_symbols_of_international_tables() {
+        // `"` marks the a+b axis; moyo spells it `=`.
+        let hexagonal = [5.0, 5.0, 12.0, 90.0, 90.0, 120.0];
+        let header = "_symmetry_space_group_name_Hall 'R 3 2\"'\n\
+                      _symmetry_space_group_name_H-M 'R 3 2'";
+        assert_eq!(
+            symmetry_source(header, hexagonal),
+            (
+                Some(DiagnosticKind::SymopsFromName {
+                    name: "R 3 2\"".into()
+                }),
+                Some(18)
+            )
+        );
+    }
+
+    #[test]
+    fn hall_symbols_moyo_cannot_read_fall_back_to_the_hm_symbol() {
+        // moyo's parser would panic on the spaces in the change of basis.
+        let monoclinic = [5.0, 6.0, 7.0, 90.0, 100.0, 90.0];
+        let header = "_symmetry_space_group_name_Hall '-P 2ybc (x, y, z)'\n\
+                      _symmetry_space_group_name_H-M 'P 1 21/c 1'";
+        assert_eq!(
+            symmetry_source(header, monoclinic),
+            (
+                Some(DiagnosticKind::SymopsFromName {
+                    name: "P 1 21/c 1".into()
+                }),
+                Some(4)
+            )
+        );
+    }
+
     #[test]
     fn a_name_that_contradicts_the_operations_is_reported() {
         let header =
