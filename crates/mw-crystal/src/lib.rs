@@ -15,7 +15,9 @@
 //! structure with its derived data, measurements and undo history. A
 //! [`CellTransform`] describes the structure in another cell; the
 //! [`CellPreset`]s give the primitive, conventional and Niggli cells and the
-//! other tabulated settings.
+//! other tabulated settings. [`DetectSymmetry`] finds the symmetry a
+//! structure's atoms have and previews symmetrizing by it, which
+//! [`Edit::Symmetrize`] commits.
 
 mod atom_ref;
 mod bonds;
@@ -37,6 +39,7 @@ pub mod sample;
 mod site;
 mod space_group;
 mod structure;
+mod symmetrize;
 mod symmetry;
 mod tables;
 mod transform;
@@ -60,7 +63,7 @@ pub use edit::{
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
 pub use formula::Formula;
-pub use id_map::{AtomFate, IdMap, Rebasing, SiteFate};
+pub use id_map::{AtomFate, IdMap, PositionMap, Rebasing, Relocation, SiteFate};
 pub use lattice::{CellParams, Lattice, Orientation, Rotation};
 pub use measured::Measured;
 pub use neighbors::Neighbor;
@@ -72,5 +75,6 @@ pub use structure::{
     Adp, Disorder, EditMode, Occupant, Site, SiteId, SpaceGroup, Species, Structure,
     StructureError, Tolerances,
 };
+pub use symmetrize::{DetectSymmetry, Symmetrization, SymmetrizeError};
 pub use symmetry::{Rational, SymOp, SymOpError, Symmetry, SymmetryError};
 pub use transform::{SupercellError, make_supercell, right_handed};

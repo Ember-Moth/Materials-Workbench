@@ -316,15 +316,26 @@ pub fn make_supercell(
 /// become −x (moved into [0, 1) when they were in it) and operations
 /// (W, w) become (W, −w). Every atom stays where it was in Cartesian space.
 pub fn right_handed(structure: &Structure) -> Cow<'_, Structure> {
-    let Some(rotation) = structure
+    if structure.lattice.is_left_handed() {
+        Cow::Owned(inverted(structure))
+    } else {
+        Cow::Borrowed(structure)
+    }
+}
+
+/// The same crystal on the basis −a, −b, −c, as [`right_handed`] describes
+/// it: a left-handed lattice becomes right-handed and a right-handed one
+/// left-handed. Applied twice, it gives back the lattice and operations;
+/// coordinates come back up to rounding and lattice translations.
+pub(crate) fn inverted(structure: &Structure) -> Structure {
+    let rows = structure
         .lattice
         .orientation()
         .rotation()
-        .filter(|r| r.determinant() < 0.0)
-    else {
-        return Cow::Borrowed(structure);
-    };
-    let turned = Rotation::new(rotation.rows().map(|row| row.map(|v| -v)))
+        .map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |r| {
+            *r.rows()
+        });
+    let turned = Rotation::new(rows.map(|row| row.map(|v| -v)))
         .expect("the negative of a rotation is a rotation");
     let mut inverted = structure.clone();
     inverted.lattice =
@@ -344,7 +355,7 @@ pub fn right_handed(structure: &Structure) -> Cow<'_, Structure> {
             if v < 0.0 { v + 1.0 } else { v + 0.0 }
         });
     }
-    Cow::Owned(inverted)
+    inverted
 }
 
 /// The largest operation set a change of cell may make: Fm-3m's in a cell
@@ -481,7 +492,7 @@ pub(crate) fn transform_operations(
 /// a denominator up to 24, or a decimal with up to 10 places. Values read
 /// from a file then come back exactly after a change of cell and its
 /// inverse.
-fn tidy(value: f64) -> f64 {
+pub(crate) fn tidy(value: f64) -> f64 {
     const ROUNDING: f64 = 8e-15;
     let tolerance = ROUNDING * value.abs().max(1.0);
     let near = |scale: f64| {
@@ -583,7 +594,7 @@ pub(crate) fn change_basis(
     let symmetry = transform_operations(&structure.symmetry, transform)?;
     let old = &structure.lattice;
     let params = transformed_params(old.params(), transform);
-    let lattice = if is_diagonal_rational(transform) {
+    let lattice = if is_scaling(transform) {
         let mut lattice = *old;
         lattice.set_params(params);
         lattice
@@ -648,9 +659,19 @@ pub(crate) fn change_basis(
     })
 }
 
-fn is_diagonal_rational(transform: &CellTransform) -> bool {
+/// Whether P only stretches the axes: diagonal, with positive entries. A
+/// negative entry turns its axis around, and with it the cell in space.
+fn is_scaling(transform: &CellTransform) -> bool {
     let m = transform.matrix();
-    (0..3).all(|i| (0..3).all(|j| i == j || m[i][j].is_zero()))
+    (0..3).all(|i| {
+        (0..3).all(|j| {
+            if i == j {
+                m[i][j].numerator() > 0
+            } else {
+                m[i][j].is_zero()
+            }
+        })
+    })
 }
 
 fn tidy_adp(adp: Adp) -> Adp {
@@ -756,7 +777,7 @@ const PAIRS: [(usize, usize); 6] = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 
 /// component that only moves keeps its exact value; an uncertainty adds in
 /// quadrature over the components it comes from, and is lost when one of
 /// them has none.
-fn transform_adp(adp: Adp, t: &[[f64; 3]; 3], from: &[f64; 3], to: &[f64; 3]) -> Adp {
+pub(crate) fn transform_adp(adp: Adp, t: &[[f64; 3]; 3], from: &[f64; 3], to: &[f64; 3]) -> Adp {
     let Adp::Anisotropic(u) = adp else {
         return adp;
     };
@@ -795,7 +816,7 @@ fn transform_adp(adp: Adp, t: &[[f64; 3]; 3], from: &[f64; 3], to: &[f64; 3]) ->
 /// Carries coordinate uncertainties through a linear map, in quadrature
 /// (correlations are not known). A coordinate that comes from one without
 /// an uncertainty has none.
-fn transform_su(su: [Option<f64>; 3], t: &[[f64; 3]; 3]) -> [Option<f64>; 3] {
+pub(crate) fn transform_su(su: [Option<f64>; 3], t: &[[f64; 3]; 3]) -> [Option<f64>; 3] {
     [0, 1, 2].map(|i| {
         let mut variance = 0.0;
         for (j, su) in su.iter().enumerate() {

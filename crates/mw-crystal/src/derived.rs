@@ -148,15 +148,21 @@ impl SymmetryAnalysis {
         let params = structure.lattice.params();
         let metric = params.metric();
         let tolerance = structure.tolerances.position;
-        let space_group = SpaceGroupType::identify(&structure.symmetry, params);
+        // The operations of a left-handed lattice describe the mirror image
+        // on a right-handed basis; the type is that of −a, −b, −c (design
+        // §4.2), so that enantiomorphs such as P3₁21 and P3₂21 come out
+        // right.
+        let right = crate::right_handed(structure);
+        let space_group = SpaceGroupType::identify(&right.symmetry, params);
         let sites = structure
             .sites
             .iter()
-            .map(|site| {
+            .zip(&right.sites)
+            .map(|(site, turned)| {
                 let stabilizer =
                     Stabilizer::new(&structure.symmetry, &metric, site.position, tolerance);
                 let wyckoff = space_group.as_ref().and_then(|sg| {
-                    sg.wyckoff(params, site.position, stabilizer.order(), tolerance)
+                    sg.wyckoff(params, turned.position, stabilizer.order(), tolerance)
                 });
                 (site.id, SiteSymmetry::new(&stabilizer, wyckoff))
             })
