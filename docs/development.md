@@ -57,6 +57,67 @@ CIF 往返的语料统计：对同一个目录里每个能导入的结构做"导
 MW_COD_DIR=~/cod/cif cargo test -p mw-crystal-io --release --test cod_roundtrip -- --ignored --nocapture
 ```
 
+POSCAR 的外部核对（晶体学设计稿 9.3 节）：示例程序把全部测试文件和内置示例的结构写成 POSCAR，旁边另写一份本仓库写出的 CIF，以及清单 `manifest.tsv`：每个结构应有的原子数、元素顺序和数目、晶胞参数，由位点算出，不看写出的文本。装不进 POSCAR 的结构在清单里写明原因：
+
+```bash
+cargo run -p mw-crystal-io --example export_atoms -- /tmp/mw-poscar
+```
+
+再用 pymatgen 和 ASE 读回。两者要从 PyPI 下载（连同 numpy、scipy、pandas、matplotlib 等依赖约 150 MB，装好约 350 MB），装进仓库外的临时虚拟环境，不加进仓库的依赖：
+
+```bash
+uv venv /tmp/mw-poscar-venv && VIRTUAL_ENV=/tmp/mw-poscar-venv uv pip install pymatgen ase
+```
+
+核对脚本同样放在仓库外：
+
+```bash
+cat > /tmp/check_poscar.py <<'EOF'
+import csv, sys, warnings
+from pathlib import Path
+import ase.io, numpy as np
+from pymatgen.io.cif import CifParser
+from pymatgen.io.vasp import Poscar
+
+out, failed = Path(sys.argv[1]), 0
+for row in csv.DictReader(open(out / "manifest.tsv", encoding="utf-8"), delimiter="\t"):
+    if row["status"] != "ok":
+        print(f"     {row['name']}: {row['status']}")
+        continue
+    path = out / f"{row['name']}.vasp"
+    elements, counts = zip(*(item.split(":") for item in row["elements"].split(",")))
+    cell = [float(row[k]) for k in ("a", "b", "c", "alpha", "beta", "gamma")]
+    poscar = Poscar.from_file(path, check_for_potcar=False)
+    s, atoms = poscar.structure, ase.io.read(path, format="vasp")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cif = CifParser(out / f"{row['name']}.cif").parse_structures(primitive=False)[0]
+    checks = {
+        "pymatgen elements": poscar.site_symbols == list(elements),
+        "pymatgen counts": poscar.natoms == [int(n) for n in counts],
+        "pymatgen cell": np.allclose(s.lattice.parameters, cell, rtol=0, atol=1e-7),
+        "coordinates in [0, 1)": ((s.frac_coords >= 0) & (s.frac_coords < 1)).all(),
+        "ASE symbols": atoms.get_chemical_symbols() == [x.species_string for x in s],
+        "ASE cell": np.allclose(atoms.cell.cellpar(), cell, rtol=0, atol=1e-7),
+        "ASE coordinates": np.allclose(atoms.get_scaled_positions(wrap=False), s.frac_coords, rtol=0, atol=1e-12),
+        "atoms of the CIF": len(cif) == len(s) and all(
+            min((c.distance(x) for c in cif if c.species == x.species), default=1) < 2e-3 for x in s
+        ),
+    }
+    problems = [what for what, ok in checks.items() if not ok]
+    failed += bool(problems)
+    print(f"{'FAIL' if problems else 'ok':>4} {row['name']}: {len(s)} atoms {' '.join(problems)}")
+print(f"{failed} failed")
+sys.exit(failed)
+EOF
+```
+
+```bash
+/tmp/mw-poscar-venv/bin/python -I /tmp/check_poscar.py /tmp/mw-poscar
+```
+
+每个写出的结构一行。`ok` 表示：pymatgen 读到的元素顺序和数目与清单相同，晶胞参数相差在 10⁻⁷ 以内，坐标都在 [0, 1)；ASE 读到的元素、晶胞和分数坐标与 pymatgen 相同；pymatgen 按对称操作展开旁边那份 CIF，得到的原子与 POSCAR 一一对应。不一致时列出是哪几项，退出码是失败的结构数。2026-10-23 用 pymatgen 2026.10.16 和 ASE 3.29.0 跑过，21 个全部通过。
+
 随应用附带的示例项目（`crates/mw-project-file/samples/`）由测试从 `mw-crystal-io` 的 fixture 生成，改了项目格式或这些 fixture 后重新生成（普通测试会检查它们是不是最新的）：
 
 ```bash

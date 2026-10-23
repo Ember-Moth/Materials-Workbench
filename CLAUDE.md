@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。当前处于 v0.1：里程碑 M1–M6 都已实现，剩下的模拟（mock）属于之后的版本。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。当前处于 v0.1：里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过），剩下的模拟（mock）属于之后的版本。
 
 ## 文档是设计的依据
 
@@ -43,6 +43,7 @@ cargo fmt --all
 - **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 1 分钟后自动退出；包括带键的负载和拾取延迟。窗口失去焦点的档位（输出里 `window_lost_focus=true`）数据作废。
 - **MCP Server**：`cargo run -p mw-mcp -- --allow crates/mw-mcp/tests/fixtures` 启动后在 stdio 上等客户端。连接 MCP Inspector 和 Claude Code 的写法见 `docs/development.md` 第 2 节；Inspector 要从 npm 下载，运行前先问用户。
 - **模型服务示例**：`cargo run -p mw-llm --example chat -- "问题"` 发一轮对话并打印流式事件，配置全部来自 `MW_LLM_*` 环境变量（见 `docs/development.md` 第 2 节）。它会发真实请求并计费，运行前先问用户；本机的 Ollama 不花钱（`MW_LLM_PROVIDER=ollama`）。
+- **POSCAR 外部核对**：`cargo run -p mw-crystal-io --example export_atoms -- /tmp/mw-poscar` 把全部测试文件和内置示例写成 POSCAR 和清单，再用 pymatgen 和 ASE 读回核对，命令和脚本见 `docs/development.md` 第 2 节。两者要从 PyPI 下载，装进仓库外的临时虚拟环境，不加进仓库，运行前先问用户。
 - **示例项目**：随应用附带的项目在 `crates/mw-project-file/samples/`，由测试生成。改了项目格式（包括 `mw-crystal` 类型的 serde 形式）或 `mw-crystal-io` 的 fixture 后重新生成，`the_samples_are_up_to_date` 会提醒：
 
   ```bash

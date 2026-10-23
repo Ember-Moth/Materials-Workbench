@@ -74,18 +74,25 @@ pub(crate) type ElementGroups<'a> = Vec<(&'a str, Vec<[f64; 3]>)>;
 
 /// The atoms of the unit cell by element, the elements in the order they
 /// first occur among the sites, each element's atoms in site order.
-/// Fractional coordinates in [0, 1).
+/// Fractional coordinates in [0, 1), also as written with ten decimals.
 pub(crate) fn by_element(structure: &Structure) -> Result<ElementGroups<'_>, ExportError> {
     check(structure)?;
     let mut groups: ElementGroups = Vec::new();
     for (site, orbit) in structure.sites.iter().zip(mw_crystal::orbits(structure)) {
         let element = site.element();
+        let positions = orbit.positions.into_iter().map(written_in_cell);
         match groups.iter_mut().find(|(e, _)| *e == element) {
-            Some((_, atoms)) => atoms.extend(orbit.positions),
-            None => groups.push((element, orbit.positions)),
+            Some((_, atoms)) => atoms.extend(positions),
+            None => groups.push((element, positions.collect())),
         }
     }
     Ok(groups)
+}
+
+/// A coordinate just below 1 is written as 1 with ten decimals: the same
+/// place as 0, which keeps the written coordinates in [0, 1).
+fn written_in_cell(position: [f64; 3]) -> [f64; 3] {
+    position.map(|v| if v >= 1.0 - 5e-11 { 0.0 } else { v })
 }
 
 /// A number with ten decimals, without a sign on zero.

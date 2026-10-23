@@ -500,3 +500,28 @@ fn atom_lists_refuse_what_they_cannot_hold() {
         })
     );
 }
+
+#[test]
+fn coordinates_that_round_to_one_are_written_as_zero() {
+    // Inside the cell, but 1 at the ten decimals written: the atom is
+    // written at 0, which is the same place, so that every coordinate
+    // stays in [0, 1) (design §9.3).
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+         _cell_length_a 4\n_cell_length_b 4\n_cell_length_c 4\n\
+         loop_\n_atom_site_label\n_atom_site_type_symbol\n\
+         _atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         Na1 Na 0.99999999999 0.5 0.999999999999999\n",
+    );
+    let structure = report.structures().next().unwrap().1;
+    let poscar = poscar::write(structure, "").unwrap();
+    assert_eq!(
+        poscar.lines().last(),
+        Some("    0.0000000000    0.5000000000    0.0000000000")
+    );
+    let xyz = xyz::write(structure).unwrap();
+    assert_eq!(
+        xyz.lines().last(),
+        Some("Na    0.0000000000    2.0000000000    0.0000000000")
+    );
+}
