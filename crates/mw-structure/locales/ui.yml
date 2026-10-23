@@ -455,6 +455,58 @@ dialog:
     ok:
       en: Transform
       zh-CN: 变换
+  symmetrize:
+    title:
+      en: Symmetrize
+      zh-CN: 对称化
+    description:
+      en: Rebuilds the structure with the symmetry its atoms have. Equivalent atoms become one site, averaged onto their symmetric positions; occupancies and displacement parameters are averaged too.
+      zh-CN: 按原子实际具有的对称性重建结构。等效原子合并为一个位点，位置平均到对称位置上，占位率和位移参数也一并平均。
+    tolerance:
+      en: Tolerance (Å)
+      zh-CN: 容差（Å）
+    tolerance_hint:
+      en: How far an atom may be from its symmetric image
+      zh-CN: 原子与它的对称像之间允许的最大距离
+    not_a_tolerance:
+      en: The tolerance must be a positive number of Å, such as 0.01.
+      zh-CN: 容差要是正数，单位 Å，如 0.01。
+    standardize:
+      en: Standardize to the conventional cell
+      zh-CN: 标准化为标准惯用胞
+    detecting:
+      en: Searching for symmetry…
+      zh-CN: 正在检测对称性…
+    subgroup:
+      en: "The atoms have %{space_group}, which this cell can hold only in part. Standardize to keep all of it."
+      zh-CN: "原子的对称性是 %{space_group}，当前晶胞只能保持其中一部分；标准化后可以保持全部。"
+    sites:
+      en: Sites
+      zh-CN: 位点
+    sites_value:
+      en: "%{count}"
+      zh-CN: "%{count} 个"
+    displacement:
+      en: Largest shift
+      zh-CN: 最大位移
+    displacement_value:
+      en: "%{distance} Å (%{label})"
+      zh-CN: "%{distance} Å（%{label}）"
+    displacement_none:
+      en: None
+      zh-CN: 无
+    cell_unchanged:
+      en: Unchanged
+      zh-CN: 不变
+    orientation:
+      en: The cell turns in space; the atoms stay where they are.
+      zh-CN: 晶胞在空间中的朝向改变，原子留在原处。
+    origin:
+      en: "The origin moves %{distance} Å onto an origin of the symmetry."
+      zh-CN: "原点移动 %{distance} Å，落到对称性的原点上。"
+    ok:
+      en: Symmetrize
+      zh-CN: 对称化
 command:
   undo:
     en: Undo
@@ -468,6 +520,9 @@ command:
   transform_cell:
     en: Transform cell…
     zh-CN: 晶胞变换…
+  symmetrize:
+    en: Symmetrize…
+    zh-CN: 对称化…
   convert_to_p1:
     en: Convert to P1…
     zh-CN: 转为 P1…
@@ -511,9 +566,6 @@ feature:
   polyhedra:
     en: Polyhedra
     zh-CN: 多面体显示
-  symmetrize:
-    en: Symmetrizing
-    zh-CN: 对称化
 move:
   prompt:
     en: "Drag an atom to move its site with all equivalent atoms; hold %{key} to leave its special position"
@@ -541,6 +593,9 @@ edit:
     transform_cell:
       en: Transform cell
       zh-CN: 晶胞变换
+    symmetrize:
+      en: Symmetrize
+      zh-CN: 对称化
     expand_and_remove:
       en: Convert to P1 and delete
       zh-CN: 转为 P1 后删除
@@ -599,6 +654,27 @@ edit:
     transform_breaks_symmetry:
       en: "The symmetry operation %{operation} does not map the new lattice onto itself; the new cell does not fit the symmetry."
       zh-CN: "对称操作 %{operation} 不能把新晶格映射到自身，新晶胞与结构的对称性不相容。"
+    symmetrize_invalid_tolerance:
+      en: The tolerance must be a positive number of Å.
+      zh-CN: 容差要是正数，单位 Å。
+    symmetrize_no_atoms:
+      en: The structure has no atoms.
+      zh-CN: 结构里没有原子。
+    symmetrize_not_found:
+      en: No symmetry was found. Atoms of the same kind may overlap, or the tolerance may be too large for the cell.
+      zh-CN: 没有找到对称性。可能有同种原子重叠，或者容差相对晶胞太大。
+    symmetrize_no_higher_symmetry:
+      en: The atoms have no symmetry beyond what the structure already has.
+      zh-CN: 原子的对称性不高于结构现有的对称性。
+    symmetrize_mismatch:
+      en: The atoms do not follow the symmetry found within the tolerance. Try another tolerance.
+      zh-CN: 原子与找到的对称性在容差内对不上，可以换一个容差试试。
+    symmetrize_position_tolerance:
+      en: "Atoms that the symmetry keeps apart lie closer than the position tolerance of %{tolerance} Å and would merge. Use a tolerance of at least %{tolerance} Å."
+      zh-CN: "对称性分开的原子比位置容差 %{tolerance} Å 还近，会被合并。请把容差设为不小于 %{tolerance} Å。"
+    symmetrize_too_large:
+      en: The result would have too many symmetry operations or atoms. Standardize to the conventional cell, or symmetrize a smaller cell.
+      zh-CN: 结果的对称操作或原子太多。请标准化为标准惯用胞，或对称化更小的晶胞。
     fixed_coordinate:
       en: "%{axis} of %{label} is fixed by its special position."
       zh-CN: "%{label} 的 %{axis} 由特殊位置固定，不能修改。"

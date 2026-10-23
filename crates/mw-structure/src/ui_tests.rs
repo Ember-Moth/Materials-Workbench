@@ -1176,3 +1176,138 @@ fn the_cell_dialog_offers_what_the_structure_has(cx: &mut TestAppContext) {
     cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
     assert_eq!(steps(&rutile, &mut cx), 0);
 }
+
+fn symmetrize_dialog(
+    workspace: &Entity<StructureWorkspace>,
+    cx: &mut VisualTestContext,
+) -> Entity<crate::symmetrize_dialog::SymmetrizeDialog> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .symmetrize_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.upgrade())
+            .expect("the symmetrize dialog is open")
+    })
+}
+
+/// Milestone M9: the P1 supercell gets rutile's symmetry back, previewed
+/// in the background, in one undo step; the selected atom stays selected.
+#[gpui_kit::test]
+fn symmetrizing_a_p1_structure(cx: &mut TestAppContext) {
+    let (supercell, mut cx) = open(cx, SampleKey::RutileSupercell);
+    let o = supercell.read_with(&cx, |workspace, _| {
+        let structure = workspace.document.structure();
+        let site = structure.sites.iter().find(|s| s.element() == "O").unwrap();
+        AtomRef::new(site.id, 0, [0; 3])
+    });
+    select(&supercell, Selection::atom(o), &mut cx);
+    let cartesian = |workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            let [Target::Atom(atom)] = workspace.selection.targets()[..] else {
+                panic!("one atom selected");
+            };
+            let x = workspace.document.derived().fractional(atom).unwrap();
+            workspace.document.structure().lattice.to_cartesian(x)
+        })
+    };
+    let before = cartesian(&supercell, &mut cx);
+
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::Symmetrize), cx));
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    let dialog = symmetrize_dialog(&supercell, &mut cx);
+    // Kept, the supercell holds P4₂/mnm with its translations as centering.
+    let found = |dialog: &Entity<crate::symmetrize_dialog::SymmetrizeDialog>,
+                 cx: &mut VisualTestContext| {
+        dialog.read_with(cx, |dialog, _| {
+            dialog.found().map(|found| {
+                (
+                    found.detected_number,
+                    found.structure.symmetry.operations().len(),
+                    found.structure.sites.len(),
+                    found.cell_changed,
+                )
+            })
+        })
+    };
+    assert_eq!(found(&dialog, &mut cx), Some((136, 128, 2, false)));
+    // Standardized, it is the rutile cell.
+    dialog.update(&mut cx, |dialog, cx| dialog.set_standardize(true, cx));
+    draw(&mut cx);
+    assert_eq!(found(&dialog, &mut cx), Some((136, 16, 2, true)));
+
+    // A tolerance that is no number is refused in the preview, and Enter,
+    // which confirms the dialog, changes nothing and keeps it open.
+    let tolerance = dialog.read_with(&cx, |dialog, _| dialog.tolerance.clone());
+    type_text(&mut cx, &tolerance, "a lot");
+    assert!(
+        dialog
+            .read_with(&cx, |dialog, _| dialog.refusal())
+            .is_some()
+    );
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    assert_eq!(steps(&supercell, &mut cx), 0);
+
+    type_text(&mut cx, &tolerance, "0.01");
+    assert_eq!(found(&dialog, &mut cx), Some((136, 16, 2, true)));
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+    assert_eq!(steps(&supercell, &mut cx), 1);
+    let (mode, operations, atoms, labels) = supercell.read_with(&cx, |workspace, _| {
+        let document = &workspace.document;
+        let structure = document.structure();
+        (
+            structure.edit_mode(),
+            structure.symmetry.operations().len(),
+            document.derived().atoms_in_cell(),
+            structure
+                .sites
+                .iter()
+                .map(|s| s.label().to_string())
+                .collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!((mode, operations, atoms), (EditMode::Symmetric, 16, 6));
+    assert_eq!(labels, ["Ti1", "O1"]);
+    // The selected oxygen is the same atom of the new cell.
+    let after = cartesian(&supercell, &mut cx);
+    for (a, b) in after.iter().zip(before) {
+        assert!((a - b).abs() < 1e-9, "{after:?} {before:?}");
+    }
+
+    // One undo puts the supercell and the selection back.
+    focus_workspace(&supercell, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(sites(&supercell, &mut cx).len(), 48);
+    let selected = supercell.read_with(&cx, |workspace, _| workspace.selection.targets());
+    assert_eq!(selected, [Target::Atom(o)]);
+}
+
+/// A structure whose atoms have no more symmetry than its operations: the
+/// preview says so, and confirming changes nothing.
+#[gpui_kit::test]
+fn nothing_to_symmetrize_says_why(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::Symmetrize), cx));
+    draw(&mut cx);
+    let dialog = symmetrize_dialog(&rutile, &mut cx);
+    let refusal = dialog.read_with(&cx, |dialog, _| dialog.refusal());
+    assert_eq!(
+        refusal.as_deref(),
+        Some(crate::editing::symmetrize_error_text(
+            &mw_crystal::SymmetrizeError::NoHigherSymmetry,
+            &rutile.read_with(&cx, |workspace, _| workspace.document.structure().clone()),
+        ))
+        .as_deref()
+    );
+    let shown = notifications(&mut cx);
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    assert_eq!(notifications(&mut cx), shown + 1);
+    assert_eq!(steps(&rutile, &mut cx), 0);
+}

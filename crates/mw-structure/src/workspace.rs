@@ -29,6 +29,7 @@ use crate::document::StructureDocument;
 use crate::moving::AtomDrag;
 use crate::scene::{self, DisplayModel, LineColors};
 use crate::selection::Selection;
+use crate::symmetrize_dialog::{self, SymmetrizeDialog};
 use crate::{dialogs, editing, format};
 
 /// Element symbols, the items of every element picker.
@@ -129,6 +130,8 @@ pub struct StructureWorkspace {
     project_modified: bool,
     /// The cell transform dialog last opened, while it is open.
     pub(crate) cell_dialog: Option<WeakEntity<CellDialog>>,
+    /// The symmetrize dialog last opened, while it is open.
+    pub(crate) symmetrize_dialog: Option<WeakEntity<SymmetrizeDialog>>,
     _subscriptions: Vec<Subscription>,
     _occupant_subscriptions: Vec<Subscription>,
 }
@@ -214,6 +217,7 @@ impl StructureWorkspace {
             occupants: Vec::new(),
             project_modified: false,
             cell_dialog: None,
+            symmetrize_dialog: None,
             _subscriptions: subscriptions,
             _occupant_subscriptions: Vec::new(),
         };
@@ -546,6 +550,31 @@ impl StructureWorkspace {
         self.cell_dialog = Some(dialog.downgrade());
     }
 
+    fn open_symmetrize(&mut self, _: &Symmetrize, window: &mut Window, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        let dialog = symmetrize_dialog::open(self, entity, window, cx);
+        self.symmetrize_dialog = Some(dialog.downgrade());
+    }
+
+    /// Symmetrizes the structure by the symmetry its atoms have
+    /// (crystallography design §7.10), as one undo step; the selection and
+    /// the measurements follow the atoms. `symprec` is the tolerance in Å,
+    /// the structure's own when `None`. `false` when it was refused, which a
+    /// notification explains.
+    pub fn symmetrize(
+        &mut self,
+        symprec: Option<f64>,
+        standardize: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let edit = Edit::Symmetrize {
+            symprec,
+            standardize,
+        };
+        self.edit(edit, window, cx).is_ok()
+    }
+
     /// Describes the structure in another cell (crystallography design
     /// §7.8), as one undo step; the selection and the measurements follow
     /// the atoms. `false` when the change was refused, which a notification
@@ -848,6 +877,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::convert_to_p1))
             .on_action(cx.listener(Self::open_transform_cell))
+            .on_action(cx.listener(Self::open_symmetrize))
             .on_action(cx.listener(Self::make_supercell))
             .on_action(cx.listener(Self::export))
             .on_action(cx.listener(Self::show_ball_and_stick))

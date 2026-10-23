@@ -8,8 +8,8 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use mw_crystal::{
     AtomFate, Axis, CellParam, CellValues, Command, Edit, EditError, EditInfo, EditWarning,
-    MAX_VOLUME_FACTOR, Measured, Outcome, SiteId, Species, Structure, Target, TransformError,
-    expand_and_remove,
+    MAX_VOLUME_FACTOR, Measured, Outcome, SiteId, Species, Structure, SymmetrizeError, Target,
+    TransformError, expand_and_remove,
 };
 
 use crate::actions::{AddMixedOccupant, AddSite, DeleteSelection, Redo, Undo};
@@ -54,6 +54,9 @@ pub(crate) fn command_name(command: &Command) -> SharedString {
             Edit::ExpandToP1 | Edit::RestoreStructure { .. } => tr!("edit.command.expand_to_p1"),
             Edit::TransformCell { .. } | Edit::RestoreBasis { .. } => {
                 tr!("edit.command.transform_cell")
+            }
+            Edit::Symmetrize { .. } | Edit::RestoreAtoms { .. } => {
+                tr!("edit.command.symmetrize")
             }
             // Batches delete several sites at once, or convert to P1 first.
             Edit::Batch { edits } if matches!(edits.first(), Some(Edit::ExpandToP1)) => {
@@ -120,6 +123,7 @@ pub(crate) fn error_text(error: &EditError, structure: &Structure) -> SharedStri
             tr!("edit.error.coincident_site", label = label(*site))
         }
         EditError::Transform(error) => transform_error_text(error),
+        EditError::Symmetrize(error) => symmetrize_error_text(error, structure),
         // The rest name sites, atoms or measurements that the interface
         // only offers while they exist.
         other => tr!("edit.error.other", reason = other.to_string()),
@@ -150,6 +154,26 @@ fn transform_error_text(error: &TransformError) -> SharedString {
             "edit.error.transform_breaks_symmetry",
             operation = operation.to_string()
         ),
+        other => tr!("edit.error.other", reason = other.to_string()),
+    }
+}
+
+/// Why a structure cannot be symmetrized (design §7.10).
+pub(crate) fn symmetrize_error_text(
+    error: &SymmetrizeError,
+    structure: &Structure,
+) -> SharedString {
+    match error {
+        SymmetrizeError::InvalidTolerance => tr!("edit.error.symmetrize_invalid_tolerance"),
+        SymmetrizeError::NoAtoms => tr!("edit.error.symmetrize_no_atoms"),
+        SymmetrizeError::NotFound => tr!("edit.error.symmetrize_not_found"),
+        SymmetrizeError::NoHigherSymmetry => tr!("edit.error.symmetrize_no_higher_symmetry"),
+        SymmetrizeError::Mismatch => tr!("edit.error.symmetrize_mismatch"),
+        SymmetrizeError::PositionTolerance => tr!(
+            "edit.error.symmetrize_position_tolerance",
+            tolerance = format::tolerance(structure.tolerances.position)
+        ),
+        SymmetrizeError::TooLarge => tr!("edit.error.symmetrize_too_large"),
         other => tr!("edit.error.other", reason = other.to_string()),
     }
 }

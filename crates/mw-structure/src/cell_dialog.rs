@@ -347,7 +347,7 @@ impl CellDialog {
 
 /// The space group and setting of a structure, e.g. `R-3c (No. 167),
 /// R-3c:R (R)`.
-fn setting_text(structure: &Structure) -> SharedString {
+pub(crate) fn setting_text(structure: &Structure) -> SharedString {
     let Some(space_group) =
         SpaceGroupType::identify(&structure.symmetry, structure.lattice.params())
     else {
@@ -371,7 +371,7 @@ fn setting_text(structure: &Structure) -> SharedString {
 }
 
 /// The new cell, lengths on one line and angles on the next.
-fn cell_lines(params: &CellParams) -> [SharedString; 2] {
+pub(crate) fn cell_lines(params: &CellParams) -> [SharedString; 2] {
     [
         tr!(
             "dialog.cell.lengths",

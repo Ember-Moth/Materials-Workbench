@@ -549,6 +549,30 @@ const TOUR: &[(&str, Step)] = &[
             });
         }
     }),
+    // The 2×2×2 rutile supercell is in P1; its atoms have rutile's
+    // symmetry.
+    ("_show-supercell", |workbench, window, cx| {
+        workbench.open_structure(StructureEntryId(2), window, cx);
+    }),
+    // The symmetrize dialog searches in the background and previews keeping
+    // the cell: P4₂/mnm with the supercell's translations as centering,
+    // two sites.
+    ("53-symmetrize-dialog", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+        window.dispatch_action(Box::new(mw_structure::Symmetrize), cx);
+    }),
+    // Confirmed with standardizing: the rutile cell with six atoms, in
+    // symmetry mode; one undo goes back.
+    ("54-symmetrized", |workbench, window, cx| {
+        window.close_dialog(cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.symmetrize(None, true, window, cx)
+            });
+        }
+    }),
 ];
 
 /// A fresh directory for the tour's settings, session and sample projects

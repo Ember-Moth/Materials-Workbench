@@ -17,6 +17,7 @@ gpui_kit::actions!(
         Redo,
         ConvertToP1,
         TransformCell,
+        Symmetrize,
         MakeSupercell,
         ExportStructure,
         ShowBallAndStick,
@@ -113,6 +114,20 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             ],
             Lucide::Axis3d,
             Box::new(TransformCell),
+        ),
+        command(
+            tr!("command.symmetrize"),
+            &[
+                "symmetrize",
+                "detect symmetry",
+                "find symmetry",
+                "standardize",
+                "duichenhua",
+                "jiance duichenxing",
+                "biaozhunhua",
+            ],
+            Lucide::Hexagon,
+            Box::new(Symmetrize),
         ),
         command(
             tr!("command.convert_to_p1"),
