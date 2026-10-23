@@ -91,6 +91,10 @@ impl Bench {
     }
 }
 
+fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    a.into_iter().chain(b).min()
+}
+
 /// The viewport's resolved size, captured during prepaint.
 #[derive(Clone, Copy, PartialEq)]
 struct Geometry {
@@ -123,6 +127,9 @@ pub struct ViewportView {
     needs_render: bool,
     /// When the oldest unrendered change was requested, for latency.
     requested_at: Option<Instant>,
+    /// The oldest request of frames skipped since the last shown one: their
+    /// changes reach the screen with the next frame.
+    skipped_requested_at: Option<Instant>,
     image: Option<Arc<RenderImage>>,
     last_frame_size: Option<(u32, u32)>,
     probe: Rc<PaintProbe>,
@@ -131,6 +138,8 @@ pub struct ViewportView {
     gpui_gpu: Option<SharedString>,
     /// Frames read back since measurements were reset, painted or not.
     frames_finished: u64,
+    /// Frames not copied because a newer one was already submitted.
+    frames_skipped: u64,
     bench: Option<Bench>,
 }
 
@@ -158,6 +167,7 @@ impl ViewportView {
             in_flight: 0,
             needs_render: false,
             requested_at: None,
+            skipped_requested_at: None,
             image: None,
             last_frame_size: None,
             probe: Rc::default(),
@@ -165,6 +175,7 @@ impl ViewportView {
             drag_origin: None,
             gpui_gpu: window.gpu_specs().map(|s| s.device_name.into()),
             frames_finished: 0,
+            frames_skipped: 0,
             bench,
         }
     }
@@ -218,6 +229,7 @@ impl ViewportView {
         self.stats.clear();
         self.probe.clear();
         self.frames_finished = 0;
+        self.frames_skipped = 0;
     }
 
     /// Advances the scripted run; called once per displayed frame.
@@ -260,13 +272,14 @@ impl ViewportView {
         let (pick_stale, pick_cached) = self.time_picks();
         println!(
             "bench atoms={atoms} bonds={bonds} scale={scale}% render={w}x{h} frame_mb={:.1} \
-             presented_fps={:.1} finished_fps={:.1} encode_ms={:.2} gpu_wait_ms={:.2} \
+             presented_fps={:.1} finished_fps={:.1} skipped_fps={:.1} encode_ms={:.2} gpu_wait_ms={:.2} \
              copy_ms={:.2} paint_ms={:.2} request_to_image_ms={:.2} \
              pick_new_camera_ms={pick_stale:.2} pick_cached_ms={pick_cached:.2} \
              window_lost_focus={was_inactive}",
             self.stats.last_bytes().unwrap_or(0) as f64 / 1e6,
             self.probe.presented_total() as f64 / seconds,
             self.frames_finished as f64 / seconds,
+            self.frames_skipped as f64 / seconds,
             ms(self.stats.mean_encode_ms()),
             ms(self.stats.mean_gpu_wait_ms()),
             ms(self.stats.mean_copy_ms()),
@@ -403,7 +416,9 @@ impl ViewportView {
                 self.in_flight += 1;
                 let requested_at = self.requested_at.take();
                 cx.spawn(async move |this, cx| {
-                    let frame = cx.background_spawn(async move { pending.wait() }).await;
+                    let frame = cx
+                        .background_spawn(async move { pending.wait_latest() })
+                        .await;
                     this.update(cx, |view, cx| view.finish_frame(frame, requested_at, cx))
                         .ok();
                 })
@@ -419,13 +434,18 @@ impl ViewportView {
 
     fn finish_frame(
         &mut self,
-        frame: Result<FrameImage, RenderError>,
+        frame: Result<Option<FrameImage>, RenderError>,
         requested_at: Option<Instant>,
         cx: &mut Context<Self>,
     ) {
         self.in_flight -= 1;
         match frame {
-            Ok(frame) => {
+            Ok(None) => {
+                self.frames_skipped += 1;
+                self.skipped_requested_at = earliest(self.skipped_requested_at, requested_at);
+            }
+            Ok(Some(frame)) => {
+                let requested_at = earliest(self.skipped_requested_at.take(), requested_at);
                 let bytes = frame.bgra.len();
                 let size = (frame.width, frame.height);
                 if let Some(buffer) =

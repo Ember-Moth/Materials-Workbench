@@ -145,10 +145,19 @@ const TOUR: &[(&str, Step)] = &[
         window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx)
     }),
     // Turn the view closer to the c axis, where an O no longer hides the
-    // body-center Ti; click that Ti, add an apical O, hover over the other.
+    // body-center Ti. Atoms are located in the image on screen, so the
+    // turned frame must land before pointing at them.
+    ("_turn-rutile", |workbench, window, cx| {
+        point_at(
+            workbench,
+            &[Pointer::Drag(TI_CENTER, 44., -19.)],
+            window,
+            cx,
+        );
+    }),
+    // Click the Ti, add an apical O, hover over the other.
     ("03-select-atoms", |workbench, window, cx| {
         const ACTIONS: &[Pointer] = &[
-            Pointer::Drag(TI_CENTER, 44., -19.),
             Pointer::Click(TI_CENTER),
             Pointer::ShiftClick(O_APICAL),
             Pointer::Hover(O_APICAL_OTHER),

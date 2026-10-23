@@ -2,18 +2,25 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use glam::Vec3;
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal_render::{
     CameraMatrices, CameraPose, FrameImage, HighlightRing, OrbitCamera, Pick, PickRequest,
-    RenderError, RenderRequest, Renderer, Scene, srgb_to_linear,
+    RenderError, RenderRequest, Renderer, Scene, linear_to_srgb, srgb_to_linear,
 };
 
 /// Frames that may be rendering or reading back at the same time.
 const MAX_IN_FLIGHT: usize = 2;
+/// Resolution while the camera moves, relative to full; GPUI stretches the
+/// smaller image over the viewport (`viewport-rendering.md` §5.3).
+const INTERACTIVE_SCALE: f32 = 0.5;
+/// How long the camera must rest before a full-resolution frame replaces
+/// the reduced one.
+const SETTLE_DELAY: Duration = Duration::from_millis(150);
 const DRAG_RADIANS_PER_PIXEL: f32 = 0.008;
 const ZOOM_PER_SCROLL_PIXEL: f32 = 0.004;
 /// A press that moves less than this is a click, not a drag.
@@ -30,9 +37,11 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn physical(&self) -> (u32, u32) {
+    /// The size in physical pixels at a fraction of full resolution.
+    fn physical(&self, scale: f32) -> (u32, u32) {
         let size = self.bounds.size;
-        let to_px = |v: Pixels| (f32::from(v) * self.scale_factor).round().max(0.0) as u32;
+        let scale = self.scale_factor * scale;
+        let to_px = |v: Pixels| (f32::from(v) * scale).round().max(0.0) as u32;
         (to_px(size.width), to_px(size.height))
     }
 
@@ -41,16 +50,62 @@ impl Geometry {
     }
 }
 
-/// Theme colors the frame depends on, captured during prepaint.
+/// Theme colors the frame and the hover ring depend on.
 #[derive(Clone, Copy, PartialEq)]
 struct Colors {
     clear: Hsla,
     selection: Hsla,
 }
 
+impl Colors {
+    fn new(theme: &Theme) -> Self {
+        Self {
+            clear: theme.muted,
+            selection: theme.selection,
+        }
+    }
+
+    /// Halfway between the selection color and the background, in linear
+    /// light: a lighter mark than the selection ring.
+    fn hover(&self) -> Hsla {
+        let (selection, clear) = (linear(self.selection), linear(self.clear));
+        let [r, g, b] = [0, 1, 2].map(|i| linear_to_srgb((selection[i] + clear[i]) / 2.0));
+        Rgba { r, g, b, a: 1.0 }.into()
+    }
+}
+
 fn linear(color: Hsla) -> [f32; 3] {
     let rgba = Rgba::from(color);
     [rgba.r, rgba.g, rgba.b].map(srgb_to_linear)
+}
+
+/// The camera and scene placement one frame was rendered with. Overlays
+/// are placed with the frame on screen, so they stay on the image while
+/// newer frames are still being rendered.
+#[derive(Clone, Copy)]
+struct FrameView {
+    camera: CameraMatrices,
+    /// The scene center, which the frame's positions are relative to.
+    center: Vec3,
+}
+
+impl FrameView {
+    /// Where a scene point (Å) appears in a viewport of the given size.
+    fn project(&self, position: Vec3, size: Size<Pixels>) -> Point<Pixels> {
+        let CameraMatrices { view, proj } = self.camera;
+        let clip = proj * view * (position - self.center).extend(1.0);
+        let ndc = clip.truncate() / clip.w;
+        point(
+            size.width * ((ndc.x + 1.0) * 0.5),
+            size.height * ((1.0 - ndc.y) * 0.5),
+        )
+    }
+
+    /// Logical pixels per Å in a viewport of the given height; the
+    /// projection is orthographic.
+    fn pixels_per_angstrom(&self, height: Pixels) -> f32 {
+        self.camera.proj.y_axis.y * f32::from(height) / 2.0
+    }
 }
 
 /// A left-button press that may become a click or a drag.
@@ -81,15 +136,18 @@ pub enum ViewportEvent {
     Hovered(Option<Pick>),
 }
 
-/// Owns the renderer, the camera and the frame pipeline. Render requests are
-/// coalesced; at most [`MAX_IN_FLIGHT`] frames are read back concurrently on
-/// the background executor, and each finished frame replaces the painted
-/// image.
+/// Owns the renderer, the camera and the frame pipeline. Changes made in
+/// one update (scene, rings, camera) go into a single frame, submitted at
+/// the end of the update; at most [`MAX_IN_FLIGHT`] frames are read back
+/// concurrently on the background executor, and each finished frame
+/// replaces the painted image. While the camera moves, frames render at
+/// [`INTERACTIVE_SCALE`].
 ///
 /// Picking goes through the renderer's ID texture, also off the UI thread:
 /// one pick at a time, hover picks coalesced to the latest pointer position.
-/// Hovered spheres get a light ring; the host chooses which spheres show the
-/// selection ring.
+/// The host chooses which spheres show the selection ring, which is part of
+/// the 3D image; the hovered sphere's lighter ring is painted over the
+/// image, so hovering never renders a frame.
 pub struct Viewport {
     renderer: Result<Renderer, SharedString>,
     camera: OrbitCamera,
@@ -103,11 +161,19 @@ pub struct Viewport {
     geometry: Option<Geometry>,
     colors: Option<Colors>,
     in_flight: usize,
+    /// Whether something changed since the last frame was submitted.
     needs_render: bool,
+    /// Whether a submission is scheduled for the end of this update.
+    submit_scheduled: bool,
+    /// Whether the camera is moving, so frames render at reduced size.
+    interactive: bool,
+    /// Ends `interactive` once the camera has rested; replaced, and so
+    /// restarted, by every move.
+    settle: Task<()>,
     /// Frames submitted so far; each frame's number is its index.
     submitted: u64,
-    /// The number of the frame `image` holds.
-    shown: Option<u64>,
+    /// The number of the frame `image` holds, and how it was rendered.
+    shown: Option<(u64, FrameView)>,
     image: Option<Arc<RenderImage>>,
     /// Images replaced since the last paint; paint removes them from GPUI's
     /// sprite atlas so it does not grow by one image per frame.
@@ -143,6 +209,9 @@ impl Viewport {
             colors: None,
             in_flight: 0,
             needs_render: false,
+            submit_scheduled: false,
+            interactive: false,
+            settle: Task::ready(()),
             submitted: 0,
             shown: None,
             image: None,
@@ -193,6 +262,8 @@ impl Viewport {
             self.framed = true;
             self.reset_camera(cx);
         }
+        // The hover ring and the pointer cursor are gone.
+        cx.notify();
     }
 
     /// Spheres of the current scene that show the selection ring.
@@ -200,17 +271,27 @@ impl Viewport {
         &self.selected
     }
 
-    /// Whether the image on screen is the last frame submitted and no frame
-    /// is pending, so it shows the current scene, camera and highlights.
+    /// Whether the image on screen is the last frame submitted, no frame is
+    /// pending and the camera has settled to full resolution, so the image
+    /// shows the current scene, camera and rings.
     pub fn is_current(&self) -> bool {
-        !self.needs_render && self.in_flight == 0 && self.shown == self.submitted.checked_sub(1)
+        !self.needs_render
+            && !self.interactive
+            && self.in_flight == 0
+            && self.shown.map(|(number, _)| number) == self.submitted.checked_sub(1)
+    }
+
+    /// Frames submitted so far, for tests and diagnostics.
+    pub fn frames_submitted(&self) -> u64 {
+        self.submitted
     }
 
     /// Spheres of the current scene that show the selection ring.
     pub fn set_selection(&mut self, spheres: Vec<usize>, cx: &mut Context<Self>) {
         if self.selected != spheres {
             self.selected = spheres;
-            self.update_highlights(cx);
+            self.upload_rings();
+            self.request_frame(cx);
         }
     }
 
@@ -248,19 +329,54 @@ impl Viewport {
         self.geometry.map(|g| g.bounds)
     }
 
-    /// Where a scene point (Å) appears, relative to the viewport's top-left
-    /// corner, under the current camera. `None` before the first layout.
+    /// Where a scene point (Å) appears in the image on screen, relative to
+    /// the viewport's top-left corner. That image was rendered with an
+    /// earlier camera while the camera moves, so overlays placed here stay
+    /// on it. `None` before the first layout.
     pub fn project(&self, position: [f64; 3]) -> Option<Point<Pixels>> {
         let geometry = self.geometry?;
-        let CameraMatrices { view, proj } = self.camera.matrices(geometry.aspect());
-        let world = Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32)
-            - self.scene_center;
-        let clip = proj * view * world.extend(1.0);
-        let ndc = clip.truncate() / clip.w;
-        let size = geometry.bounds.size;
-        Some(point(
-            size.width * ((ndc.x + 1.0) * 0.5),
-            size.height * ((1.0 - ndc.y) * 0.5),
+        let position = Vec3::from_array(position.map(|v| v as f32));
+        Some(
+            self.view_on_screen(geometry)
+                .project(position, geometry.bounds.size),
+        )
+    }
+
+    /// How the image on screen was rendered; the current camera before the
+    /// first frame lands.
+    fn view_on_screen(&self, geometry: Geometry) -> FrameView {
+        self.shown.map_or_else(
+            || FrameView {
+                camera: self.camera.matrices(geometry.aspect()),
+                center: self.scene_center,
+            },
+            |(_, view)| view,
+        )
+    }
+
+    /// The ring around the hovered sphere, relative to the viewport, and
+    /// its width. Painted over the image rather than rendered in 3D: the
+    /// hovered sphere was picked, so it is visible. A selected sphere keeps
+    /// its selection ring instead.
+    fn hover_ring(&self) -> Option<(Bounds<Pixels>, Pixels)> {
+        let Some(Pick::Sphere(index)) = self.hovered else {
+            return None;
+        };
+        if self.selected.contains(&index) {
+            return None;
+        }
+        let [x, y, z, radius] = self.scene.spheres.get(index)?.center_radius;
+        let geometry = self.geometry?;
+        let view = self.view_on_screen(geometry);
+        let viewport = geometry.bounds.size;
+        let center = view.project(Vec3::new(x, y, z) + self.scene_center, viewport);
+        let outer = px(radius * view.pixels_per_angstrom(viewport.height) + HOVER_RING_WIDTH);
+        // Overlaps the sphere's soft edge by half a physical pixel, as the
+        // selection ring does, so no background shows between them.
+        let width = px(HOVER_RING_WIDTH + 0.5 / geometry.scale_factor);
+        Some((
+            Bounds::centered_at(center, size(outer * 2., outer * 2.)),
+            width,
         ))
     }
 
@@ -281,50 +397,41 @@ impl Viewport {
         self.geometry = Some(geometry);
         self.colors = Some(colors);
         if recolored {
-            self.update_highlights(cx);
-        } else if resized {
-            self.request_frame(cx);
+            self.upload_rings();
         }
+        if recolored || resized {
+            self.needs_render = true;
+        }
+        // The last chance before paint, and the first once there is a size.
+        self.pump(cx);
     }
 
-    /// Rebuilds the rings from the selection and the hovered sphere.
-    fn update_highlights(&mut self, cx: &mut Context<Self>) {
+    /// Uploads the selection rings to the renderer.
+    fn upload_rings(&mut self) {
         let Some(colors) = self.colors else {
             return;
         };
-        let selection = linear(colors.selection);
-        let clear = linear(colors.clear);
-        let hover: [f32; 3] = [0, 1, 2].map(|i| (selection[i] + clear[i]) / 2.0);
-        let ring = |index: usize, color: [f32; 3], width: f32| {
-            self.scene.spheres.get(index).map(|sphere| HighlightRing {
+        let [r, g, b] = linear(colors.selection);
+        let rings: Vec<HighlightRing> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.scene.spheres.get(index))
+            .map(|sphere| HighlightRing {
                 center_radius: sphere.center_radius,
-                color_width: [color[0], color[1], color[2], width],
+                color_width: [r, g, b, SELECTION_RING_WIDTH],
             })
-        };
-        let hovered = match self.hovered {
-            Some(Pick::Sphere(index)) if !self.selected.contains(&index) => Some(index),
-            _ => None,
-        };
-        let rings: Vec<HighlightRing> = hovered
-            .and_then(|index| ring(index, hover, HOVER_RING_WIDTH))
-            .into_iter()
-            .chain(
-                self.selected
-                    .iter()
-                    .filter_map(|&index| ring(index, selection, SELECTION_RING_WIDTH)),
-            )
             .collect();
         if let Ok(renderer) = &mut self.renderer {
             renderer.set_highlights(&rings);
         }
-        self.request_frame(cx);
     }
 
     fn set_hovered(&mut self, pick: Option<Pick>, cx: &mut Context<Self>) {
         if self.hovered != pick {
             self.hovered = pick;
-            self.update_highlights(cx);
             cx.emit(ViewportEvent::Hovered(pick));
+            // Repaints the ring and the cursor; the 3D image stays.
+            cx.notify();
         }
     }
 
@@ -361,7 +468,7 @@ impl Viewport {
             -f32::from(delta.x) * DRAG_RADIANS_PER_PIXEL,
             f32::from(delta.y) * DRAG_RADIANS_PER_PIXEL,
         );
-        self.request_frame(cx);
+        self.camera_moved(cx);
     }
 
     /// A left-button release anywhere in the window.
@@ -406,8 +513,24 @@ impl Viewport {
         let delta = f32::from(event.delta.pixel_delta(window.line_height()).y);
         self.camera.zoom((delta * ZOOM_PER_SCROLL_PIXEL).exp());
         self.hover_stale = true;
-        self.request_frame(cx);
+        self.camera_moved(cx);
         self.pump_picks(cx);
+    }
+
+    /// The pointer moved the camera: frames render at the interactive scale
+    /// until the camera has rested for [`SETTLE_DELAY`], then once more at
+    /// full resolution.
+    fn camera_moved(&mut self, cx: &mut Context<Self>) {
+        self.interactive = true;
+        self.settle = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SETTLE_DELAY).await;
+            this.update(cx, |viewport, cx| {
+                viewport.interactive = false;
+                viewport.request_frame(cx);
+            })
+            .ok();
+        });
+        self.request_frame(cx);
     }
 
     /// Submits the next pick if none is in flight: a queued click first,
@@ -431,7 +554,8 @@ impl Viewport {
         let Some(geometry) = self.geometry else {
             return;
         };
-        let (width, height) = geometry.physical();
+        // Picks always use the full resolution, whatever the image on screen.
+        let (width, height) = geometry.physical(1.0);
         let to_px = |v: Pixels, limit: u32| {
             ((f32::from(v) * geometry.scale_factor).max(0.0) as u32).min(limit.saturating_sub(1))
         };
@@ -493,11 +617,21 @@ impl Viewport {
 
     // MARK: Frames
 
+    /// Asks for a frame with the current scene, rings and camera. Everything
+    /// requested during one update goes into one frame, submitted when the
+    /// update ends.
     fn request_frame(&mut self, cx: &mut Context<Self>) {
         self.needs_render = true;
-        self.pump(cx);
-        // Projected overlays follow the camera even before the frame lands.
-        cx.notify();
+        if !std::mem::replace(&mut self.submit_scheduled, true) {
+            let this = cx.weak_entity();
+            cx.defer(move |cx| {
+                this.update(cx, |viewport, cx| {
+                    viewport.submit_scheduled = false;
+                    viewport.pump(cx);
+                })
+                .ok();
+            });
+        }
     }
 
     /// Submits a frame if one is wanted and the pipeline has room.
@@ -508,17 +642,26 @@ impl Viewport {
         let (Some(geometry), Some(colors)) = (self.geometry, self.colors) else {
             return;
         };
-        let (width, height) = geometry.physical();
+        let scale = if self.interactive {
+            INTERACTIVE_SCALE
+        } else {
+            1.0
+        };
+        let (width, height) = geometry.physical(scale);
         if width == 0 || height == 0 {
             return;
         }
+        let view = FrameView {
+            camera: self.camera.matrices(geometry.aspect()),
+            center: self.scene_center,
+        };
         let [r, g, b] = linear(colors.clear).map(f64::from);
         let request = RenderRequest {
             width,
             height,
-            camera: self.camera.matrices(geometry.aspect()),
+            camera: view.camera,
             clear_color: [r, g, b, 1.0],
-            scale_factor: geometry.scale_factor,
+            scale_factor: geometry.scale_factor * scale,
         };
         let Ok(renderer) = &mut self.renderer else {
             return;
@@ -530,9 +673,13 @@ impl Viewport {
                 let number = self.submitted;
                 self.submitted += 1;
                 cx.spawn(async move |this, cx| {
-                    let frame = cx.background_spawn(async move { pending.wait() }).await;
-                    this.update(cx, |viewport, cx| viewport.finish_frame(number, frame, cx))
-                        .ok();
+                    let frame = cx
+                        .background_spawn(async move { pending.wait_latest() })
+                        .await;
+                    this.update(cx, |viewport, cx| {
+                        viewport.finish_frame(number, view, frame, cx)
+                    })
+                    .ok();
                 })
                 .detach();
             }
@@ -548,31 +695,35 @@ impl Viewport {
     fn finish_frame(
         &mut self,
         number: u64,
-        frame: Result<FrameImage, RenderError>,
+        view: FrameView,
+        frame: Result<Option<FrameImage>, RenderError>,
         cx: &mut Context<Self>,
     ) {
         self.in_flight -= 1;
         match frame {
-            // Frames finish on background threads in any order. One older
-            // than the image on screen is out of date: showing it would undo
-            // the newer frame, e.g. drop the rings an edit's second frame
-            // brought back.
-            Ok(_) if self.shown.is_some_and(|shown| number < shown) => {}
-            Ok(frame) => {
+            // A newer frame was submitted before this one finished; its
+            // pixels were not even copied.
+            Ok(None) => {}
+            // Frames reach the UI thread in any order. One older than the
+            // image on screen is out of date: showing it would undo the
+            // newer frame, e.g. drop the rings an edit brought back.
+            Ok(Some(_)) if self.shown.is_some_and(|(shown, _)| number < shown) => {}
+            Ok(Some(frame)) => {
                 if let Some(buffer) =
                     image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
                 {
                     let image = Arc::new(RenderImage::new([image::Frame::new(buffer)]));
-                    self.shown = Some(number);
+                    self.shown = Some((number, view));
                     if let Some(old) = self.image.replace(image) {
                         self.retired.borrow_mut().push(old);
                     }
+                    // Repaints, and moves the host's overlays with the image.
+                    cx.notify();
                 }
             }
             Err(e) => log::error!("viewport frame failed: {e}"),
         }
         self.pump(cx);
-        cx.notify();
     }
 }
 
@@ -588,17 +739,15 @@ impl Render for Viewport {
         let image = self.image.clone();
         let retired = self.retired.clone();
         let theme = cx.theme();
+        let hover_ring = self.hover_ring();
+        let hover_color = Colors::new(theme).hover();
 
         let surface = canvas(
             {
                 let view = view.clone();
                 move |bounds, window, cx| {
                     let scale_factor = window.scale_factor();
-                    let theme = cx.theme();
-                    let colors = Colors {
-                        clear: theme.muted,
-                        selection: theme.selection,
-                    };
+                    let colors = Colors::new(cx.theme());
                     view.update(cx, |viewport, cx| {
                         viewport.prepaint(bounds, scale_factor, colors, cx)
                     });
@@ -612,6 +761,17 @@ impl Render for Viewport {
                     window
                         .paint_image(bounds, bounds, Corners::default(), image, 0, false)
                         .ok();
+                }
+                if let Some((ring, width)) = hover_ring {
+                    let ring = Bounds::new(ring.origin + bounds.origin, ring.size);
+                    window.paint_quad(quad(
+                        ring,
+                        ring.size.width / 2.,
+                        transparent_black(),
+                        width,
+                        hover_color,
+                        BorderStyle::Solid,
+                    ));
                 }
                 // Drags keep rotating when the pointer leaves the viewport.
                 window.on_mouse_event({

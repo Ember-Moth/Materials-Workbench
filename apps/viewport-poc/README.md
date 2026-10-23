@@ -42,9 +42,10 @@ VIEWPORT_POC_BENCH="100000:50,10000:100" cargo run -p viewport-poc
 | `frame_mb` | 每帧回读的数据量 |
 | `presented_fps` | 每秒画到屏幕上的新图像数 |
 | `finished_fps` | 每秒完成回读的帧数（包括来不及显示就被替换的帧） |
+| `skipped_fps` | 每秒因已有更新的帧提交而跳过拷贝的帧数（`PendingFrame::wait_latest`） |
 | `encode_ms` | 编码并提交 GPU 命令 |
 | `gpu_wait_ms` | 从提交到像素可读（GPU 渲染 + 拷贝到暂存缓冲） |
-| `copy_ms` | 把映射的数据按行拷进紧凑缓冲 |
+| `copy_ms` | 把映射的数据拷进紧凑缓冲（每行没有补齐时整块拷贝） |
 | `paint_ms` | `paint_image` 耗时，包含上传到 GPUI 精灵图集 |
-| `request_to_image_ms` | 从相机变化到新图像就绪（尚未绘制） |
+| `request_to_image_ms` | 从相机变化到新图像就绪（尚未绘制）；被跳过的帧里的变化算到下一个就绪的帧上 |
 | `window_lost_focus` | 测量期间窗口是否失去过焦点；为 `true` 时帧率可能被系统限制，结果不可信 |

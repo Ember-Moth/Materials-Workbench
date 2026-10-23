@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,9 @@ const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 const SAMPLE_COUNT: u32 = 4;
 /// Readback buffers kept for reuse; a few frames can be in flight at once.
 const READBACK_POOL_LIMIT: usize = 4;
+/// Sizes whose render targets are kept: a viewport alternates between its
+/// full size and the reduced size it renders at while the camera moves.
+const TARGET_SIZES_KEPT: usize = 2;
 /// Pixels around the pointer searched for the nearest object, so that thin
 /// bonds and the soft edges of atoms are easy to hit.
 const PICK_RADIUS: u32 = 4;
@@ -163,34 +167,58 @@ pub struct PendingFrame {
     encode: Duration,
     submitted_at: Instant,
     pool: Arc<Mutex<Vec<wgpu::Buffer>>>,
+    /// This frame's place in submission order, and how many frames the
+    /// renderer has submitted so far.
+    number: u64,
+    submitted: Arc<AtomicU64>,
 }
 
 impl PendingFrame {
+    /// Waits for the frame and copies its pixels.
     pub fn wait(self) -> Result<FrameImage, RenderError> {
+        self.finish(false)
+            .map(|frame| frame.expect("the copy is only skipped when asked"))
+    }
+
+    /// Like [`PendingFrame::wait`], but returns `None` without copying the
+    /// pixels if a newer frame was submitted meanwhile. Frames finish in
+    /// submission order, so the newer one would replace this one right away.
+    pub fn wait_latest(self) -> Result<Option<FrameImage>, RenderError> {
+        self.finish(true)
+    }
+
+    fn finish(self, skip_superseded: bool) -> Result<Option<FrameImage>, RenderError> {
         wait_for_map(&self.device, self.submission, &self.mapped)?;
         let gpu_wait = self.submitted_at.elapsed();
+        let superseded = self.submitted.load(Ordering::Acquire) > self.number + 1;
+        if skip_superseded && superseded {
+            self.buffer.unmap();
+            return_readback_buffer(&self.pool, self.buffer);
+            return Ok(None);
+        }
 
         let copy_started = Instant::now();
         let row = self.width as usize * 4;
         let padded = self.padded_row as usize;
-        let mut bgra = Vec::with_capacity(row * self.height as usize);
+        let len = row * self.height as usize;
+        let mut bgra = Vec::with_capacity(len);
         {
             let mapped = self.buffer.slice(..).get_mapped_range();
-            for y in 0..self.height as usize {
-                let start = y * padded;
-                bgra.extend_from_slice(&mapped[start..start + row]);
+            if padded == row {
+                // Widths that are multiples of 64 pixels need no padding.
+                bgra.extend_from_slice(&mapped[..len]);
+            } else {
+                for y in 0..self.height as usize {
+                    let start = y * padded;
+                    bgra.extend_from_slice(&mapped[start..start + row]);
+                }
             }
         }
         self.buffer.unmap();
         let copy = copy_started.elapsed();
+        return_readback_buffer(&self.pool, self.buffer);
 
-        if let Ok(mut pool) = self.pool.lock()
-            && pool.len() < READBACK_POOL_LIMIT
-        {
-            pool.push(self.buffer);
-        }
-
-        Ok(FrameImage {
+        Ok(Some(FrameImage {
             width: self.width,
             height: self.height,
             bgra,
@@ -199,7 +227,7 @@ impl PendingFrame {
                 gpu_wait,
                 copy,
             },
-        })
+        }))
     }
 }
 
@@ -458,9 +486,13 @@ pub struct Renderer {
     rings: Option<Instances>,
     /// Counts scene changes, so a stale ID texture is redrawn.
     scene_generation: u64,
-    targets: Option<Targets>,
+    /// Render targets by size, the most recently used last.
+    targets: Vec<Targets>,
     id_targets: Option<IdTargets>,
     readback_pool: Arc<Mutex<Vec<wgpu::Buffer>>>,
+    /// Frames submitted so far, shared with the pending frames so they can
+    /// tell whether a newer one exists.
+    frames_submitted: Arc<AtomicU64>,
 }
 
 impl Renderer {
@@ -535,9 +567,10 @@ impl Renderer {
             lines: None,
             rings: None,
             scene_generation: 0,
-            targets: None,
+            targets: Vec::new(),
             id_targets: None,
             readback_pool: Arc::default(),
+            frames_submitted: Arc::default(),
         })
     }
 
@@ -578,7 +611,7 @@ impl Renderer {
         }
         let started = Instant::now();
         self.ensure_targets(width, height);
-        let Some(targets) = &self.targets else {
+        let Some(targets) = self.targets.last() else {
             return Err(RenderError::EmptyViewport);
         };
         self.write_camera(&request.camera, width, height, request.scale_factor);
@@ -648,6 +681,7 @@ impl Renderer {
         );
         let submission = self.queue.submit([encoder.finish()]);
         let mapped = map_for_reading(&buffer);
+        let number = self.frames_submitted.fetch_add(1, Ordering::AcqRel);
 
         Ok(PendingFrame {
             device: self.device.clone(),
@@ -660,6 +694,8 @@ impl Renderer {
             encode: started.elapsed(),
             submitted_at: Instant::now(),
             pool: self.readback_pool.clone(),
+            number,
+            submitted: self.frames_submitted.clone(),
         })
     }
 
@@ -787,12 +823,16 @@ impl Renderer {
         })
     }
 
+    /// Makes the targets for this size the last of `targets`, creating them
+    /// if needed and dropping the least recently used size.
     fn ensure_targets(&mut self, width: u32, height: u32) {
-        if self
+        if let Some(ix) = self
             .targets
-            .as_ref()
-            .is_some_and(|t| t.width == width && t.height == height)
+            .iter()
+            .position(|t| t.width == width && t.height == height)
         {
+            let targets = self.targets.remove(ix);
+            self.targets.push(targets);
             return;
         }
         let size = (width, height);
@@ -818,7 +858,10 @@ impl Renderer {
             DEPTH_FORMAT,
             attachment,
         );
-        self.targets = Some(Targets {
+        if self.targets.len() == TARGET_SIZES_KEPT {
+            self.targets.remove(0);
+        }
+        self.targets.push(Targets {
             width,
             height,
             msaa_view: msaa.create_view(&Default::default()),
@@ -826,10 +869,6 @@ impl Renderer {
             depth_view: depth.create_view(&Default::default()),
             resolve,
         });
-        // Buffers sized for the old viewport are useless now.
-        if let Ok(mut pool) = self.readback_pool.lock() {
-            pool.clear();
-        }
     }
 
     fn ensure_id_targets(&mut self, width: u32, height: u32) {
@@ -866,6 +905,17 @@ fn padded_bytes_per_row(width: u32) -> u32 {
     (width * 4).div_ceil(align) * align
 }
 
+/// Keeps a readback buffer for reuse, making room by dropping the oldest,
+/// which may be sized for a viewport that has since changed size.
+fn return_readback_buffer(pool: &Mutex<Vec<wgpu::Buffer>>, buffer: wgpu::Buffer) {
+    if let Ok(mut pool) = pool.lock() {
+        if pool.len() == READBACK_POOL_LIMIT {
+            pool.remove(0);
+        }
+        pool.push(buffer);
+    }
+}
+
 fn take_readback_buffer(
     device: &wgpu::Device,
     pool: &Mutex<Vec<wgpu::Buffer>>,
@@ -893,6 +943,15 @@ pub fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
+/// Converts one linear channel in 0..=1 to sRGB encoding.
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -906,9 +965,12 @@ mod tests {
     }
 
     #[test]
-    fn srgb_conversion_hits_endpoints() {
+    fn srgb_conversion_hits_endpoints_and_round_trips() {
         assert_eq!(srgb_to_linear(0.0), 0.0);
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
+        for c in [0.0, 0.02, 0.2, 0.5, 0.9, 1.0] {
+            assert!((linear_to_srgb(srgb_to_linear(c)) - c).abs() < 1e-5, "{c}");
+        }
     }
 
     #[test]
@@ -926,17 +988,20 @@ mod tests {
         Renderer::new().map_err(|e| eprintln!("skipping: {e}")).ok()
     }
 
-    fn frame(renderer: &mut Renderer, camera: CameraMatrices) -> FrameImage {
+    fn submit(renderer: &mut Renderer, size: u32, camera: CameraMatrices) -> PendingFrame {
         renderer
             .render(&RenderRequest {
-                width: SIZE,
-                height: SIZE,
+                width: size,
+                height: size,
                 camera,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
                 scale_factor: 1.0,
             })
-            .and_then(PendingFrame::wait)
             .expect("frame")
+    }
+
+    fn frame(renderer: &mut Renderer, camera: CameraMatrices) -> FrameImage {
+        submit(renderer, SIZE, camera).wait().expect("frame")
     }
 
     fn pick(renderer: &mut Renderer, camera: CameraMatrices, x: u32, y: u32) -> Option<Pick> {
@@ -1052,5 +1117,39 @@ mod tests {
             ..Scene::default()
         });
         assert_eq!(pick(&mut renderer, camera, 60, 32), None);
+    }
+
+    /// A frame overtaken by a newer submission is not copied; the newest
+    /// always is. Sizes may alternate without losing either's targets.
+    #[test]
+    fn superseded_frames_skip_the_copy() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let radius = renderer.set_scene(&Scene {
+            spheres: vec![SphereInstance {
+                center_radius: [0.0, 0.0, 0.0, 1.0],
+                color: RED,
+            }],
+            ..Scene::default()
+        });
+        let camera = OrbitCamera::framing(radius).matrices(1.0);
+        let older = submit(&mut renderer, SIZE, camera);
+        let newer = submit(&mut renderer, SIZE / 2, camera);
+        assert!(older.wait_latest().expect("older").is_none());
+        let newer = newer
+            .wait_latest()
+            .expect("newer")
+            .expect("the newest frame");
+        assert_eq!(newer.width, SIZE / 2);
+
+        let full = submit(&mut renderer, SIZE, camera).wait_latest();
+        let full = full.expect("full").expect("the newest frame");
+        assert_eq!(full.bgra.len(), (SIZE * SIZE * 4) as usize);
+        assert_eq!(renderer.targets.len(), TARGET_SIZES_KEPT);
+        // A plain wait copies even a superseded frame.
+        let older = submit(&mut renderer, SIZE, camera);
+        let _newer = submit(&mut renderer, SIZE, camera);
+        assert_eq!(older.wait().expect("older").width, SIZE);
     }
 }

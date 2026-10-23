@@ -124,7 +124,7 @@ Workbench（窗口根视图，apps/workbench）：打开着的工作区、当前
 3. 后台任务里用 `mw_crystal_io` 的 `cif::write`、`poscar::write` 或 `xyz::write` 生成文本并写文件。导入的结构把源数据块交给 CIF 写出（`ImportedBlock::write_options`），描述性和未识别的字段随之写回（晶体学设计稿第 6 节）。
 4. 写好后发通知，带"在访达中显示"；写入失败时发错误通知；结构修改过、有字段没写回时发警告通知并列出这些字段。
 
-**视口出帧**：`StructureWorkspace` 把文档的显示原子、显示键、晶胞边和测量线组成一个 `Scene` 交给 `Viewport::set_scene`，第 i 个球就是派生数据里第 i 个显示原子。视口在需要时渲染并异步回读，每完成一帧就通知自己；工作区观察视口，随之重绘测量标注等浮层，浮层位置由 `Viewport::project` 算出。
+**视口出帧**：`StructureWorkspace` 把文档的显示原子、显示键、晶胞边和测量线组成一个 `Scene` 交给 `Viewport::set_scene`，第 i 个球就是派生数据里第 i 个显示原子。视口在需要时渲染并异步回读：同一轮更新里的场景、选中圈和相机改动合成一帧提交，拖动和缩放期间按半分辨率渲染，停下后补一帧全分辨率；每完成一帧就通知自己。工作区观察视口，随之重绘测量标注等浮层，浮层位置由 `Viewport::project` 按屏幕上那一帧的相机算出，所以和画面一起移动（`viewport-rendering.md` 5.3 节）。
 
 **生成超胞**（M5b）：对话框确认后，工作区在后台调用 `mw_crystal::make_supercell`，完成后发出 `StructureWorkspaceEvent::MadeSupercell`；外壳把结果作为派生结构加进来源所在的项目（`ProjectCatalog::add_derived`，记录矩阵和来源结构的哈希），起一个不重复的名字并打开。它像导入的结构一样先留在内存里，⌘S 时写进项目。
 
@@ -137,7 +137,7 @@ Workbench（窗口根视图，apps/workbench）：打开着的工作区、当前
 
 **点选与测量**：
 
-1. 鼠标在视口上移动时，视口在后台读 ID 纹理，得到 `Pick::Sphere(i)` 或 `Pick::Bond(i)`，给悬停的原子画一圈浅色环，并发出 `ViewportEvent::Hovered`。
+1. 鼠标在视口上移动时，视口在后台读 ID 纹理，得到 `Pick::Sphere(i)` 或 `Pick::Bond(i)`，在画面上给悬停的原子叠一圈浅色环（不重新渲染 3D），并发出 `ViewportEvent::Hovered`。
 2. 按下后没有拖动就松开是一次点击：视口拾取后发出 `ViewportEvent::Clicked { pick, modifiers }`。
 3. 工作区把球的下标换成 `AtomRef`。平时改选区：单击选中这个原子，⇧ 或 ⌘ 单击加选 / 取消，点空白处清空；测量模式下把原子加进正在进行的测量（见界面外壳设计稿 4.2 节）。
 4. 工作区算出要标记的球（选区里的原子，测量模式下是已点的原子），交给 `Viewport::set_selection`；视口只上传高亮圈，不重建场景。
