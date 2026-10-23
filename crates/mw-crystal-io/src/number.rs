@@ -4,10 +4,12 @@
 use mw_crystal::Measured;
 
 /// Parses a CIF number. Returns `None` for anything that is not one,
-/// including the special values `?` and `.`.
+/// including the special values `?` and `.`. The closing parenthesis may be
+/// missing: files whose lines were cut at a fixed width end rows in
+/// `0.0029(18`.
 pub(crate) fn parse(text: &str) -> Option<Measured> {
     let (number, su) = match text.split_once('(') {
-        Some((number, rest)) => (number, Some(rest.strip_suffix(')')?)),
+        Some((number, rest)) => (number, Some(rest.strip_suffix(')').unwrap_or(rest))),
         None => (text, None),
     };
     // f64's parser also accepts `inf` and `NaN`; CIF numbers are digits.
@@ -61,12 +63,25 @@ mod tests {
         assert!((su("1.23e-4(5)").unwrap() - 5e-6).abs() < 1e-18);
         assert_eq!(parse("-.5").map(|m| m.value()), Some(-0.5));
         assert_eq!(parse("+2.").map(|m| m.value()), Some(2.0));
+        assert!((su("0.0029(18").unwrap() - 0.0018).abs() < 1e-15);
     }
 
     #[test]
     fn rejects_non_numbers() {
         for text in [
-            "?", ".", "", "inf", "NaN", "1.0(", "1.0(2", "1.0(x)", "x1", "1,5", "-",
+            "?",
+            ".",
+            "",
+            "inf",
+            "NaN",
+            "1.0(",
+            "1.0()",
+            "1.0(x)",
+            "1.0(2)3",
+            "0..049(4)",
+            "x1",
+            "1,5",
+            "-",
         ] {
             assert_eq!(parse(text), None, "{text}");
         }

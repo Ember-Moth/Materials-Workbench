@@ -1,0 +1,40 @@
+#-----------------------------------------------------------------------------
+# Damaged ADP values. Rows cut off at a fixed line width, so that the last
+# value of the anisotropic rows lacks its closing parenthesis: 0.0029(18
+# for 0.0029(18); the value is still unambiguous and imports with its s.u.
+# And a typo, 0..0042(15) in C42's row: that row's ADPs are ignored with a
+# warning, C42 keeps its U_iso, and the structure still imports.
+# Hand-written test fixture for Materials Workbench (mw-crystal-io); the
+# layout follows COD entries 1101145, 4024410 and 1516392, no values are
+# copied.
+#-----------------------------------------------------------------------------
+
+data_truncated_su
+_space_group_name_H-M_alt         'P 1'
+_cell_length_a                    6.0
+_cell_length_b                    7.0
+_cell_length_c                    8.0
+_cell_angle_alpha                 90
+_cell_angle_beta                  90
+_cell_angle_gamma                 90
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+C40 C 0.1000(2) 0.2000(2) 0.3000(2) 0.0122(8)
+C41 C 0.2500(2) 0.2200(2) 0.3100(2) 0.0137(8)
+C42 C 0.4000(2) 0.2400(2) 0.3200(2) 0.0141(8)
+loop_
+_atom_site_aniso_label
+_atom_site_aniso_U_11
+_atom_site_aniso_U_22
+_atom_site_aniso_U_33
+_atom_site_aniso_U_23
+_atom_site_aniso_U_13
+_atom_site_aniso_U_12
+C40 0.012(2) 0.014(2) 0.011(2) 0.0049(18) -0.0009(17) 0.0029(18
+C41 0.014(2) 0.015(2) 0.012(2) -0.0008(18) 0.0017(18) -0.0014(19
+C42 0.015(2) 0.016(2) 0.013(2) 0..0042(15) 0.0011(18) -0.0009(19)

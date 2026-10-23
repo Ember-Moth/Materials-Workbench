@@ -1,0 +1,33 @@
+#-----------------------------------------------------------------------------
+# Entries without atom coordinates, as COD keeps them for structures it has
+# only bibliographic data for: an atom site loop whose one row is all `?`.
+# The first block has a cell but neither coordinates nor symmetry and fails
+# with "no atom sites"; the second has no cell either and is skipped as a
+# block without a structure.
+# Hand-written test fixture for Materials Workbench (mw-crystal-io); the
+# layout follows COD entries 1000195 and 1001012, no values are copied.
+#-----------------------------------------------------------------------------
+
+data_cell_only
+_chemical_formula_sum             'B2 F8 Sr'
+_cell_length_a                    9.5
+_cell_length_b                    9.2
+_cell_length_c                    13.8
+_cell_angle_alpha                 90
+_cell_angle_beta                  90
+_cell_angle_gamma                 90
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+? ? ? ?
+
+data_no_cell
+_chemical_formula_sum             'Ca H4 N2 O8'
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+? ? ? ?

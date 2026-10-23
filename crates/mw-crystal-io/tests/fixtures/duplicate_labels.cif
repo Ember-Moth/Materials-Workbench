@@ -1,0 +1,44 @@
+#-----------------------------------------------------------------------------
+# Labels used twice for different atoms, as SHELXL-97 files reuse hydrogen
+# labels (H1A, H1B on N1 and again on C1). Each repeat is renamed with the
+# first free suffix: H1A_2, H1B_2, and C2_3 because the file already has a
+# C2_2. The anisotropic rows of the repeated C2 go to the two C2 rows in
+# file order.
+# Hand-written test fixture for Materials Workbench (mw-crystal-io); the
+# layout follows COD entry 1004000, no values are copied.
+#-----------------------------------------------------------------------------
+
+data_duplicate_labels
+_space_group_name_H-M_alt         'P 1'
+_cell_length_a                    6.0
+_cell_length_b                    7.0
+_cell_length_c                    8.0
+_cell_angle_alpha                 90
+_cell_angle_beta                  100
+_cell_angle_gamma                 90
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+N1 N 0.1000 0.1000 0.1000 0.020
+H1A H 0.1500 0.0500 0.0500 0.030
+H1B H 0.0500 0.1800 0.0700 0.030
+C1 C 0.3000 0.1500 0.2000 0.020
+H1A H 0.3500 0.0700 0.2500 0.030
+H1B H 0.3400 0.2300 0.1400 0.030
+C2 C 0.4500 0.3000 0.3000 0.020
+C2 C 0.6000 0.4000 0.4500 0.020
+C2_2 C 0.7500 0.5500 0.6000 0.020
+loop_
+_atom_site_aniso_label
+_atom_site_aniso_U_11
+_atom_site_aniso_U_22
+_atom_site_aniso_U_33
+_atom_site_aniso_U_12
+_atom_site_aniso_U_13
+_atom_site_aniso_U_23
+C2 0.011 0.012 0.013 0 0 0
+C2 0.021 0.022 0.023 0 0 0
