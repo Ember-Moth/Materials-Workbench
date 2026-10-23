@@ -55,6 +55,25 @@ const ADP_B_TAGS: [&str; 6] = [
     "_atom_site_aniso_b_13",
     "_atom_site_aniso_b_23",
 ];
+const ADP_BETA_TAGS: [&str; 6] = [
+    "_atom_site_aniso_beta_11",
+    "_atom_site_aniso_beta_22",
+    "_atom_site_aniso_beta_33",
+    "_atom_site_aniso_beta_12",
+    "_atom_site_aniso_beta_13",
+    "_atom_site_aniso_beta_23",
+];
+/// The (i, j) of each component, in the order of the tags above.
+const ADP_PAIRS: [(usize, usize); 6] = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
+
+/// What an aniso loop gives: U itself, B = 8π²U, or the dimensionless
+/// β_ij = 2π² a*_i a*_j U_ij.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AdpGiven {
+    U,
+    B,
+    Beta,
+}
 
 /// Differences between the cell and the nearest cell the operations
 /// preserve below this (Å or degrees) are rounding, not inconsistency: in
@@ -64,10 +83,19 @@ const CELL_DEVIATION: f64 = 1e-3;
 
 /// U = B / 8π².
 fn b_to_u(b: Measured) -> Measured {
-    let factor = 8.0 * PI * PI;
-    match b.su() {
-        Some(su) => Measured::with_su(b.value() / factor, su / factor),
-        None => Measured::exact(b.value() / factor),
+    divided(b, 8.0 * PI * PI)
+}
+
+/// U_ij from β_ij = 2π² a*_i a*_j U_ij, given the reciprocal lengths.
+fn beta_to_u(beta: Measured, (i, j): (usize, usize), reciprocal: [f64; 3]) -> Measured {
+    divided(beta, 2.0 * PI * PI * reciprocal[i] * reciprocal[j])
+}
+
+/// A value and its s.u. divided by an exact factor.
+fn divided(value: Measured, factor: f64) -> Measured {
+    match value.su() {
+        Some(su) => Measured::with_su(value.value() / factor, su / factor),
+        None => Measured::exact(value.value() / factor),
     }
 }
 
@@ -283,7 +311,7 @@ fn adp_number(
 pub(crate) fn interpret(
     block: &Block,
     tolerances: Tolerances,
-) -> (Option<Structure>, Vec<Diagnostic>) {
+) -> (Option<Structure>, Vec<Diagnostic>, RowLabels) {
     let mut diagnostics = block.diagnostics.clone();
     let fields = Fields { block };
     // Placeholder entries give the tags with nothing but `?`.
@@ -297,13 +325,16 @@ pub(crate) fn interpret(
     .any(|tag| fields.has_value(tag));
     if !has_cell && !has_atoms {
         diagnostics.push(Diagnostic::at(DiagnosticKind::NoStructure, block.line));
-        return (None, diagnostics);
+        return (None, diagnostics, RowLabels::default());
     }
 
     let lattice = read_cell(&fields, block.line, &mut diagnostics);
     let (space_group, name_line) = read_space_group(&fields, &mut diagnostics);
     let symmetry = read_symmetry(&fields, &space_group, block.line, &mut diagnostics);
-    let sites = read_sites(&fields, block.line, &mut diagnostics);
+    // β needs the cell to become U.
+    let reciprocal = lattice.as_ref().map(|l| l.params().reciprocal_lengths());
+    let sites = read_sites(&fields, block.line, reciprocal, &mut diagnostics);
+    let mut row_labels = RowLabels::default();
 
     let structure = match (lattice, symmetry, sites) {
         (Some(lattice), Some(symmetry), Some(sites))
@@ -319,13 +350,14 @@ pub(crate) fn interpret(
             check_geometry(&structure, &sites.rows, &mut diagnostics);
             let cell_line = fields.value(LENGTH_TAGS[0]).map(|v| v.line);
             check_symmetry(&structure, name_line, cell_line, &mut diagnostics);
+            row_labels = sites.labels;
             Some(structure)
         }
         _ => None,
     };
     // Stable: diagnostics on one line keep the order they were found in.
     diagnostics.sort_by_key(|d| d.line().unwrap_or(u32::MAX));
-    (structure, diagnostics)
+    (structure, diagnostics, row_labels)
 }
 
 fn read_cell(
@@ -584,6 +616,34 @@ fn element_from_letters(letters: &str) -> Option<String> {
 struct SiteRows {
     sites: Vec<Site>,
     rows: HashMap<SiteId, Row>,
+    labels: RowLabels,
+}
+
+/// The label each row of an atom site loop ended up with: the file's label,
+/// or a new one for a repeated label (see `read_sites`); `None` for a row
+/// that gave no atom. The kept fields go by it, so that a renamed atom keeps
+/// its own unrecognized columns (`kept::collect`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LoopLabels {
+    /// The line of the loop, which identifies it.
+    pub line: u32,
+    pub labels: Vec<Option<String>>,
+}
+
+impl LoopLabels {
+    fn new(table: &Table) -> Self {
+        Self {
+            line: table.line,
+            labels: vec![None; table.rows.len()],
+        }
+    }
+}
+
+/// [`LoopLabels`] of the atom site loop and of the aniso loop.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RowLabels {
+    pub sites: Option<LoopLabels>,
+    pub aniso: Option<LoopLabels>,
 }
 
 /// What a row of the atom site loop states about its site, for the checks
@@ -599,34 +659,53 @@ struct Row {
     order: Option<u32>,
 }
 
-/// Anisotropic ADPs by label, each with whether it was given as B and its
-/// line. A label the file repeats has one entry per row, in file order.
-type AnisoRows = HashMap<String, VecDeque<(Adp, bool, u32)>>;
+/// Anisotropic ADPs by label, each with what the file gave, its line and its
+/// row in the aniso loop. A label the file repeats has one entry per row, in
+/// file order.
+type AnisoRows = HashMap<String, VecDeque<(Adp, AdpGiven, u32, usize)>>;
 
-fn read_aniso(fields: &Fields, diagnostics: &mut Vec<Diagnostic>) -> AnisoRows {
+/// The aniso loop's ADPs, and its rows for [`LoopLabels`]. β is read only
+/// with the cell's reciprocal lengths.
+fn read_aniso(
+    fields: &Fields,
+    reciprocal: Option<[f64; 3]>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (AnisoRows, Option<LoopLabels>) {
     let mut adps = AnisoRows::new();
     let Some(table) = fields.table("_atom_site_aniso_label", "_atom_site_aniso_", None) else {
-        return adps;
+        return (adps, None);
     };
-    let (tags, is_b) = if table.has(ADP_U_TAGS[0]) {
-        (ADP_U_TAGS, false)
+    let rows = Some(LoopLabels::new(&table));
+    let (tags, given) = if table.has(ADP_U_TAGS[0]) {
+        (ADP_U_TAGS, AdpGiven::U)
     } else if table.has(ADP_B_TAGS[0]) {
-        (ADP_B_TAGS, true)
+        (ADP_B_TAGS, AdpGiven::B)
+    } else if table.has(ADP_BETA_TAGS[0]) && reciprocal.is_some() {
+        (ADP_BETA_TAGS, AdpGiven::Beta)
     } else {
-        return adps;
+        return (adps, rows);
     };
-    for row in &table.rows {
+    for (index, row) in table.rows.iter().enumerate() {
         let Some(label) = table.get(row, "_atom_site_aniso_label") else {
             continue;
         };
         let mut components = [Measured::exact(0.0); 6];
         let mut complete = true;
-        for (component, tag) in components.iter_mut().zip(tags) {
+        for (k, (component, tag)) in components.iter_mut().zip(tags).enumerate() {
             match table
                 .get(row, tag)
                 .and_then(|v| adp_number(v, tag, &label.text, diagnostics))
             {
-                Some(m) => *component = if is_b { b_to_u(m) } else { m },
+                Some(m) => {
+                    *component = match (given, reciprocal) {
+                        (AdpGiven::U, _) => m,
+                        (AdpGiven::B, _) => b_to_u(m),
+                        (AdpGiven::Beta, Some(reciprocal)) => {
+                            beta_to_u(m, ADP_PAIRS[k], reciprocal)
+                        }
+                        (AdpGiven::Beta, None) => unreachable!("β is read with a cell"),
+                    }
+                }
                 // An unknown component leaves the atom isotropic.
                 None => complete = false,
             }
@@ -634,17 +713,19 @@ fn read_aniso(fields: &Fields, diagnostics: &mut Vec<Diagnostic>) -> AnisoRows {
         if complete {
             adps.entry(label.text.clone()).or_default().push_back((
                 Adp::Anisotropic(components),
-                is_b,
+                given,
                 label.line,
+                index,
             ));
         }
     }
-    adps
+    (adps, rows)
 }
 
 fn read_sites(
     fields: &Fields,
     block_line: u32,
+    reciprocal: Option<[f64; 3]>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<SiteRows> {
     let Some(table) = fields.table(
@@ -679,7 +760,8 @@ fn read_sites(
         return None;
     }
 
-    let mut aniso = read_aniso(fields, diagnostics);
+    let (mut aniso, mut aniso_labels) = read_aniso(fields, reciprocal, diagnostics);
+    let mut site_labels = LoopLabels::new(&table);
     let mut sites = Vec::new();
     let mut rows = HashMap::new();
     let mut labels = HashSet::new();
@@ -692,9 +774,10 @@ fn read_sites(
     let mut from_label = 0;
     let mut occupancy_assumed = 0;
     let mut b_converted = 0;
+    let mut beta_converted = 0;
     let mut valid = true;
 
-    for row in &table.rows {
+    for (index, row) in table.rows.iter().enumerate() {
         // A placeholder row in an entry without coordinates.
         if row.iter().all(|v| v.is_missing()) {
             continue;
@@ -705,6 +788,7 @@ fn read_sites(
         // The ADP the file gives this row: a repeated label takes the
         // anisotropic rows of its label in turn.
         let adp = aniso.get_mut(&label).and_then(VecDeque::pop_front);
+        let aniso_row = adp.as_ref().map(|&(_, _, _, row)| row);
         // Dummy rows can leave every other value out, the label included.
         if table
             .get(row, "_atom_site_calc_flag")
@@ -853,8 +937,9 @@ fn read_sites(
                 .get(row, tag)
                 .and_then(|v| adp_number(v, tag, &label, diagnostics))
         };
-        if let Some((adp, is_b, _)) = adp {
-            b_converted += usize::from(is_b);
+        if let Some((adp, given, _, _)) = adp {
+            b_converted += usize::from(given == AdpGiven::B);
+            beta_converted += usize::from(given == AdpGiven::Beta);
             occupant = occupant.with_adp(adp);
         } else if let Some(u) = isotropic("_atom_site_u_iso_or_equiv", diagnostics) {
             occupant = occupant.with_adp(Adp::Isotropic(u));
@@ -864,6 +949,10 @@ fn read_sites(
         }
 
         labels.insert(label.clone());
+        site_labels.labels[index] = Some(label.clone());
+        if let (Some(aniso_labels), Some(row)) = (&mut aniso_labels, aniso_row) {
+            aniso_labels.labels[row] = Some(label.clone());
+        }
         let id = SiteId(sites.len() as u32 + 1);
         let mut site = Site::new(id, position, vec![occupant]).with_position_su(position_su);
         let text = |tag: &str| {
@@ -888,7 +977,7 @@ fn read_sites(
     }
 
     for (label, rows) in aniso {
-        for (_, _, line) in rows {
+        for (_, _, line, _) in rows {
             diagnostics.push(Diagnostic::at(
                 DiagnosticKind::AnisoUnknownLabel {
                     label: label.clone(),
@@ -916,12 +1005,25 @@ fn read_sites(
             b_converted,
             DiagnosticKind::BisoConverted { count: b_converted },
         ),
+        (
+            beta_converted,
+            DiagnosticKind::BetaConverted {
+                count: beta_converted,
+            },
+        ),
     ] {
         if count > 0 {
             diagnostics.push(Diagnostic::at(kind, table.line));
         }
     }
-    valid.then_some(SiteRows { sites, rows })
+    valid.then_some(SiteRows {
+        sites,
+        rows,
+        labels: RowLabels {
+            sites: Some(site_labels),
+            aniso: aniso_labels,
+        },
+    })
 }
 
 /// Reports what the expansion of the normalized structure reveals: atoms
@@ -1198,6 +1300,55 @@ mod tests {
                 }),
                 Some(18)
             )
+        );
+    }
+
+    #[test]
+    fn beta_is_converted_to_u() {
+        // β_ij = 2π² a*_i a*_j U_ij. Here a* = b* = 0.2 Å⁻¹ and c* = 0.1 Å⁻¹.
+        let report = crate::cif::read_str(
+            "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+             _cell_length_a 5\n_cell_length_b 5\n_cell_length_c 10\n\
+             _cell_angle_alpha 90\n_cell_angle_beta 90\n_cell_angle_gamma 90\n\
+             loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+             Ag1 0 0 0\n\
+             loop_\n_atom_site_aniso_label\n\
+             _atom_site_aniso_beta_11\n_atom_site_aniso_beta_22\n_atom_site_aniso_beta_33\n\
+             _atom_site_aniso_beta_12\n_atom_site_aniso_beta_13\n_atom_site_aniso_beta_23\n\
+             Ag1 0.007(1) 0.019(1) 0.0023(2) 0.0004 -0.0006(7) 0.0\n",
+        );
+        let block = &report.blocks[0];
+        let structure = block.structure.as_ref().expect("a structure");
+        let Some(Adp::Anisotropic(u)) = structure.sites[0].occupants[0].adp else {
+            panic!("anisotropic: {:?}", structure.sites[0].occupants[0].adp);
+        };
+        let factor = |i: usize, j: usize| {
+            let reciprocal = [0.2, 0.2, 0.1];
+            2.0 * PI * PI * reciprocal[i] * reciprocal[j]
+        };
+        let expected = [
+            (0.007, Some(0.001), factor(0, 0)),
+            (0.019, Some(0.001), factor(1, 1)),
+            (0.0023, Some(0.0002), factor(2, 2)),
+            (0.0004, None, factor(0, 1)),
+            (-0.0006, Some(0.0007), factor(0, 2)),
+            (0.0, None, factor(1, 2)),
+        ];
+        for (component, (beta, su, factor)) in u.iter().zip(expected) {
+            assert!((component.value() - beta / factor).abs() < 1e-12, "{u:?}");
+            match (component.su(), su) {
+                (Some(a), Some(b)) => assert!((a - b / factor).abs() < 1e-12, "{u:?}"),
+                (None, None) => {}
+                other => panic!("s.u. {other:?}"),
+            }
+        }
+        assert!(
+            block
+                .diagnostics
+                .iter()
+                .any(|d| d.kind() == &DiagnosticKind::BetaConverted { count: 1 }),
+            "{:?}",
+            block.diagnostics
         );
     }
 

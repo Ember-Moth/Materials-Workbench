@@ -10,9 +10,10 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use mw_crystal::Structure;
+use mw_crystal::{Adp, Structure};
 
-use crate::syntax::{Block, Item, Tag, Value};
+use crate::import::{LoopLabels, RowLabels};
+use crate::syntax::{Block, Item, Loop, Tag, Value};
 
 /// How a CIF export treats a field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +74,12 @@ const MODEL: &[&str] = &[
     "_atom_site_aniso_b_12",
     "_atom_site_aniso_b_13",
     "_atom_site_aniso_b_23",
+    "_atom_site_aniso_beta_11",
+    "_atom_site_aniso_beta_22",
+    "_atom_site_aniso_beta_33",
+    "_atom_site_aniso_beta_12",
+    "_atom_site_aniso_beta_13",
+    "_atom_site_aniso_beta_23",
 ];
 
 /// Tags whose values follow from the structure.
@@ -196,20 +203,28 @@ impl CifFields {
         self.fields.is_empty() && self.site_columns.is_empty() && self.aniso_columns.is_empty()
     }
 
-    /// Forgets the column values of atoms the structure does not have, such
-    /// as skipped dummy atoms and dropped repeated rows: they are never
-    /// written.
+    /// Forgets the column values the writer never writes: those of atoms the
+    /// structure does not have, such as skipped dummy atoms and dropped
+    /// repeated rows, and in the aniso loop those of atoms without
+    /// anisotropic ADPs, which it leaves out (e.g. β given where the
+    /// importer reads U and B). A column left without values goes too.
     pub(crate) fn retain_atoms(&mut self, structure: &Structure) {
-        let labels: HashSet<&str> = structure
-            .sites
-            .iter()
-            .flat_map(|site| &site.occupants)
+        let occupants = || structure.sites.iter().flat_map(|site| &site.occupants);
+        let labels: HashSet<&str> = occupants().map(|o| o.label.as_str()).collect();
+        let anisotropic: HashSet<&str> = occupants()
+            .filter(|o| matches!(o.adp, Some(Adp::Anisotropic(_))))
             .map(|o| o.label.as_str())
             .collect();
-        for column in self.site_columns.iter_mut().chain(&mut self.aniso_columns) {
-            column
-                .values
-                .retain(|label, _| labels.contains(label.as_str()));
+        for (columns, kept) in [
+            (&mut self.site_columns, &labels),
+            (&mut self.aniso_columns, &anisotropic),
+        ] {
+            for column in columns.iter_mut() {
+                column
+                    .values
+                    .retain(|label, _| kept.contains(label.as_str()));
+            }
+            columns.retain(|column| !column.values.is_empty());
         }
     }
 }
@@ -227,8 +242,9 @@ fn spelling(tag: &Tag, lines: &[&str]) -> String {
 }
 
 /// The kept fields of a block. `lines` are the lines of the file, for the
-/// spelling of the tags.
-pub(crate) fn collect(block: &Block, lines: &[&str]) -> CifFields {
+/// spelling of the tags; `labels` are the labels the importer gave the atom
+/// site rows.
+pub(crate) fn collect(block: &Block, lines: &[&str], labels: &RowLabels) -> CifFields {
     let mut kept = CifFields::default();
     // Atom sites written as pairs: one row, keyed by the label pair.
     let mut site_pairs: Vec<(&Tag, &Value)> = Vec::new();
@@ -253,10 +269,10 @@ pub(crate) fn collect(block: &Block, lines: &[&str]) -> CifFields {
             },
             Item::Loop(table) => {
                 if let Some(label) = table.column("_atom_site_aniso_label") {
-                    let rows = table.rows().map(|row| (&row[label], row));
+                    let rows = keyed_rows(table, label, labels.aniso.as_ref());
                     kept.aniso_columns.extend(columns(&table.tags, rows, lines));
                 } else if let Some(label) = table.column("_atom_site_label") {
-                    let rows = table.rows().map(|row| (&row[label], row));
+                    let rows = keyed_rows(table, label, labels.sites.as_ref());
                     kept.site_columns.extend(columns(&table.tags, rows, lines));
                 } else {
                     // A loop belongs to one category; one regenerated or
@@ -295,15 +311,36 @@ pub(crate) fn collect(block: &Block, lines: &[&str]) -> CifFields {
         };
         let tags: Vec<Tag> = pairs.iter().map(|(tag, _)| (*tag).clone()).collect();
         let row: Vec<Value> = pairs.iter().map(|(_, value)| (*value).clone()).collect();
-        columns_out.extend(columns(&tags, [(*label, &row[..])], lines));
+        columns_out.extend(columns(&tags, [(label.text.clone(), &row[..])], lines));
     }
     kept
+}
+
+/// The rows of an atom site loop with the label of the atom each gave: the
+/// importer renames a repeated label, and a row it skipped gave no atom. A
+/// loop the importer did not read keeps the file's labels.
+fn keyed_rows<'a>(
+    table: &'a Loop,
+    label: usize,
+    labels: Option<&LoopLabels>,
+) -> Vec<(String, &'a [Value])> {
+    match labels.filter(|labels| labels.line == table.line) {
+        Some(labels) => table
+            .rows()
+            .zip(&labels.labels)
+            .filter_map(|(row, label)| Some((label.clone()?, row)))
+            .collect(),
+        None => table
+            .rows()
+            .map(|row| (row[label].text.clone(), row))
+            .collect(),
+    }
 }
 
 /// The unrecognized columns of an atom site loop, keyed by label.
 fn columns<'a>(
     tags: &[Tag],
-    rows: impl IntoIterator<Item = (&'a Value, &'a [Value])>,
+    rows: impl IntoIterator<Item = (String, &'a [Value])>,
     lines: &[&str],
 ) -> Vec<Column> {
     let indices: Vec<usize> = (0..tags.len())
@@ -319,7 +356,7 @@ fn columns<'a>(
     for (label, row) in rows {
         for (column, &i) in columns.iter_mut().zip(&indices) {
             if let Some(value) = row.get(i) {
-                column.values.insert(label.text.clone(), value.into());
+                column.values.insert(label.clone(), value.into());
             }
         }
     }
@@ -333,7 +370,7 @@ mod tests {
     fn fields(text: &str) -> CifFields {
         let document = crate::syntax::parse(text);
         let lines: Vec<&str> = text.lines().collect();
-        collect(&document.blocks[0], &lines)
+        collect(&document.blocks[0], &lines, &RowLabels::default())
     }
 
     #[test]

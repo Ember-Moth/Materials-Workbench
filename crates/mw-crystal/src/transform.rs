@@ -46,7 +46,7 @@ struct P1Atom<'a> {
 }
 
 fn p1_atoms(structure: &Structure) -> Vec<P1Atom<'_>> {
-    let reciprocal = reciprocal_lengths(structure.lattice.params());
+    let reciprocal = structure.lattice.params().reciprocal_lengths();
     let operations = structure.symmetry.operations();
     let mut atoms = Vec::new();
     for site in &structure.sites {
@@ -246,8 +246,8 @@ pub fn make_supercell(
     let old = *structure.lattice.params();
     let new_params = supercell_params(&old, &m);
     let atoms = p1_atoms(structure);
-    let old_reciprocal = reciprocal_lengths(&old);
-    let new_reciprocal = reciprocal_lengths(&new_params);
+    let old_reciprocal = old.reciprocal_lengths();
+    let new_reciprocal = new_params.reciprocal_lengths();
     let inverse = rows.map(|(coefficients, divisor)| coefficients.map(|c| c / divisor));
     let mut labels = Labels::default();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -358,13 +358,6 @@ fn snap_cosine(cosine: f64) -> f64 {
         }
     }
     cosine
-}
-
-/// a*, b*, c*: the lengths of the reciprocal basis, in Å⁻¹.
-fn reciprocal_lengths(params: &CellParams) -> [f64; 3] {
-    let g = Matrix3::from(params.metric()).transpose();
-    let inverse = g.try_inverse().unwrap_or_else(Matrix3::identity);
-    [0, 1, 2].map(|i| inverse[(i, i)].sqrt())
 }
 
 /// The (i, j) pairs of the six stored components: U11, U22, U33, U12, U13,

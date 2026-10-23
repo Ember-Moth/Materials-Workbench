@@ -149,6 +149,7 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
         }
         OccupancyAssumed { count } => tr!("diagnostic.atom.occupancy_assumed", count = count),
         BisoConverted { count } => tr!("diagnostic.atom.biso_converted", count = count),
+        BetaConverted { count } => tr!("diagnostic.atom.beta_converted", count = count),
         InvalidAdp { label, tag, text } => tr!(
             "diagnostic.atom.invalid_adp",
             label = label,

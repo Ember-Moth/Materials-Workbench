@@ -1,3 +1,4 @@
+use nalgebra::Matrix3;
 use serde::{Deserialize, Serialize};
 
 use crate::{CellParam, Measured};
@@ -84,6 +85,13 @@ impl CellParams {
         let (ca, cb, cg) = self.cosines();
         let cosines = [[1.0, cg, cb], [cg, 1.0, ca], [cb, ca, 1.0]];
         [0, 1, 2].map(|i| [0, 1, 2].map(|j| lengths[i] * lengths[j] * cosines[i][j]))
+    }
+
+    /// a*, b*, c*: the lengths of the reciprocal basis, in Å⁻¹.
+    pub fn reciprocal_lengths(&self) -> [f64; 3] {
+        let g = Matrix3::from(self.metric()).transpose();
+        let inverse = g.try_inverse().unwrap_or_else(Matrix3::identity);
+        [0, 1, 2].map(|i| inverse[(i, i)].sqrt())
     }
 
     /// Basis vectors a, b, c (as columns) in the standard orientation: a along

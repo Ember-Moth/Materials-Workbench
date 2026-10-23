@@ -238,6 +238,9 @@ pub fn diagnostic_message(diagnostic: &Diagnostic) -> String {
         BisoConverted { count } => {
             format!("{count} atoms give B; it was converted to U = B / 8π².")
         }
+        BetaConverted { count } => format!(
+            "{count} atoms give anisotropic β; it was converted to U_ij = β_ij / (2π² a*_i a*_j)."
+        ),
         DummyAtomSkipped { label } => format!("Dummy atom '{label}' was not imported."),
         AnisoUnknownLabel { label } => {
             format!("Anisotropic displacement row '{label}' matches no atom site and was ignored.")

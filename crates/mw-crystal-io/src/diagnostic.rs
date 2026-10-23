@@ -181,6 +181,11 @@ pub enum DiagnosticKind {
     BisoConverted {
         count: usize,
     },
+    /// This many atoms give the dimensionless β, converted to
+    /// U_ij = β_ij / (2π² a*_i a*_j).
+    BetaConverted {
+        count: usize,
+    },
     /// A dummy atom (`_atom_site_calc_flag dum`), not imported.
     DummyAtomSkipped {
         label: String,
@@ -301,6 +306,7 @@ impl DiagnosticKind {
             | ElementFromLabel { .. }
             | OccupancyAssumed { .. }
             | BisoConverted { .. }
+            | BetaConverted { .. }
             | DummyAtomSkipped { .. }
             | SnappedToSpecialPosition { .. }
             | MergedOccupancy { .. }
@@ -355,6 +361,7 @@ impl DiagnosticKind {
             OccupancyAssumed { .. } => "atom.occupancy_assumed",
             InvalidAdp { .. } => "atom.invalid_adp",
             BisoConverted { .. } => "atom.biso_converted",
+            BetaConverted { .. } => "atom.beta_converted",
             DummyAtomSkipped { .. } => "atom.dummy_skipped",
             AnisoUnknownLabel { .. } => "atom.aniso_unknown_label",
             CloseImages { .. } => "atom.close_images",

@@ -141,8 +141,8 @@ pub mod cif {
             .blocks
             .iter()
             .map(|block| {
-                let (structure, diagnostics) = import::interpret(block, tolerances);
-                let mut fields = kept::collect(block, &lines);
+                let (structure, diagnostics, labels) = import::interpret(block, tolerances);
+                let mut fields = kept::collect(block, &lines, &labels);
                 if let Some(structure) = &structure {
                     fields.retain_atoms(structure);
                 }

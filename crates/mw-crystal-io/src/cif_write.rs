@@ -312,21 +312,27 @@ const MAX_DECIMALS: i32 = 10;
 /// converted from B, follow the usual rule: the uncertainty gets two
 /// digits up to 19, otherwise one, and the value is rounded to match.
 fn number(value: Measured) -> String {
-    let decimals = written_decimals(value);
     let x = value.value();
     match value.su() {
         None => plain(x),
         // `90.0(0)`: an uncertainty of zero is still stated.
         Some(0.0) => format!("{}(0)", plain(x)),
-        Some(su) => {
-            let digits = (su * 10f64.powi(decimals)).round().max(1.0);
-            format!(
-                "{:.decimals$}({digits})",
-                x + 0.0,
-                decimals = decimals as usize
-            )
-        }
+        Some(su) => with_su(x, su, written_decimals(value)),
     }
+}
+
+/// `x` with `decimals` decimals and its s.u. in the last of them, e.g.
+/// `0.69376(50)` for 0.0005 at five decimals.
+fn with_su(x: f64, su: f64, decimals: i32) -> String {
+    let digits = (su * 10f64.powi(decimals)).round().max(1.0);
+    let text = format!("{:.decimals$}", x + 0.0, decimals = decimals as usize);
+    // A value that rounds to zero is written without a sign: `-0.000(6)`
+    // reads back as zero, which would be written `0.000(6)` the next time.
+    let text = match text.strip_prefix('-') {
+        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_string(),
+        _ => text,
+    };
+    format!("{text}({digits})")
 }
 
 /// The value [`number`] writes, rounded as written.
@@ -353,7 +359,15 @@ fn written_decimals(value: Measured) -> i32 {
         let decimals = if leading <= 19.0 && leading != 10.0 {
             1 - magnitude
         } else {
-            -magnitude
+            // One digit, unless it rounds up to 10, as 0.000975 does at four
+            // decimals: that too is `(1)` one decimal up, or the next file
+            // written from the reread value would differ.
+            let one = -magnitude;
+            if (su * 10f64.powi(one)).round() >= 10.0 {
+                one - 1
+            } else {
+                one
+            }
         };
         decimals.max(0)
     })
@@ -600,6 +614,14 @@ fn write_sites(
     }
     tags.extend(extra.iter().map(|c| c.tag.as_str()));
 
+    // Per axis, the decimals that keep rounding below a quarter of the
+    // position tolerance: 0.5 × 10⁻ᵈ × length ≤ tolerance / 4.
+    let params = structure.lattice.params();
+    let tolerance = structure.tolerances.position;
+    let tie_decimals = [params.a, params.b, params.c].map(|length| {
+        ((2.0 * length.value() / tolerance).log10().ceil() as i32).clamp(0, MAX_DECIMALS)
+    });
+
     let unknown = || Rendered::Inline("?".into());
     let inapplicable = || Rendered::Inline(".".into());
     let mut rows = Vec::new();
@@ -630,18 +652,40 @@ fn write_sites(
                 None => Measured::exact(site.position[axis]),
             }
         });
+        // Coordinates that follow one another put the site on a special
+        // position; reading the file back snaps it there again from their
+        // average. Each is written precisely enough that rounding moves the
+        // atom by at most a quarter of the position tolerance, and at least
+        // as precisely as the coordinate it follows, so that the average,
+        // and the next file written from it, stay the same.
+        let pivot_of = |axis: usize| match constraints.map(|c| c[axis]) {
+            Some(CoordinateConstraint::Follows(pivot)) => Some(pivot as usize),
+            _ => None,
+        };
+        let tied = [0, 1, 2].map(|axis| {
+            pivot_of(axis).is_some() || (0..3).any(|other| pivot_of(other) == Some(axis))
+        });
+        let decimals = |axis: usize| {
+            let written = written_decimals(coordinates[axis]);
+            if tied[axis] {
+                written.max(tie_decimals[axis])
+            } else {
+                written
+            }
+        };
         for (axis, coordinate) in coordinates.iter().enumerate() {
-            // A coordinate that follows another, usually given without an
-            // s.u., is rounded like the one it follows: after snapping both
-            // hold the same average, and written differently they would
-            // average to another value when read back.
-            let pivot = match constraints.map(|c| c[axis]) {
-                Some(CoordinateConstraint::Follows(pivot)) => Some(coordinates[pivot as usize]),
-                _ => None,
-            };
-            let text = match pivot {
-                Some(pivot) if coordinate.su().is_none() && pivot.su().is_some() => {
-                    rounded(coordinate.value(), written_decimals(pivot) as usize)
+            let text = match (coordinate.su(), pivot_of(axis)) {
+                // Usually given without an s.u.: rounded like the one it
+                // follows, since its own value holds float noise from the
+                // average.
+                (None, Some(pivot)) if coordinates[pivot].su().is_some() => {
+                    rounded(coordinate.value(), decimals(pivot) as usize)
+                }
+                // With an s.u., its digits scaled to the decimals, e.g.
+                // `0.2312(100)` for 0.010 at four decimals.
+                (Some(su), pivot) if su > 0.0 && tied[axis] => {
+                    let at_least = pivot.map_or(0, decimals);
+                    with_su(coordinate.value(), su, decimals(axis).max(at_least))
                 }
                 _ => number(*coordinate),
             };

@@ -173,6 +173,186 @@ fn kept_fields_are_written_back_while_the_structure_is_unchanged() {
     assert!(!changed.text.contains("_Custom_Note"));
 }
 
+#[test]
+fn followers_with_a_coarser_su_are_written_as_precisely_as_their_pivot() {
+    // x has five decimals, y and z (which follow x on 4a) four, each with
+    // its own s.u.: snapping averages them. Written with four decimals, y
+    // and z would average to another x on every round trip (COD 1100453).
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'P 21 3'\n\
+         _cell_length_a 12.0\n_cell_length_b 12.0\n_cell_length_c 12.0\n\
+         loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         H2 0.30651(5) 0.6939(5) 0.1939(5)\n",
+    );
+    let (block, structure) = report.structures().next().unwrap();
+    let written = common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+    assert!(
+        written
+            .text
+            .contains("H2 H 4 a 0.30624(5) 0.69376(50) 0.19376(50) 1"),
+        "{}",
+        written.text
+    );
+}
+
+#[test]
+fn special_positions_survive_coarse_uncertainties() {
+    // H1 sits on x, x+2/3, 1/12 with an s.u. of 0.010. Rounded to it, as
+    // `0.23(1) 0.90(1)`, y − x is no longer 2/3: read back, the atom is
+    // 0.05 Å from its image, too far to snap, and is reported as too close
+    // to it (COD 4105063).
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'R -3 c :H'\n\
+         _cell_length_a 8.241\n_cell_length_b 8.241\n_cell_length_c 22.545\n\
+         _cell_angle_alpha 90\n_cell_angle_beta 90\n_cell_angle_gamma 120\n\
+         loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         H1 0.231(10) 0.898(10) 0.0833\n",
+    );
+    let (block, structure) = report.structures().next().unwrap();
+    let written = common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+    assert!(
+        written
+            .text
+            .contains("H1 H 18 e 0.2312(100) 0.8978(100) 0.0833333333 1"),
+        "{}",
+        written.text
+    );
+}
+
+#[test]
+fn uncertainties_that_round_up_to_ten_are_written_one_decimal_up() {
+    // B = 1.500(77) Å² is U = 0.018997 with an s.u. of 0.000975. One digit
+    // at four decimals rounds that s.u. to `(10)`, which reads back as
+    // 0.0010 and is written `0.019(1)` the next time (COD 1520296).
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+         _cell_length_a 5\n_cell_length_b 5\n_cell_length_c 5\n\
+         _cell_angle_alpha 90\n_cell_angle_beta 90\n_cell_angle_gamma 90\n\
+         loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         _atom_site_B_iso_or_equiv\n\
+         O1 0.1 0.2 0.3 1.500(77)\n",
+    );
+    let (block, structure) = report.structures().next().unwrap();
+    let written = common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+    assert!(written.text.contains(" 0.019(1) Uiso"), "{}", written.text);
+}
+
+#[test]
+fn aniso_columns_of_isotropic_atoms_are_not_kept() {
+    // This aniso loop gives no displacement parameters the importer reads,
+    // so the atoms stay isotropic and no aniso loop is written: its
+    // unrecognized column must not be kept either, empty or not (as for
+    // COD 4319054 while β was not read).
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+         _cell_length_a 5\n_cell_length_b 5\n_cell_length_c 5\n\
+         _cell_angle_alpha 90\n_cell_angle_beta 90\n_cell_angle_gamma 90\n\
+         loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         Ag1 0 0 0\nO1 0.5 0.5 0.5\n\
+         loop_\n_atom_site_aniso_label\n_atom_site_aniso_Note\n\
+         Ag1 first\nO1 second\n",
+    );
+    let (block, structure) = report.structures().next().unwrap();
+    common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+}
+
+#[test]
+fn beta_tensors_are_written_back_as_u() {
+    // β is read and converted to U (COD 4319054): written as U, it reads
+    // back as the same displacement parameters.
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+         _cell_length_a 5\n_cell_length_b 6\n_cell_length_c 10\n\
+         _cell_angle_alpha 90\n_cell_angle_beta 100\n_cell_angle_gamma 90\n\
+         loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         Ag1 0 0 0\nO1 0.5 0.5 0.5\n\
+         loop_\n_atom_site_aniso_label\n\
+         _atom_site_aniso_beta_11\n_atom_site_aniso_beta_22\n_atom_site_aniso_beta_33\n\
+         _atom_site_aniso_beta_12\n_atom_site_aniso_beta_13\n_atom_site_aniso_beta_23\n\
+         Ag1 0.007(1) 0.019(1) 0.0023(2) 0.0 0.0 -0.0006(7)\n\
+         O1 0.007(1) 0.013(1) 0.0009(3) 0.0 0.0 0.0\n",
+    );
+    let (block, structure) = report.structures().next().unwrap();
+    let written = common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+    assert!(
+        written.text.contains("_atom_site_aniso_U_11"),
+        "{}",
+        written.text
+    );
+    assert!(
+        !written.text.contains("_atom_site_aniso_beta"),
+        "{}",
+        written.text
+    );
+}
+
+#[test]
+fn values_that_round_to_zero_lose_their_sign() {
+    // B12 = -0.03(47) is U12 = -0.00038 with an s.u. of 0.006: written at
+    // three decimals it is `-0.000(6)`, which reads back as zero and is
+    // written `0.000(6)` the next time (COD 2002519).
+    let report = cif::read_str(
+        "data_x\n_space_group_name_H-M_alt 'P 1'\n\
+         _cell_length_a 5\n_cell_length_b 5\n_cell_length_c 5\n\
+         _cell_angle_alpha 90\n_cell_angle_beta 90\n_cell_angle_gamma 90\n\
+         loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+         O1 0.1 0.2 0.3\n\
+         loop_\n_atom_site_aniso_label\n\
+         _atom_site_aniso_B_11\n_atom_site_aniso_B_22\n_atom_site_aniso_B_33\n\
+         _atom_site_aniso_B_12\n_atom_site_aniso_B_13\n_atom_site_aniso_B_23\n\
+         O1 0.8(5) 1.6(3) 1.4(5) -0.03(47) -0.16(47) -0.32(47)\n",
+    );
+    let (block, structure) = report.structures().next().unwrap();
+    let written = common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+    assert!(!written.text.contains("-0.000("), "{}", written.text);
+}
+
+#[test]
+fn kept_columns_follow_renamed_labels() {
+    // SHELXL-97 reuses hydrogen labels; the importer renames the second
+    // H1 to H1_2. Its unrecognized columns, in the atom site loop and the
+    // aniso loop, must go with it rather than stay with the first H1.
+    let text = "data_x\n\
+                _space_group_name_H-M_alt 'P 1'\n\
+                _cell_length_a 10\n_cell_length_b 10\n_cell_length_c 10\n\
+                _cell_angle_alpha 90\n_cell_angle_beta 90\n_cell_angle_gamma 90\n\
+                loop_\n_atom_site_label\n_atom_site_type_symbol\n\
+                _atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n\
+                _atom_site_calc_flag\n\
+                H1 H 0.1 0.1 0.1 d\n\
+                H1 H 0.3 0.3 0.3 calc\n\
+                C1 C 0.5 0.5 0.5 d\n\
+                loop_\n_atom_site_aniso_label\n\
+                _atom_site_aniso_U_11\n_atom_site_aniso_U_22\n_atom_site_aniso_U_33\n\
+                _atom_site_aniso_U_12\n_atom_site_aniso_U_13\n_atom_site_aniso_U_23\n\
+                _atom_site_aniso_Note\n\
+                H1 0.01 0.01 0.01 0 0 0 first\n\
+                H1 0.02 0.02 0.02 0 0 0 second\n";
+    let report = cif::read_str(text);
+    let (block, structure) = report.structures().next().unwrap();
+    let labels: Vec<&str> = structure
+        .sites
+        .iter()
+        .map(|site| site.occupants[0].label.as_str())
+        .collect();
+    assert_eq!(labels, ["H1", "H1_2", "C1"]);
+    let written = common::round_trip(block, structure).unwrap_or_else(|m| panic!("{m:?}"));
+    let row = |label: &str| {
+        written
+            .text
+            .lines()
+            .filter(|line| line.split_whitespace().next() == Some(label))
+            .collect::<Vec<_>>()
+    };
+    // The atom site row, then the aniso row.
+    let h1 = row("H1");
+    assert!(h1[0].ends_with(" d"), "{h1:?}");
+    assert!(h1[1].ends_with(" first"), "{h1:?}");
+    let h1_2 = row("H1_2");
+    assert!(h1_2[0].ends_with(" calc"), "{h1_2:?}");
+    assert!(h1_2[1].ends_with(" second"), "{h1_2:?}");
+}
+
 /// A structure with one atom per operation-set orbit, for testing names.
 fn named(symmetry: Symmetry, params: CellParams) -> String {
     let site = Site::new(
