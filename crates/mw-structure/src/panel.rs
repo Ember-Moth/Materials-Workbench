@@ -11,8 +11,8 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_fle
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal::{
-    Axis, CellParam, Constraint, CoordinateConstraint, CrystalSystem, EditMode, Setting,
-    SpaceGroupType,
+    Axis, CellParam, Constraint, CoordinateConstraint, CrystalSystem, EditMode, Orientation,
+    Setting, SpaceGroupType,
 };
 
 use mw_project_file::{Operation, Provenance};
@@ -20,6 +20,16 @@ use mw_project_file::{Operation, Provenance};
 use crate::actions::{AddMixedOccupant, ConvertToP1};
 use crate::workspace::{PanelTab, StructureWorkspace};
 use crate::{dialogs, format};
+
+/// What the cell section says about an explicit orientation (crystallography
+/// design §4.2); nothing for the standard one.
+fn orientation_note(orientation: &Orientation) -> Option<SharedString> {
+    match orientation {
+        Orientation::Standard => None,
+        _ if orientation.is_left_handed() => Some(tr!("panel.cell.left_handed")),
+        Orientation::Explicit(_) => Some(tr!("panel.cell.oriented")),
+    }
+}
 
 fn param_name(param: CellParam) -> &'static str {
     match param {
@@ -267,7 +277,20 @@ impl StructureWorkspace {
                         volume = format!("{:.2}", params.volume())
                     ),
                 },
-            ));
+            ))
+            // A cell kept as a file or a change of cell gave it looks turned
+            // against the standard orientation; say why.
+            .when_some(
+                orientation_note(structure.lattice.orientation()),
+                |this, text| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(text),
+                    )
+                },
+            );
 
         let mode = structure.edit_mode();
         let row_label = |label: SharedString| {

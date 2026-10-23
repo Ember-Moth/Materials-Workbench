@@ -123,6 +123,12 @@ panel:
     system_unknown:
       en: Crystal system unknown
       zh-CN: 晶系未知
+    oriented:
+      en: The cell axes keep the directions they were given, not the standard orientation with a along x.
+      zh-CN: 晶胞轴保持给定的方向，不是 a 沿 x 轴的标准朝向。
+    left_handed:
+      en: The cell axes keep the directions they were given; a, b and c form a left-handed set.
+      zh-CN: 晶胞轴保持给定的方向，a、b、c 构成左手系。
   symmetry:
     title:
       en: Symmetry
@@ -721,8 +727,8 @@ diagnostic:
       en: "%{elements} elements are named, but %{counts} atom counts are given."
       zh-CN: "给出了 %{elements} 种元素，却有 %{counts} 个原子数目。"
     selective_dynamics_ignored:
-      en: Selective dynamics flags are not imported; only the coordinates are read.
-      zh-CN: 未导入 selective dynamics 的固定标志，只读取了原子坐标。
+      en: Selective dynamics flags were not imported.
+      zh-CN: 未导入 selective dynamics 的固定标志。
     invalid_coordinate_mode:
       en: "This line should say Direct or Cartesian, but it reads “%{text}”."
       zh-CN: "这一行应为 Direct 或 Cartesian，实际是“%{text}”。"
@@ -800,8 +806,8 @@ export:
     zh-CN: 在文件夹中显示
 import:
   unsupported:
-    en: "Couldn't open %{file}: only CIF files are supported so far."
-    zh-CN: "无法打开 %{file}：目前只支持 CIF 文件。"
+    en: "Couldn't open %{file}: only CIF and POSCAR files are supported so far (.cif, .vasp, POSCAR, CONTCAR)."
+    zh-CN: "无法打开 %{file}：目前只支持 CIF 和 POSCAR 文件（.cif、.vasp、POSCAR、CONTCAR）。"
   unreadable:
     en: "Couldn't read %{file}: %{reason}"
     zh-CN: "无法读取 %{file}：%{reason}"

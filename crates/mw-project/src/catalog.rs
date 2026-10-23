@@ -149,16 +149,24 @@ impl Project {
 pub struct ImportedEntry {
     pub name: String,
     pub path: PathBuf,
+    pub format: SourceFormat,
     /// The whole file, for the project's copy.
     pub bytes: Arc<[u8]>,
     pub block: Arc<ImportedBlock>,
 }
 
 impl ImportedEntry {
-    pub fn new(name: String, path: PathBuf, bytes: Arc<[u8]>, block: Arc<ImportedBlock>) -> Self {
+    pub fn new(
+        name: String,
+        path: PathBuf,
+        format: SourceFormat,
+        bytes: Arc<[u8]>,
+        block: Arc<ImportedBlock>,
+    ) -> Self {
         Self {
             name,
             path,
+            format,
             bytes,
             block,
         }
@@ -299,7 +307,7 @@ impl ProjectCatalog {
             if !project.sources.iter().any(|s| s.sha256 == sha) {
                 project.sources.push(Source {
                     sha256: sha.clone(),
-                    format: SourceFormat::Cif,
+                    format: imported.format,
                     bytes: imported.bytes.clone(),
                 });
             }
@@ -308,7 +316,7 @@ impl ProjectCatalog {
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             let import = Import::new(
-                SourceFormat::Cif,
+                imported.format,
                 file_name,
                 Some(imported.path.display().to_string()),
                 sha,
@@ -467,6 +475,7 @@ mod tests {
         ImportedEntry::new(
             name.into(),
             PathBuf::from(format!("/data/{name}.cif")),
+            SourceFormat::Cif,
             bytes,
             Arc::new(block),
         )
