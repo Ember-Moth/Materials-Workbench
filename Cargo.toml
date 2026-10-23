@@ -41,6 +41,10 @@ bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# The experimental MCP server (mw-mcp), see docs/design/ai-integration.md §5.
+# The official Rust SDK; each crate turns on the features it needs.
+rmcp = { version = "3.7", default-features = false }
+
 # GPUI and the component library are slow in unoptimized builds; this follows
 # the GPUI Kit installation guide. The symmetry search is optimized too, so
 # that tests and debug builds analyze structures quickly.

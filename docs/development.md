@@ -102,6 +102,79 @@ MW_LLM_PROVIDER=ollama MW_LLM_MODEL=qwen3 MW_LLM_TOOLS=1 cargo run -p mw-llm --e
 
 加上 `RUST_LOG=mw_llm=debug` 可以看到请求地址和重试；日志里没有请求内容和密钥。
 
+实验性 MCP Server（`mw-mcp`，[AI 集成设计稿](design/ai-integration.md)第 5 节）是独立的可执行文件，由 MCP 客户端启动，经 stdio 通信；日志写到标准错误，用 `RUST_LOG` 调整级别。`--allow 目录` 给出客户端可以打开 CIF 文件的目录，可以重复；不给时用工作目录，工作目录是 `/` 时不允许任何目录。客户端的配置里用绝对路径。先构建：
+
+```bash
+cargo build --release -p mw-mcp
+```
+
+用 MCP Inspector 检查。它要从 npm 下载，需要 Node 22.19 或更新。下面的命令行和 `mcpdo` 命令 2026-10-22 用 Inspector 2.12.0 跑过；网页界面的命令按它的文档写，没有打开过。网页界面默认在 `http://localhost:6274`，`--` 之后的参数交给服务器：
+
+```bash
+npx @modelcontextprotocol/inspector target/release/mw-mcp -- --allow "$PWD/crates/mw-mcp/tests/fixtures"
+```
+
+命令行模式下，目标命令在前，`--` 之后是 Inspector 自己的选项。每条命令启动一个新的服务器进程，打开的文件不会留到下一条，所以只适合列工具或调用一次工具：
+
+```bash
+npx @modelcontextprotocol/inspector --cli target/release/mw-mcp --allow "$PWD/crates/mw-mcp/tests/fixtures" -- --method tools/list
+```
+
+```bash
+npx @modelcontextprotocol/inspector --cli target/release/mw-mcp --allow "$PWD/crates/mw-mcp/tests/fixtures" -- --method tools/call --tool-name file_open --tool-arg path="$PWD/crates/mw-mcp/tests/fixtures/rutile.cif"
+```
+
+`tools/list` 后面加 `--strict` 会逐条列出 Schema 的可移植性提示（AI 集成设计稿 5.2 节）。
+
+要在同一个连接上连续调用（先打开文件，再查询），用 Inspector 自带的 `mcpdo`。先在当前 shell 里起一个只属于它的守护进程：
+
+```bash
+eval "$(npx -p @modelcontextprotocol/inspector mcpdo private)"
+```
+
+连接服务器。`--era legacy` 走 `initialize` 握手，`--era modern` 走 2026-07-28 的无状态生命周期：
+
+```bash
+npx -p @modelcontextprotocol/inspector mcpdo connect --era legacy --connection mw "$PWD/target/release/mw-mcp" -- --allow "$PWD/crates/mw-mcp/tests/fixtures"
+```
+
+然后逐条调用，例如打开文件再看摘要：
+
+```bash
+npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name file_open --tool-args-json "{\"path\":\"$PWD/crates/mw-mcp/tests/fixtures/rutile.cif\"}"
+```
+
+```bash
+npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name structure_summary --tool-args-json '{"structure":1}'
+```
+
+`resources/list`、`resources/read mw://project/session/structure/1.cif` 的用法相同。用完停掉守护进程：
+
+```bash
+npx -p @modelcontextprotocol/inspector mcpdo daemon stop
+```
+
+接到 Claude Code（按 2026-10-22 的官方文档）：`--` 之后的内容原样作为启动服务器的命令。默认写进本机的本地配置，加 `--scope project` 则写进项目根目录的 `.mcp.json`：
+
+```bash
+claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/mw-mcp" --allow "$HOME/cif"
+```
+
+也可以直接写 `.mcp.json`（路径换成本机的绝对路径；含本机路径的文件不要提交）：
+
+```json
+{
+  "mcpServers": {
+    "materials-workbench": {
+      "command": "/Users/me/materials-workbench/target/release/mw-mcp",
+      "args": ["--allow", "/Users/me/cif"]
+    }
+  }
+}
+```
+
+用 `claude mcp get materials-workbench` 或会话里的 `/mcp` 确认已连接。工具在 Claude Code 里叫 `mcp__materials-workbench__structure_summary` 这样的名字；打开文件后，结构的 CIF 文本可以用 `@materials-workbench:mw://project/session/structure/1.cif` 引用。Claude Desktop 的 `claude_desktop_config.json` 也是同样的 `mcpServers` 写法，但它可能在 `/` 启动服务器，所以必须给 `--allow`；这一点还没有按 Claude Desktop 当前的文档核对。
+
 debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
 
 ## 3. 代码约定
@@ -167,7 +240,8 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡），以及拾取结果 | `mw-crystal-render` |
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
-| 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部能力放进一个严格请求也合规（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导 | `crates/mw-automation/tests/capabilities.rs` |
+| 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部能力放进一个严格请求也合规（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试 | `crates/mw-automation/tests/capabilities.rs` |
+| MCP Server | 用 rmcp 的客户端经 stdio 驱动 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）、打开测试 CIF（再开一次得到同样的 ID）、摘要、测量、诊断、导出 POSCAR、读 CIF 资源，结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、非 CIF 的文件和错误的参数都是模型能读的工具错误。访问策略和资源 URI 另有单元测试 | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/session.rs` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、坐标编辑。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |

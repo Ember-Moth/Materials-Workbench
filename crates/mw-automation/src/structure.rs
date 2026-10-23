@@ -439,7 +439,7 @@ fn unknown_structure(id: StructureEntryId) -> CallError {
     )
 }
 
-fn invalid(message: impl Into<String>) -> CallError {
+pub(crate) fn invalid(message: impl Into<String>) -> CallError {
     CallError::new("invalid_arguments", message)
 }
 

@@ -2,9 +2,12 @@
 //! vendors accept, and calls do what their descriptions say, with inputs
 //! and outputs that match the schemas.
 
+use std::sync::Arc;
+
 use mw_automation::{CallError, CallResult, Documents, Effect, Registry, StructureEntryId};
 use mw_crystal::CrystalDocument;
 use mw_crystal::sample::{self, SampleKey};
+use mw_crystal_io::cif;
 use mw_llm::schema::{check_schema, check_tools, validate_arguments};
 use mw_llm::{ToolCall, ToolDefinition};
 use serde_json::{Value, json};
@@ -101,6 +104,8 @@ fn effects() {
     let registry = Registry::standard();
     let effect = |name| registry.get(name).unwrap().effect;
     assert_eq!(effect("structure.summary"), Effect::ReadOnly);
+    // Returns text; writing files would be External.
+    assert_eq!(effect("structure.export"), Effect::ReadOnly);
     assert_eq!(effect("structure.delete_sites"), Effect::Undoable);
     assert_eq!(effect("history.undo"), Effect::Undoable);
 }
@@ -477,4 +482,152 @@ fn moving_atoms_only_in_p1() {
     // Onto site 2: allowed, with a warning.
     assert_eq!(moved.output["warnings"][0]["code"], "short_contact");
     assert!(moved.summary.contains("Warning"), "{}", moved.summary);
+}
+
+/// Ba and Sr on one position, operations from the H-M symbol and γ left
+/// out: three changes the importer reports.
+const MIXED: &str = "\
+data_bst
+_publ_section_title 'Ba/Sr titanate'
+_cell_length_a 3.95
+_cell_length_b 3.95
+_cell_length_c 3.95
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_space_group_name_H-M_alt 'P m -3 m'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+Ba1 Ba 0 0 0 0.6
+Sr1 Sr 0 0 0 0.4
+Ti1 Ti 0.5 0.5 0.5 1
+O1 O 0.5 0.5 0 1
+";
+
+#[test]
+fn import_diagnostics() {
+    let (registry, mut documents, [rutile, ..]) = session();
+    let page = |structure| json!({ "structure": structure, "offset": 0, "limit": 10 });
+    let sample = call(
+        &registry,
+        &mut documents,
+        "structure.diagnostics",
+        page(rutile),
+    )
+    .unwrap();
+    assert_eq!(sample.output["block"], Value::Null);
+    assert_eq!(sample.output["total"], 0);
+
+    let block = cif::read_str(MIXED).blocks.remove(0);
+    let document = CrystalDocument::new(block.structure.clone().unwrap());
+    let bst = documents.add_imported("bst", "Imported", document, Arc::new(block));
+    let found = call(
+        &registry,
+        &mut documents,
+        "structure.diagnostics",
+        page(bst),
+    )
+    .unwrap();
+    let output = &found.output;
+    assert_eq!(output["block"], "bst");
+    assert_eq!(
+        (output["errors"].clone(), output["infos"].clone()),
+        (json!(0), json!(3))
+    );
+    let codes: Vec<&str> = output["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "cell.angle_defaulted",
+            "symmetry.operations_from_name",
+            "atom.merged_occupancy"
+        ]
+    );
+    let merged = &output["diagnostics"][2];
+    assert_eq!(merged["line"], 17);
+    assert_eq!(
+        merged["message"],
+        "Atom 'Sr1' is at the same position as 'Ba1'; they were merged into one site with \
+         mixed occupancy."
+    );
+    assert!(
+        found.summary.contains("3 changes by the importer"),
+        "{}",
+        found.summary
+    );
+
+    let second = json!({ "structure": bst, "offset": 1, "limit": 1 });
+    let second = call(&registry, &mut documents, "structure.diagnostics", second).unwrap();
+    assert_eq!(second.output["total"], 3);
+    assert_eq!(
+        second.output["diagnostics"][0]["code"],
+        "symmetry.operations_from_name"
+    );
+    let refused = registry
+        .call(
+            &mut documents,
+            "structure.diagnostics",
+            json!({ "structure": bst, "offset": 0, "limit": 0 }),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "invalid_arguments");
+}
+
+#[test]
+fn export_as_text() {
+    let (registry, mut documents, [_, srtio3, _]) = session();
+    let export = |documents: &mut Documents, structure, format| {
+        let input = json!({ "structure": structure, "format": format });
+        call(&registry, documents, "structure.export", input)
+    };
+
+    let poscar = export(&mut documents, srtio3, "poscar").unwrap();
+    let lines: Vec<&str> = poscar.output["text"].as_str().unwrap().lines().collect();
+    assert_eq!(lines[0], "SrTiO3 · Samples");
+    assert_eq!(
+        lines[6].split_whitespace().collect::<Vec<_>>(),
+        ["1", "1", "3"]
+    );
+    assert_eq!(poscar.output["extension"], "vasp");
+    let xyz = export(&mut documents, srtio3, "xyz").unwrap();
+    assert_eq!(
+        xyz.output["text"].as_str().unwrap().lines().next(),
+        Some("5")
+    );
+    let cif = export(&mut documents, srtio3, "cif").unwrap();
+    assert!(cif.output["text"].as_str().unwrap().contains("data_SrTiO3"));
+    assert!(
+        cif.summary.starts_with("CIF text of SrTiO3"),
+        "{}",
+        cif.summary
+    );
+
+    // An imported block keeps its fields; a list of atoms cannot hold
+    // mixed occupancy.
+    let block = cif::read_str(MIXED).blocks.remove(0);
+    let document = CrystalDocument::new(block.structure.clone().unwrap());
+    let bst = documents.add_imported("bst", "Imported", document, Arc::new(block));
+    let cif = export(&mut documents, bst, "cif").unwrap();
+    let text = cif.output["text"].as_str().unwrap();
+    assert!(
+        text.contains("data_bst") && text.contains("Ba/Sr titanate"),
+        "{text}"
+    );
+    assert_eq!(cif.output["dropped_fields"], json!([]));
+    let refused = export(&mut documents, bst, "poscar").unwrap_err();
+    assert_eq!(refused.code, "partial_occupancy");
+    assert!(
+        refused.message.contains("export as cif"),
+        "{}",
+        refused.message
+    );
 }
