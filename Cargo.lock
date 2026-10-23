@@ -4201,9 +4201,11 @@ dependencies = [
  "mw-crystal",
  "mw-crystal-io",
  "mw-llm",
+ "mw-project-file",
  "rmcp",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

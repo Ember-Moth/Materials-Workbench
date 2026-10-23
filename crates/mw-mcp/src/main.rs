@@ -7,17 +7,19 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mw_mcp::{Access, Server};
+use mw_mcp::{Access, Headless, Server};
 use rmcp::ServiceExt;
 
 const USAGE: &str = "\
 Usage: mw-mcp [--allow DIR]...
 
-Serves Materials Workbench to an MCP client over stdio: open CIF files,
-query structures, export them as text. Experimental and read-only.
+Serves Materials Workbench to an MCP client over stdio: open projects and
+CIF files, query structures, export them as text. Experimental and
+read-only.
 
 Options:
-  --allow DIR    Let clients open CIF files inside DIR and its subdirectories.
+  --allow DIR    Let clients open projects and CIF files inside DIR and its
+                 subdirectories.
                  Repeatable. Default: the working directory, unless it is /.
   -h, --help     Print this help.
   -V, --version  Print the version.
@@ -73,7 +75,10 @@ async fn main() -> ExitCode {
     if access.allowed().is_empty() {
         log::warn!("no directory to open files from; start the server with --allow DIR");
     }
-    let service = match Server::new(access).serve(rmcp::transport::stdio()).await {
+    let service = match Server::new(Headless::new(access))
+        .serve(rmcp::transport::stdio())
+        .await
+    {
         Ok(service) => service,
         Err(e) => {
             log::error!("the client did not start a session: {e}");

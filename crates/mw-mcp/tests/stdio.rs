@@ -1,9 +1,10 @@
 //! The server as MCP clients see it: the `mw-mcp` binary, driven over stdio
 //! by rmcp's client, both through `initialize` (protocol 2025-11-25 and
 //! earlier, which current clients speak) and through `server/discover`
-//! (2026-07-28).
+//! (2026-07-28). It opens the sample projects, installed in a temporary
+//! directory, and the CIF files in `fixtures/`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mw_llm::ToolCall;
 use mw_llm::schema::{check_schema, validate_arguments};
@@ -20,6 +21,11 @@ use tokio::process::Command;
 
 type Client = RunningService<RoleClient, ()>;
 
+/// The ids in the sample project `tio2.mwproj`.
+const TIO2: &str = "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c00";
+const RUTILE: &str = "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c01";
+const SUPERCELL: &str = "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c02";
+
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -28,25 +34,48 @@ fn fixture(name: &str) -> String {
     fixtures().join(name).to_string_lossy().into_owned()
 }
 
-fn transport() -> TokioChildProcess {
+/// The sample projects in a directory of their own.
+struct Projects {
+    dir: tempfile::TempDir,
+    tio2: PathBuf,
+}
+
+impl Projects {
+    fn install() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = mw_project_file::samples::install(dir.path()).unwrap();
+        let tio2 = installed[0].canonicalize().unwrap();
+        Self { dir, tio2 }
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+fn transport(projects: &Projects) -> TokioChildProcess {
     let command = Command::new(env!("CARGO_BIN_EXE_mw-mcp")).configure(|command| {
-        command.arg("--allow").arg(fixtures());
+        command
+            .arg("--allow")
+            .arg(projects.path())
+            .arg("--allow")
+            .arg(fixtures());
     });
     TokioChildProcess::new(command).expect("the server starts")
 }
 
 /// A client that begins with `initialize`.
-async fn start() -> Client {
-    ().serve(transport()).await.expect("initialize")
+async fn start(projects: &Projects) -> Client {
+    ().serve(transport(projects)).await.expect("initialize")
 }
 
 /// A client that begins with `server/discover` and sends its version and
 /// capabilities with every request.
-async fn start_stateless() -> Client {
+async fn start_stateless(projects: &Projects) -> Client {
     let lifecycle = ClientLifecycleMode::Discover {
         preferred_versions: vec![ProtocolVersion::V_2026_07_28],
     };
-    ().serve_with_lifecycle(transport(), lifecycle)
+    ().serve_with_lifecycle(transport(projects), lifecycle)
         .await
         .expect("discover")
 }
@@ -115,13 +144,29 @@ fn resource_text(contents: &ResourceContents) -> (&str, Option<&str>, bool) {
     }
 }
 
+async fn read_resource(client: &Client, uri: &str) -> String {
+    let read = client
+        .read_resource(ReadResourceRequestParams::new(uri))
+        .await
+        .unwrap();
+    let (text, mime, marked) = resource_text(&read.contents[0]);
+    assert_eq!(mime, Some("chemical/x-cif"));
+    assert!(marked);
+    text.to_owned()
+}
+
 fn atom(site: u32, member: u32) -> Value {
     json!({ "site": site, "member": member, "cell": [0, 0, 0] })
 }
 
+fn uri(project: &str, entry: &str) -> String {
+    format!("mw://project/{project}/structure/{entry}.cif")
+}
+
 #[tokio::test]
-async fn open_summarize_measure_and_export() {
-    let client = start().await;
+async fn open_a_project_summarize_and_export() {
+    let projects = Projects::install();
+    let client = start(&projects).await;
     let info = client.peer_info().expect("server info");
     assert_eq!(
         info.server_info.as_ref().unwrap().name,
@@ -140,8 +185,11 @@ async fn open_summarize_measure_and_export() {
     assert_eq!(
         names,
         [
-            "file_open",
+            "project_list",
+            "project_open",
             "structure_list",
+            "structure_open",
+            "file_open",
             "structure_summary",
             "structure_sites",
             "structure_site_symmetry",
@@ -167,38 +215,58 @@ async fn open_summarize_measure_and_export() {
         }
     }
 
-    let opened = call(
-        &client,
-        "file_open",
-        json!({ "path": fixture("rutile.cif") }),
-    )
-    .await;
-    let structure = &output(&tools, "file_open", &opened)["structures"][0];
-    assert_eq!(structure["name"], "rutile");
-    assert_eq!(structure["block"], "rutile");
-    let id = structure["structure"].as_u64().unwrap();
-    let uri = format!("mw://project/session/structure/{id}.cif");
-    assert_eq!(structure["resource"], uri.as_str());
-    // Opening an unchanged file again gives the same structure.
-    let again = call(
-        &client,
-        "file_open",
-        json!({ "path": fixture("rutile.cif") }),
-    )
-    .await;
-    assert_eq!(
-        output(&tools, "file_open", &again),
-        output(&tools, "file_open", &opened)
-    );
-    assert!(text(&again, 0).starts_with("Already open."));
+    // The standalone server keeps no list of recent projects.
+    let list = call(&client, "project_list", json!({})).await;
+    let list = output(&tools, "project_list", &list);
+    assert_eq!(list["open"], json!([]));
+    assert_eq!(list["recent"], json!([]));
+
+    let path = projects.tio2.to_str().unwrap();
+    let opened = call(&client, "project_open", json!({ "path": path })).await;
+    let project = output(&tools, "project_open", &opened).clone();
+    assert!(text(&opened, 0).contains("structure_open opens one"));
+    assert_eq!(project["project"], TIO2);
+    assert_eq!(project["name"], "TiO₂ 相研究");
+    assert_eq!(project["path"], path);
+    let structures = project["structures"].as_array().unwrap();
+    assert_eq!(structures.len(), 2);
+    let rutile = &structures[0];
+    assert_eq!(rutile["name"], "金红石");
+    assert_eq!(rutile["open"], false);
+    assert_eq!(rutile["resource"], uri(TIO2, RUTILE));
+    assert_eq!(structures[1]["origin"], "2×2×2 supercell of 金红石");
+    let id = rutile["structure"].as_u64().unwrap();
+    // Opening it again gives the same ids.
+    let again = call(&client, "project_open", json!({ "path": path })).await;
+    assert_eq!(output(&tools, "project_open", &again), &project);
+
+    // A structure is opened before the other tools use it.
+    let summary = call(&client, "structure_summary", json!({ "structure": id })).await;
+    assert_eq!(error_code(&summary), "structure_not_open");
+    assert!(text(&summary, 0).contains("structure_open opens it"));
+    let open = call(&client, "structure_open", json!({ "structure": id })).await;
+    let open = output(&tools, "structure_open", &open);
+    assert_eq!(open["project"], "TiO₂ 相研究");
+    assert_eq!(open["note"], Value::Null);
 
     let list = call(&client, "structure_list", json!({})).await;
     let list = output(&tools, "structure_list", &list);
-    assert_eq!(list["structures"].as_array().unwrap().len(), 1);
+    let open: Vec<&Value> = list["structures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| &s["open"])
+        .collect();
+    assert_eq!(open, [true, false]);
+    let list = call(&client, "project_list", json!({})).await;
+    let list = output(&tools, "project_list", &list);
+    assert_eq!(list["open"][0]["project"], TIO2);
+    assert_eq!(list["open"][0]["structures"], 2);
 
     let summary = call(&client, "structure_summary", json!({ "structure": id })).await;
     assert!(text(&summary, 0).contains("P 4_2/m n m (No. 136)"));
     let summary = output(&tools, "structure_summary", &summary);
+    assert_eq!(summary["name"], "金红石");
     assert_eq!(summary["formula"], "O2Ti");
     assert_eq!(summary["formula_units"], 2);
     assert_eq!(summary["space_group"]["number"], 136);
@@ -213,6 +281,7 @@ async fn open_summarize_measure_and_export() {
     let expected = 2f64.sqrt() * 0.3048 * 4.594;
     assert!((distance - expected).abs() < 1e-9, "{distance}");
 
+    // Read again from the project's copy of rutile.cif.
     let diagnostics = json!({ "structure": id, "offset": 0, "limit": 50 });
     let diagnostics = call(&client, "structure_diagnostics", diagnostics).await;
     let diagnostics = output(&tools, "structure_diagnostics", &diagnostics);
@@ -224,7 +293,7 @@ async fn open_summarize_measure_and_export() {
     let export = output(&tools, "structure_export", &export);
     assert_eq!(export["extension"], "vasp");
     let poscar: Vec<&str> = export["text"].as_str().unwrap().lines().collect();
-    assert_eq!(poscar[0], "rutile · Opened files");
+    assert_eq!(poscar[0], "金红石 · TiO₂ 相研究");
     assert_eq!(
         poscar[5].split_whitespace().collect::<Vec<_>>(),
         ["Ti", "O"]
@@ -232,24 +301,25 @@ async fn open_summarize_measure_and_export() {
     assert_eq!(poscar[6].split_whitespace().collect::<Vec<_>>(), ["2", "4"]);
     assert_eq!(poscar.len(), 8 + 6);
 
-    // The CIF text as a resource.
+    // The open structures' CIF text as resources, by the projects' ids.
     let resources = client.list_all_resources().await.unwrap();
-    assert_eq!(resources.len(), 1);
-    assert_eq!(resources[0].uri, uri);
+    let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
+    assert_eq!(uris, [uri(TIO2, RUTILE)]);
+    assert_eq!(resources[0].title.as_deref(), Some("金红石"));
     let templates = client.list_all_resource_templates().await.unwrap();
     assert_eq!(
         templates[0].uri_template,
         "mw://project/{project}/structure/{structure}.cif"
     );
-    let read = client
-        .read_resource(ReadResourceRequestParams::new(uri))
-        .await
-        .unwrap();
-    let (cif, mime, marked) = resource_text(&read.contents[0]);
+    let cif = read_resource(&client, &uri(TIO2, RUTILE)).await;
     assert!(cif.contains("data_rutile"), "{cif}");
-    assert_eq!(mime, Some("chemical/x-cif"));
-    assert!(marked);
-    let missing = ReadResourceRequestParams::new("mw://project/session/structure/99.cif");
+    // Unchanged since the import: the source file's other fields are back.
+    assert!(cif.contains("_chemical_name_mineral"), "{cif}");
+    // Reading a structure that is not open opens it.
+    let supercell = read_resource(&client, &uri(TIO2, SUPERCELL)).await;
+    assert!(supercell.contains("Ti1_1"), "{supercell}");
+    assert_eq!(client.list_all_resources().await.unwrap().len(), 2);
+    let missing = ReadResourceRequestParams::new(uri(TIO2, TIO2));
     assert!(client.read_resource(missing).await.is_err());
 
     client.cancel().await.unwrap();
@@ -257,33 +327,83 @@ async fn open_summarize_measure_and_export() {
 
 #[tokio::test]
 async fn stateless_clients_get_the_same_answers() {
-    let client = start_stateless().await;
+    let projects = Projects::install();
+    let client = start_stateless(&projects).await;
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 10);
+    assert_eq!(tools.len(), 13);
+    let path = projects.tio2.to_str().unwrap();
+    let opened = call(&client, "project_open", json!({ "path": path })).await;
+    let id = output(&tools, "project_open", &opened)["structures"][0]["structure"].clone();
+    let open = call(&client, "structure_open", json!({ "structure": id })).await;
+    output(&tools, "structure_open", &open);
+    let summary = call(&client, "structure_summary", json!({ "structure": id })).await;
+    assert_eq!(
+        output(&tools, "structure_summary", &summary)["formula"],
+        "O2Ti"
+    );
+    let cif = read_resource(&client, &uri(TIO2, RUTILE)).await;
+    assert!(cif.contains("data_rutile"));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn files_outside_projects() {
+    let projects = Projects::install();
+    let client = start(&projects).await;
+    let tools = client.list_all_tools().await.unwrap();
     let opened = call(
         &client,
         "file_open",
         json!({ "path": fixture("rutile.cif") }),
     )
     .await;
-    let id = output(&tools, "file_open", &opened)["structures"][0]["structure"].clone();
+    let structure = &output(&tools, "file_open", &opened)["structures"][0];
+    assert_eq!(structure["name"], "rutile");
+    assert_eq!(structure["block"], "rutile");
+    let id = structure["structure"].as_u64().unwrap();
+    let resource = structure["resource"].as_str().unwrap().to_owned();
+    assert!(resource.starts_with("mw://project/"), "{resource}");
+    // Opening an unchanged file again gives the same structure.
+    let again = call(
+        &client,
+        "file_open",
+        json!({ "path": fixture("rutile.cif") }),
+    )
+    .await;
+    assert_eq!(
+        output(&tools, "file_open", &again),
+        output(&tools, "file_open", &opened)
+    );
+    assert!(text(&again, 0).starts_with("Already open."));
+
+    // In an untitled project that is never saved.
+    let list = call(&client, "project_list", json!({})).await;
+    let list = output(&tools, "project_list", &list);
+    assert_eq!(list["open"][0]["name"], "Opened files");
+    assert_eq!(list["open"][0]["path"], Value::Null);
     let summary = call(&client, "structure_summary", json!({ "structure": id })).await;
     assert_eq!(
         output(&tools, "structure_summary", &summary)["formula"],
         "O2Ti"
     );
-    let uri = format!("mw://project/session/structure/{id}.cif");
-    let read = client
-        .read_resource(ReadResourceRequestParams::new(uri))
-        .await
+    let export = json!({ "structure": id, "format": "poscar" });
+    let export = call(&client, "structure_export", export).await;
+    let poscar = output(&tools, "structure_export", &export)["text"]
+        .as_str()
         .unwrap();
-    assert!(resource_text(&read.contents[0]).0.contains("data_rutile"));
+    assert!(poscar.starts_with("rutile · Opened files\n"), "{poscar}");
+    assert!(
+        read_resource(&client, &resource)
+            .await
+            .contains("data_rutile")
+    );
     client.cancel().await.unwrap();
 }
 
 #[tokio::test]
 async fn file_text_is_marked_untrusted_and_cannot_write() {
-    let client = start().await;
+    let projects = Projects::install();
+    let client = start(&projects).await;
     let tools = client.list_all_tools().await.unwrap();
     // A read-only server: whatever a file says, a model has no tool that
     // changes data or writes files (design §7.4, §8).
@@ -301,6 +421,7 @@ async fn file_text_is_marked_untrusted_and_cannot_write() {
     .await;
     let structure = &output(&tools, "file_open", &opened)["structures"][0];
     let id = structure["structure"].as_u64().unwrap();
+    let resource = structure["resource"].as_str().unwrap().to_owned();
     assert!(structure["infos"].as_u64().unwrap() > 0);
 
     let diagnostics = json!({ "structure": id, "offset": 0, "limit": 50 });
@@ -325,14 +446,8 @@ async fn file_text_is_marked_untrusted_and_cannot_write() {
         .as_str()
         .unwrap();
     assert!(text.contains("SYSTEM NOTICE TO THE AI ASSISTANT"));
-    let uri = format!("mw://project/session/structure/{id}.cif");
-    let read = client
-        .read_resource(ReadResourceRequestParams::new(uri))
-        .await
-        .unwrap();
-    let (resource, _, marked) = resource_text(&read.contents[0]);
+    let resource = read_resource(&client, &resource).await;
     assert!(resource.contains("SYSTEM NOTICE TO THE AI ASSISTANT"));
-    assert!(marked);
 
     // Ba and Sr share a position: a list of atoms cannot hold it.
     let poscar = json!({ "structure": id, "format": "poscar" });
@@ -345,7 +460,8 @@ async fn file_text_is_marked_untrusted_and_cannot_write() {
 
 #[tokio::test]
 async fn refusals_are_tool_errors_the_model_can_read() {
-    let client = start().await;
+    let projects = Projects::install();
+    let client = start(&projects).await;
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let outside = call(&client, "file_open", json!({ "path": manifest })).await;
     assert_eq!(error_code(&outside), "not_allowed");
@@ -363,7 +479,19 @@ async fn refusals_are_tool_errors_the_model_can_read() {
         error_code(&call(&client, "file_open", extra).await),
         "invalid_arguments"
     );
+
+    let crate_dir = env!("CARGO_MANIFEST_DIR");
+    let outside = call(&client, "project_open", json!({ "path": crate_dir })).await;
+    assert_eq!(error_code(&outside), "not_allowed");
+    let not_a_project = call(&client, "project_open", json!({ "path": fixtures() })).await;
+    assert_eq!(error_code(&not_a_project), "not_a_project");
+    let missing = projects.path().join("none.mwproj");
+    let missing = call(&client, "project_open", json!({ "path": missing })).await;
+    assert_eq!(error_code(&missing), "not_found");
+
     let unknown = call(&client, "structure_summary", json!({ "structure": 7 })).await;
+    assert_eq!(error_code(&unknown), "unknown_structure");
+    let unknown = call(&client, "structure_open", json!({ "structure": 7 })).await;
     assert_eq!(error_code(&unknown), "unknown_structure");
     let wrong = call(&client, "structure_summary", json!({ "id": 1 })).await;
     assert_eq!(error_code(&wrong), "invalid_arguments");
