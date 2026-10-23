@@ -7,7 +7,8 @@
 //! ├── project.json          the manifest: format version, project id and
 //! │                         name, entries with their provenance
 //! ├── structures/<id>.json  one structure document per entry
-//! ├── sources/<sha256>.cif  byte-exact copies of imported files
+//! ├── sources/<sha256>.cif  byte-exact copies of imported files (.vasp for
+//! │                         POSCAR)
 //! └── view.json             view state; deleting it loses no data
 //! ```
 //!
@@ -37,7 +38,8 @@ pub use time::Timestamp;
 pub use view::{Camera, DisplayModel, EntryView, PanelTab, ViewState};
 
 /// The format version this code writes and the newest it reads (design
-/// §4): 2 since lattices can have an explicit orientation.
+/// §4): 2 since lattices can have an explicit orientation and structures
+/// can be imported from POSCAR.
 pub const VERSION: u32 = 2;
 
 /// The extension of project directories.

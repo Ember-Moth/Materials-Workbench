@@ -436,7 +436,7 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 |---|---|---|
 | Error | 硬约束，不可能构造出违反它的结构 | 度量张量非正定、操作集不封闭、占位率 ≤ 0、标签重复 |
 | Warning | 允许存在，但用户需要知道 | 原子过近、占位率之和 > 1、晶胞参数与对称性不一致、电荷不平衡（有氧化态时） |
-| Info | 程序替用户做过的修改 | 吸附到特殊位置（附最大位移）、合并共占的行、对重复原子去重、左手系晶格 |
+| Info | 程序替用户做过的修改，或用户需要知道的读法 | 吸附到特殊位置（附最大位移）、合并共占的行、对重复原子去重、左手系晶格、没有导入的 CONTCAR 速度 |
 
 导入时产生的诊断带源文件行号，UI 可以直接跳到对应行。
 
@@ -521,6 +521,17 @@ Diagnostic { severity: Error | Warning | Info, code, message_key /* i18n */, tar
 - 读取 VASP 5 的元素行；VASP 4 没有元素行时，要求用户指定元素。
 - Direct 和 Cartesian 坐标都支持；selective dynamics 标志在 v0.x 中忽略，并给出警告。
 - 结果为 P1 结构，`orientation = Explicit`。
+
+M10 的实现（`mw-crystal-io/src/poscar_read.rs`，`poscar::read` / `read_str` / `read_with_elements`）：
+
+- **按行的位置读**，和 VASP 一样：注释行、缩放因子、三行晶格矢量、元素行（VASP 5）、原子数目、可选的 selective dynamics 行、坐标类型、每个原子一行坐标。每行只取需要的前几个数，后面的内容（selective dynamics 的 T/F、注释）不管。数接受 Fortran 的 `1.5D-3` 写法，不接受 NaN 和无穷。结果是一个"数据块"：名字取注释行，结构为 P1，不记空间群名称（文件没有写），占位率 1，标签按元素计数（Si1、Si2……，同一元素分两组列出时接着数）。
+- **缩放因子**：一个正数乘到晶格和笛卡尔坐标上；负数是晶胞体积（Å³），按 `(|s| / |det A|)^(1/3)` 缩放。VASP 还允许三个数，分别作用于三个笛卡尔方向；三个相等时就是一个缩放因子，不相等时报错（`UnequalScaleFactors`）——这种写法很少见，而且没有在 VASP 文档上核对过它的确切含义，报错比猜错好。
+- **晶格**：`Lattice::from_matrix`（4.2 节）从缩放后的矢量算出参数和朝向；矢量构不成晶胞时报错，左手系照常保存并给 Info（`LeftHandedLattice`，第 3 行）。按标准朝向写的矢量（a 沿 x，b 在 xy 平面内）读成 `Standard`，所以设计稿原来写的"结果为 `orientation = Explicit`"只对不在标准朝向的矢量成立。
+- **元素**：第 6 行的第一个记号不是整数时是元素行（VASP 5），否则是 VASP 4 的数目行。元素名去掉第一个非字母之后的部分（POTCAR 后缀 `Fe_pv`、`Ti_pv/7b3a…`），首字母大写后认不出的按未知元素 `X` 保留原名并警告（与 CIF 相同）。VASP 4 文件报错 `MissingElements`，说明要给几种元素；`read_with_elements` 按数目行的顺序接受用户给的元素，界面里选择元素留到以后，现在的提示是让用户在文件里补上元素行。
+- **坐标**：坐标类型行首字母是 C、c、K、k 时为 Cartesian（VASP 的规则），否则为 Direct；这一行本身是数字时说明它缺失了，报错。Cartesian 坐标先乘缩放因子，再用 `Lattice::to_fractional` 换成分数坐标；Direct 坐标原样保存，不归一化到 [0, 1)（第 3 节）。坐标行少于三个数逐行报错；文件在坐标读完之前结束时报告应有几行、实有几行。坐标之后还有内容（CONTCAR 的速度、预测-校正数据）时给 Info，不导入。
+- **检查**：原子之间距离小于 `short_contact` 的报 `ShortContact` 警告，重合的原子也一样（距离 0.000 Å）。和 CIF 不同，POSCAR 每个原子都是文件明确列出的，所以不合并也不删除。
+- 诊断全部带行号（文件在中途结束的除外），文字在界面的语言文件和 `mw-automation` 的英文说明里，与 CIF 的诊断相同。
+- **测试**（`mw-crystal-io/tests/poscar.rs`）：`tests/fixtures/poscar/` 里 6 个手写的文件（VASP 5 Direct、fcc 原胞的 Cartesian 坐标与显式朝向、负缩放因子、带 POTCAR 后缀和 selective dynamics 与速度块的 CONTCAR、VASP 4、左手系）；每种错误和警告的行号；以及和导出器的往返：全部能写成 POSCAR 的测试结构、内置示例、非对角超胞和转过的、左手系的金红石（共 21 个）写出再读回，原子的元素和笛卡尔位置（差一个晶格平移）、晶格矢量、手性都相同，再写一遍文本逐字相同。
 
 **导出**：
 

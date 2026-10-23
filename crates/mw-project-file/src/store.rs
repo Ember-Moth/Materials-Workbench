@@ -37,8 +37,9 @@ type Upgrade = fn(FileKind, &mut Value);
 const UPGRADES: [Upgrade; VERSION as usize - 1] = [v1_to_v2];
 
 /// Version 2 adds an optional `orientation` to a structure's `cell`
-/// (crystallography design §4.2). A version 1 cell has none, which reads
-/// as the standard orientation, so nothing needs rewriting.
+/// (crystallography design §4.2) and the import format `poscar`. A version
+/// 1 cell has no orientation, which reads as the standard one, and no entry
+/// was imported from POSCAR, so nothing needs rewriting.
 fn v1_to_v2(_kind: FileKind, _value: &mut Value) {}
 
 fn migrate(kind: FileKind, mut value: Value, from: u32) -> Value {

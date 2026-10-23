@@ -140,6 +140,42 @@ fn build() -> Built {
             }
         }
     }
+    // POSCAR files, some with an explicit orientation, one left-handed.
+    let mut names: Vec<_> = fs::read_dir(fixtures().join("poscar"))
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| p.extension().is_none_or(|e| e == "vasp"))
+        .collect();
+    names.sort();
+    for path in names {
+        let bytes: Arc<[u8]> = fs::read(&path).unwrap().into();
+        let report = mw_crystal_io::poscar::read(&bytes);
+        let Some((block, structure)) = report.structures().next() else {
+            continue;
+        };
+        let sha = Sha256::of(&bytes);
+        let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let import = Import::new(
+            SourceFormat::Poscar,
+            file_name.clone(),
+            Some(path.display().to_string()),
+            sha.clone(),
+            block.name.clone(),
+            now.clone(),
+            structure_sha256(structure),
+        );
+        add(
+            &mut manifest,
+            file_name,
+            Provenance::Import(import),
+            structure.clone(),
+        );
+        sources.push(Source {
+            sha256: sha,
+            format: SourceFormat::Poscar,
+            bytes,
+        });
+    }
     add(
         &mut manifest,
         "金红石（左手系）".into(),
@@ -217,6 +253,7 @@ fn everything_reads_back_exactly() {
         .filter(|a| a.stale)
         .count();
     assert!(stale > 10, "{stale}");
+    let mut poscar = 0;
     for entry in &manifest.entries {
         let Some(import) = entry.provenance.import() else {
             continue;
@@ -225,7 +262,14 @@ fn everything_reads_back_exactly() {
         let block = import.read_block(&bytes).expect("the block is there");
         let structure = block.structure.expect("it has a structure");
         assert_eq!(structure_sha256(&structure), import.structure_sha256);
+        if import.format == SourceFormat::Poscar {
+            assert!(import.copy_path().ends_with(".vasp"));
+            assert!(path.join(import.copy_path()).exists());
+            poscar += 1;
+        }
     }
+    // Every POSCAR fixture but the VASP 4 one, which needs its elements.
+    assert_eq!(poscar, 5);
     assert_eq!(dir.read_view(), built.save.view);
 
     // The same content gives the same bytes.

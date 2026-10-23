@@ -287,6 +287,47 @@ pub fn diagnostic_message(diagnostic: &Diagnostic) -> String {
         ShortContact { a, b, distance } => {
             format!("Atoms of fully occupied sites '{a}' and '{b}' are only {distance:.3} Å apart.")
         }
+        PoscarTruncated => "The POSCAR file ends before the atom coordinates.".into(),
+        InvalidScale { text } => format!(
+            "The scaling factor '{text}' is not one positive number, or a negative one giving \
+             the cell volume in Å³."
+        ),
+        UnequalScaleFactors { factors } => {
+            format!("Three different scaling factors {factors:?} are not supported; one factor is.")
+        }
+        InvalidLatticeVector { text } => {
+            format!("The lattice vector line '{text}' does not hold three numbers.")
+        }
+        DegenerateLattice => {
+            "The lattice vectors span no cell: one is zero, or they lie in a plane.".into()
+        }
+        LeftHandedLattice => "The lattice vectors form a left-handed set and are kept as \
+             given; CIF export writes the same crystal on -a, -b, -c."
+            .into(),
+        MissingElements { species } => format!(
+            "The file has no element line (VASP 4), so the elements of its {species} atom \
+             types are unknown; an element line before the atom counts is needed."
+        ),
+        InvalidAtomCounts { text } => format!("The atom counts line '{text}' holds no counts."),
+        SpeciesCountMismatch { elements, counts } => {
+            format!("{elements} elements are named, but {counts} atom counts are given.")
+        }
+        SelectiveDynamicsIgnored => {
+            "Selective dynamics flags were not imported; only the coordinates were read.".into()
+        }
+        InvalidCoordinateMode { text } => {
+            format!("The coordinate type line should say Direct or Cartesian, but reads '{text}'.")
+        }
+        InvalidCoordinates { text } => {
+            format!("The coordinate line '{text}' does not hold three numbers.")
+        }
+        MissingCoordinates { expected, found } => format!(
+            "The atom counts add up to {expected} atoms, but the file ends after {found} \
+             coordinate lines."
+        ),
+        TrailingContentIgnored => "The content after the coordinates (velocities, \
+             predictor-corrector data) was not imported."
+            .into(),
         _ => format!("Import finding {}.", diagnostic.code()),
     }
 }

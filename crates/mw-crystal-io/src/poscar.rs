@@ -1,7 +1,11 @@
-//! VASP 5 POSCAR export (design §9.3): the structure expanded to P1, atoms
-//! grouped by element with an element line, direct coordinates.
+//! VASP POSCAR import and export (design §9.3). Export writes VASP 5: the
+//! structure expanded to P1, atoms grouped by element with an element line,
+//! direct coordinates, the lattice in its orientation. Import reads VASP 5
+//! and, with the elements given, VASP 4 ([`read`]).
 
 use mw_crystal::Structure;
+
+pub use crate::poscar_read::{read, read_str, read_with_elements};
 
 use crate::atoms::{self, ExportError, fixed};
 

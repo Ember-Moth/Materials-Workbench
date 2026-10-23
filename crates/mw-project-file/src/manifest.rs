@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use mw_crystal_io::{ImportedBlock, cif};
+use mw_crystal_io::{ImportReport, ImportedBlock, cif, poscar};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -185,16 +185,15 @@ impl Import {
     /// came from, with its diagnostics (the file's own first, as on import)
     /// and the fields the structure does not hold (design §7.1).
     pub fn read_block(&self, bytes: &[u8]) -> Option<ImportedBlock> {
+        let take = |report: ImportReport, find: &dyn Fn(&ImportedBlock) -> bool| {
+            let mut block = report.blocks.into_iter().find(find)?;
+            block.diagnostics.splice(0..0, report.diagnostics);
+            Some(block)
+        };
         match self.format {
-            SourceFormat::Cif => {
-                let report = cif::read(bytes);
-                let mut block = report
-                    .blocks
-                    .into_iter()
-                    .find(|block| block.name == self.block)?;
-                block.diagnostics.splice(0..0, report.diagnostics);
-                Some(block)
-            }
+            SourceFormat::Cif => take(cif::read(bytes), &|block| block.name == self.block),
+            // One structure per file, named by its comment line.
+            SourceFormat::Poscar => take(poscar::read(bytes), &|_| true),
         }
     }
 }
@@ -204,12 +203,18 @@ impl Import {
 #[serde(rename_all = "snake_case")]
 pub enum SourceFormat {
     Cif,
+    /// VASP POSCAR or CONTCAR (format version 2).
+    Poscar,
 }
 
 impl SourceFormat {
+    /// The extension of the file's copy in the project: `vasp` for POSCAR,
+    /// whose files are often named without one, as VESTA, ASE and pymatgen
+    /// recognize it.
     pub fn extension(self) -> &'static str {
         match self {
             Self::Cif => "cif",
+            Self::Poscar => "vasp",
         }
     }
 }

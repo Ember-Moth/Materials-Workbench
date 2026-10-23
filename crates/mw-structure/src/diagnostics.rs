@@ -211,6 +211,37 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
             b = b,
             distance = distance(*d)
         ),
+        PoscarTruncated => tr!("diagnostic.poscar.truncated"),
+        InvalidScale { text } => tr!("diagnostic.poscar.invalid_scale", text = text),
+        UnequalScaleFactors { factors } => tr!(
+            "diagnostic.poscar.unequal_scale_factors",
+            factors = factors.map(|f| f.to_string()).join(", ")
+        ),
+        InvalidLatticeVector { text } => {
+            tr!("diagnostic.poscar.invalid_lattice_vector", text = text)
+        }
+        DegenerateLattice => tr!("diagnostic.poscar.degenerate_lattice"),
+        LeftHandedLattice => tr!("diagnostic.poscar.left_handed"),
+        MissingElements { species } => {
+            tr!("diagnostic.poscar.missing_elements", count = species)
+        }
+        InvalidAtomCounts { text } => tr!("diagnostic.poscar.invalid_counts", text = text),
+        SpeciesCountMismatch { elements, counts } => tr!(
+            "diagnostic.poscar.species_count_mismatch",
+            elements = elements,
+            counts = counts
+        ),
+        SelectiveDynamicsIgnored => tr!("diagnostic.poscar.selective_dynamics_ignored"),
+        InvalidCoordinateMode { text } => {
+            tr!("diagnostic.poscar.invalid_coordinate_mode", text = text)
+        }
+        InvalidCoordinates { text } => tr!("diagnostic.poscar.invalid_coordinates", text = text),
+        MissingCoordinates { expected, found } => tr!(
+            "diagnostic.poscar.missing_coordinates",
+            expected = expected,
+            found = found
+        ),
+        TrailingContentIgnored => tr!("diagnostic.poscar.trailing_content"),
         _ => kind.code().into(),
     }
 }
@@ -271,5 +302,51 @@ impl RenderOnce for DiagnosticRow {
                     .text_color(theme.muted_foreground)
                     .child(tr!("diagnostic.line", line = line))
             }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI's glob would shadow the `test` attribute.
+    use mw_crystal_io::DiagnosticKind;
+
+    use super::message;
+
+    #[test]
+    fn poscar_diagnostics_have_messages() {
+        use DiagnosticKind::*;
+        let text = || "x".to_string();
+        for kind in [
+            PoscarTruncated,
+            InvalidScale { text: text() },
+            UnequalScaleFactors {
+                factors: [1.0, 1.0, 2.0],
+            },
+            InvalidLatticeVector { text: text() },
+            DegenerateLattice,
+            LeftHandedLattice,
+            MissingElements { species: 2 },
+            InvalidAtomCounts { text: text() },
+            SpeciesCountMismatch {
+                elements: 1,
+                counts: 2,
+            },
+            SelectiveDynamicsIgnored,
+            InvalidCoordinateMode { text: text() },
+            InvalidCoordinates { text: text() },
+            MissingCoordinates {
+                expected: 2,
+                found: 1,
+            },
+            TrailingContentIgnored,
+        ] {
+            let message = message(&kind);
+            // A missing key comes back as the key itself.
+            assert!(
+                message != kind.code() && !message.contains("diagnostic."),
+                "{}: {message}",
+                kind.code()
+            );
+        }
     }
 }
