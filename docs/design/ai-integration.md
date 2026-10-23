@@ -89,12 +89,13 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 26 个能力：
+- `Registry::standard()` 注册了 27 个能力（M8 加了 `structure.transform_cell`）：
   - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
   - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
   - 结构编辑：`structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`；
   - 对称模式下的几何编辑（M7，晶体学设计稿 7.4–7.6 节）：`structure.move_site`（拖动一个原子，分数位移，`leave_special_position` 决定是否投影到约束子空间）、`structure.set_coordinate`（`axis` 为 `"x"`/`"y"`/`"z"`，跟随坐标联动，常数坐标返回 `fixed_coordinate`）、`structure.add_site`（元素、分数坐标、占位率，吸附到特殊位置；重合时返回 `coincident_site`，引导 `{"kind": "add_occupant", "site": …}`）。`structure.set_position` 在对称模式下也可用，位点取新位置的位点对称性；
+  - 晶胞变换（M8，晶体学设计稿 7.8 节）：`structure.transform_cell`，`cell` 取 `primitive`、`conventional`、`niggli`、`setting`（`setting` 给出 H-M 符号，如 `P 1 1 21/a`、`R -3 c :R`）或 `matrix`（`matrix` 是 P 的三行分数文本，`origin` 是 p，空数组表示原点不动）；不用的字段给空字符串或空数组。结果有变换的 ITA 写法（如 `c, b, -a; 0, 0, 0`）、P 和 p、新的空间群设定、晶胞参数、晶胞内原子数和操作数。拒绝时返回 `transform_not_positive`、`transform_volume`、`transform_not_a_translation`、`transform_breaks_symmetry`、`transform_too_large`，名称不对时 `invalid_arguments`，别的类型的设定 `other_type`，moyo 给不出时 `no_transformation`；
   - `history.undo`、`history.redo`。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
@@ -111,7 +112,7 @@ Capability
   - `structure.diagnostics`：结构导入时的诊断，分页；每条有严重程度、稳定代码（如 `atom.snapped`）、源文件行号和英文说明。英文说明由 `diagnostic_message` 生成，写在 `mw-automation` 里，因为它是给模型看的；界面仍用 `mw-structure/src/diagnostics.rs` 的本地化文案。不是从文件来的结构（例如示例）没有诊断。
   - `structure.export`：把结构写成 CIF、POSCAR 或扩展 XYZ 文本并返回，不写文件，所以副作用等级是只读（第 5.2 节）。写法与界面的导出对话框相同：导入的结构写 CIF 时写回源文件的字段，POSCAR 的注释行是"结构名 · 项目名"；部分占位、未知元素被拒绝时返回 `partial_occupancy`、`unknown_element`，前者提示改用 CIF。文本超过 1 MiB 时拒绝（`too_large`），这已远超模型一次能读的量，写大文件属于 v0.3 的写文件能力。
   - 为此新增的接口都是只加不改：`mw-automation` 依赖 `mw-crystal-io`；`Host` 新增带默认实现（返回 `None`）的 `source`，给出结构导入自的数据块；`Documents` 新增 `add_imported`；`CallResult` 新增 `new`（它是 `#[non_exhaustive]`，给注册表之外的入口构造结果用）。
-  - 原型时注册表有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。M7 加了三个几何编辑能力、M11 加了四个项目能力后是 26 个，已超过上限：测试改为检查只读能力（MCP Server 提供的那些）能放进一个严格请求，全部能力每 20 个一组。内置助手要按任务挑选工具子集，不能把全部能力放进一个请求。
+  - 原型时注册表有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。M7 加了三个几何编辑能力、M11 加了四个项目能力、M8 加了晶胞变换后是 27 个，已超过上限：测试改为检查只读能力（MCP Server 提供的那些）能放进一个严格请求，全部能力每 20 个一组。内置助手要按任务挑选工具子集，不能把全部能力放进一个请求。
 
 ## 5. MCP Server（`mw-mcp`）
 
@@ -150,7 +151,7 @@ Capability
 |---|---|---|---|
 | 项目 | `project.list`、`project.open`、`structure.list`、`structure.open`、`file.import` | 读；导入为可撤销写入 | v0.2–v0.3 |
 | 结构查询 | `structure.summary`（化学式、晶胞、空间群、位点）、`structure.sites`、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`、`structure.diagnostics` | 只读 | v0.2 |
-| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
+| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.transform_cell`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
 | 导出 | `structure.export`（CIF / POSCAR / XYZ 文本，或写入文件） | 返回文本为只读；写文件为外部副作用 | v0.2（文本）、v0.3（文件） |
 | 视图（仅连接应用时） | `view.select`、`view.set_display_model`、`view.reset`、`view.snapshot`（返回视口图片，供多模态模型"看"结构） | 不改数据 | v0.3 |
 | XRD | `xrd.simulate`、`xrd.import`、`xrd.find_peaks`、`xrd.match_phases`、`xrd.compare` | 计算为只读；导入为写入 | v0.4 |

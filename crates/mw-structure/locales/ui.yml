@@ -190,6 +190,9 @@ panel:
     symmetrize:
       en: Symmetrize…
       zh-CN: 对称化…
+    transform_cell:
+      en: Transform cell…
+      zh-CN: 晶胞变换…
   site:
     none:
       en: Select a site in the 3D view or the Sites tab.
@@ -388,6 +391,70 @@ dialog:
     ok:
       en: Make supercell
       zh-CN: 生成超胞
+  cell:
+    title:
+      en: Transform cell
+      zh-CN: 晶胞变换
+    description:
+      en: Describes the same crystal in another cell; the atoms stay where they are. The columns of P are the new basis vectors and p is the new origin, both in the old basis.
+      zh-CN: 用另一个晶胞描述同一个晶体，原子留在原处。P 的列和 p 分别是新基矢和新原点，都以旧基矢表示。
+    choice:
+      en: Change to
+      zh-CN: 变换为
+    group_cells:
+      en: Cells
+      zh-CN: 晶胞
+    group_settings:
+      en: Other settings
+      zh-CN: 其他设定
+    primitive:
+      en: Primitive cell
+      zh-CN: 原胞
+    conventional:
+      en: Conventional cell
+      zh-CN: 标准惯用胞
+    niggli:
+      en: Niggli-reduced cell
+      zh-CN: Niggli 约化胞
+    custom:
+      en: Custom P and p
+      zh-CN: 自定义 P、p
+    current:
+      en: "%{name} (current)"
+      zh-CN: "%{name}（当前）"
+    origin:
+      en: Origin p
+      zh-CN: 原点 p
+    empty:
+      en: Each field needs a number, such as 0, 1, -1 or 1/2.
+      zh-CN: 每一格都要填一个数，如 0、1、-1 或 1/2。
+    not_a_fraction:
+      en: "“%{value}” is not a fraction; write it like 1/2, -1 or 0.25."
+      zh-CN: "「%{value}」不是分数，可以写成 1/2、-1 或 0.25。"
+    new_cell:
+      en: Cell
+      zh-CN: 晶胞参数
+    lengths:
+      en: "a %{a}, b %{b}, c %{c} Å"
+      zh-CN: "a %{a}、b %{b}、c %{c} Å"
+    angles:
+      en: "α %{alpha}°, β %{beta}°, γ %{gamma}°"
+      zh-CN: "α %{alpha}°、β %{beta}°、γ %{gamma}°"
+    atoms:
+      en: Atoms in cell
+      zh-CN: 晶胞内原子
+    atoms_value:
+      en: "%{before} → %{after}"
+      zh-CN: "%{before} → %{after} 个"
+    space_group_setting:
+      en: "%{space_group}, %{setting}"
+      zh-CN: "%{space_group}，%{setting}"
+    unchanged:
+      en: The cell stays as it is.
+      zh-CN: 晶胞不变。
+    ok:
+      en: Transform
+      zh-CN: 变换
 command:
   undo:
     en: Undo
@@ -398,6 +465,9 @@ command:
   make_supercell:
     en: Make supercell…
     zh-CN: 生成超胞…
+  transform_cell:
+    en: Transform cell…
+    zh-CN: 晶胞变换…
   convert_to_p1:
     en: Convert to P1…
     zh-CN: 转为 P1…
@@ -468,6 +538,9 @@ edit:
     expand_to_p1:
       en: Convert to P1
       zh-CN: 转为 P1
+    transform_cell:
+      en: Transform cell
+      zh-CN: 晶胞变换
     expand_and_remove:
       en: Convert to P1 and delete
       zh-CN: 转为 P1 后删除
@@ -508,6 +581,24 @@ edit:
       en: Remove measurement
       zh-CN: 删除测量
   error:
+    transform_singular:
+      en: "P has determinant 0: the new basis vectors span no cell."
+      zh-CN: P 的行列式为 0，新基矢构不成晶胞。
+    transform_left_handed:
+      en: "P has determinant %{determinant}, which would make the basis left-handed; it must be positive."
+      zh-CN: "P 的行列式为 %{determinant}，新基矢会成为左手系；行列式要为正。"
+    transform_volume:
+      en: "P has determinant %{determinant}; a cell may grow or shrink at most %{max}-fold. Make a supercell for larger cells."
+      zh-CN: "P 的行列式为 %{determinant}，晶胞最多放大或缩小 %{max} 倍；更大的晶胞请生成超胞。"
+    transform_too_large:
+      en: The numbers in P or p are too large to compute with exactly.
+      zh-CN: P 或 p 的数值太大，无法精确计算。
+    transform_not_a_translation:
+      en: "The new basis vector %{vector} is not a lattice translation of the structure: the cell would be smaller than its lattice allows."
+      zh-CN: "新基矢 %{vector} 不是结构的晶格平移：新晶胞比结构的格子允许的更小。"
+    transform_breaks_symmetry:
+      en: "The symmetry operation %{operation} does not map the new lattice onto itself; the new cell does not fit the symmetry."
+      zh-CN: "对称操作 %{operation} 不能把新晶格映射到自身，新晶胞与结构的对称性不相容。"
     fixed_coordinate:
       en: "%{axis} of %{label} is fixed by its special position."
       zh-CN: "%{label} 的 %{axis} 由特殊位置固定，不能修改。"

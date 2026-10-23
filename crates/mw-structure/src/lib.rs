@@ -7,8 +7,8 @@
 //! document, with undo and redo, and the export dialog writes CIF, POSCAR
 //! or extended XYZ. Documents come
 //! from project files and give back what to save, with their view state.
-//! Converting to P1 is a command on the document; a supercell is a new
-//! structure the host adds to the project. What is still mocked says so
+//! Converting to P1 and changing the cell are commands on the document; a
+//! supercell is a new structure the host adds to the project. What is still mocked says so
 //! where it happens (see `docs/architecture.md`, "Mocks").
 
 rust_i18n::i18n!("locales", fallback = "en");
@@ -21,6 +21,7 @@ macro_rules! tr {
 }
 
 mod actions;
+mod cell_dialog;
 mod diagnostics;
 mod dialogs;
 mod document;
@@ -42,8 +43,8 @@ pub use actions::{
     AddMixedOccupant, AddSite, ClearSelection, ConvertToP1, DeleteSelection, ExportStructure,
     KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
     ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel,
-    ShowSitesPanel, ShowSpaceFilling, ToggleMeasure, ToggleMoveAtoms, TogglePanel, Undo, bind_keys,
-    palette_commands,
+    ShowSitesPanel, ShowSpaceFilling, ToggleMeasure, ToggleMoveAtoms, TogglePanel, TransformCell,
+    Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell};

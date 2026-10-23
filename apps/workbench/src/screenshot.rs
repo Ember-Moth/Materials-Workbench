@@ -10,7 +10,8 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomRef, Axis, CellParam, CellValues, Command, Edit, Measured, SiteId, Species, Target,
+    AtomRef, Axis, CellParam, CellPreset, CellValues, Command, Edit, Measured, SiteId, Species,
+    Target,
 };
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
@@ -526,6 +527,27 @@ const TOUR: &[(&str, Step)] = &[
     ("50-contcar-diagnostics", |_, window, cx| {
         window.clear_notifications(cx);
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
+    }),
+    // Corundum, R-3c in hexagonal axes, with 30 atoms in the cell.
+    ("_import-corundum", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("corundum_hall.cif")], window, cx);
+    }),
+    // The cell transform dialog starts on the primitive cell: the
+    // rhombohedral one, with its P and a third of the atoms.
+    ("51-cell-dialog", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+        window.dispatch_action(Box::new(mw_structure::TransformCell), cx);
+    }),
+    // Confirmed: rhombohedral axes, R-3c:R, ten atoms; one undo goes back.
+    ("52-cell-transformed", |workbench, window, cx| {
+        window.close_dialog(cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.transform_cell_to(CellPreset::Primitive, window, cx)
+            });
+        }
     }),
 ];
 

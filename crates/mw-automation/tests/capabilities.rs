@@ -124,6 +124,7 @@ fn effects() {
         "structure.move_site",
         "structure.set_coordinate",
         "structure.add_site",
+        "structure.transform_cell",
     ] {
         assert_eq!(effect(name), Effect::Undoable, "{name}");
     }
@@ -686,6 +687,103 @@ Sr1 Sr 0 0 0 0.4
 Ti1 Ti 0.5 0.5 0.5 1
 O1 O 0.5 0.5 0 1
 ";
+
+#[test]
+fn transforming_cells() {
+    let (registry, mut documents, [rutile, srtio3, _]) = session();
+    let transform = |documents: &mut Documents, structure, input: Value| {
+        let mut input = input;
+        input["structure"] = json!(structure);
+        call(&registry, documents, "structure.transform_cell", input)
+    };
+    let preset = |cell: &str| json!({ "cell": cell, "setting": "", "matrix": [], "origin": [] });
+
+    // Rutile is primitive already; its Niggli cell puts the short c first,
+    // turned by 90° about b, the nearest such cell to the old one.
+    let same = transform(&mut documents, rutile, preset("primitive")).unwrap();
+    assert_eq!(same.output["changed"], false);
+    let niggli = transform(&mut documents, rutile, preset("niggli")).unwrap();
+    assert_eq!(niggli.output["changed"], true);
+    assert_eq!(niggli.output["cell"]["a"], 2.959);
+    assert_eq!(niggli.output["transformation"], "c, b, -a; 0, 0, 0");
+    assert_eq!(niggli.output["matrix"][0], json!(["0", "0", "-1"]));
+    assert!(
+        niggli.summary.contains("6 atoms in the cell instead of 6"),
+        "{}",
+        niggli.summary
+    );
+    let undo = call(
+        &registry,
+        &mut documents,
+        "history.undo",
+        json!({ "structure": rutile }),
+    )
+    .unwrap();
+    assert_eq!(undo.output["command"], "transform_cell");
+
+    // The perovskite in the doubled cell b + c, a + c, a + b, which keeps the
+    // cubic symmetry, with the origin on Ti; √2 × √2 × 1 would lose the
+    // threefold axes.
+    let matrix = json!({
+        "cell": "matrix",
+        "setting": "",
+        "matrix": [["0", "1", "1"], ["1", "0", "1"], ["1", "1", "0"]],
+        "origin": ["1/2", "1/2", "1/2"],
+    });
+    let mut flat = matrix.clone();
+    flat["matrix"] = json!([["1", "-1", "0"], ["1", "1", "0"], ["0", "0", "1"]]);
+    let error = transform(&mut documents, srtio3, flat).unwrap_err();
+    assert_eq!(error.code, "transform_breaks_symmetry");
+    let larger = transform(&mut documents, srtio3, matrix).unwrap();
+    assert_eq!(larger.output["atoms_in_cell"], 10);
+    assert_eq!(larger.output["operations"], 96);
+    assert_eq!(larger.output["origin"], json!(["1/2", "1/2", "1/2"]));
+    assert!(
+        larger.summary.contains("instead of 5"),
+        "{}",
+        larger.summary
+    );
+
+    // Refused calls.
+    let refused = |documents: &mut Documents, input: Value| {
+        transform(documents, rutile, input).unwrap_err().code
+    };
+    let singular = json!({
+        "cell": "matrix",
+        "setting": "",
+        "matrix": [["1", "1", "0"], ["1", "1", "0"], ["0", "0", "1"]],
+        "origin": [],
+    });
+    assert_eq!(refused(&mut documents, singular), "transform_not_positive");
+    let half = json!({
+        "cell": "matrix",
+        "setting": "",
+        "matrix": [["1/2", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]],
+        "origin": [],
+    });
+    assert_eq!(refused(&mut documents, half), "transform_not_a_translation");
+    let long = json!({
+        "cell": "matrix",
+        "setting": "",
+        "matrix": [["2", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]],
+        "origin": [],
+    });
+    assert_eq!(refused(&mut documents, long), "transform_breaks_symmetry");
+    let words = json!({
+        "cell": "matrix",
+        "setting": "",
+        "matrix": [["one", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]],
+        "origin": [],
+    });
+    assert_eq!(refused(&mut documents, words), "invalid_arguments");
+    let short =
+        json!({ "cell": "matrix", "setting": "", "matrix": [["1", "0", "0"]], "origin": [] });
+    assert_eq!(refused(&mut documents, short), "invalid_arguments");
+    let other = json!({ "cell": "setting", "setting": "P 1 21/c 1", "matrix": [], "origin": [] });
+    assert_eq!(refused(&mut documents, other), "other_type");
+    let unknown = json!({ "cell": "setting", "setting": "Q 9", "matrix": [], "origin": [] });
+    assert_eq!(refused(&mut documents, unknown), "invalid_arguments");
+}
 
 #[test]
 fn import_diagnostics() {

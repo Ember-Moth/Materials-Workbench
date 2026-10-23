@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12；M7（对称模式下的几何编辑）、M10（POSCAR 导入与晶格朝向）和 M11（MCP 读项目文件，并入 `materials-workbench mcp`）已实现，剩下的模拟（mock）属于之后的里程碑和版本。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12；M7（对称模式下的几何编辑）、M8（晶胞变换）、M10（POSCAR 导入与晶格朝向）和 M11（MCP 读项目文件，并入 `materials-workbench mcp`）已实现，剩下的模拟（mock）属于之后的里程碑和版本。
 
 ## 文档是设计的依据
 
@@ -73,7 +73,7 @@ cargo fmt --all
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。宿主用 `set_sphere_dragging` 打开后，按在球上的拖动报告屏幕平面内的位移（`SphereDragged` / `SphereDropped`，Å）而不转相机；预览用 `preview_scene`，它保持相机绕的中心，画面不平移。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1 与超胞（`src/transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1、晶胞变换与超胞（`src/transform.rs`；(P, p) 和 moyo 给出的预设在 `src/cell_transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
   - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；POSCAR / CONTCAR 导入（`src/poscar_read.rs`，P1 结构）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
   - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"；
   - `mw-automation`：能力注册表（`ai-integration.md` 第 4 节）。每个能力有英文说明、输入输出 Schema、副作用等级和处理函数，调用的是 `mw-crystal` 的领域命令，导入诊断和导出文本用 `mw-crystal-io`（`src/files.rs`）；项目的列出与打开（`project.list`、`project.open`、`structure.list`、`structure.open`、只在无界面时可用的 `file.open`）在 `src/project.rs`，经 `Host::projects` 拿到 `Projects` trait，没有项目的 `Host`（`Documents`）上返回 `unavailable`；Schema 由 `schema_struct!` 从 Rust 类型和字段文档注释生成，测试用 `mw-llm` 的检查函数确认它们在严格子集内。`StructureEntryId` 定义在这里，`mw-project` 重新导出；
@@ -90,7 +90,7 @@ cargo fmt --all
 - **晶格**是晶胞参数加朝向（`crystallography-model.md` 4.2 节）：基矢 `A = R·A_std(params)`，`Orientation::Standard` 即 R = I，POSCAR 这类给出基矢的文件得到 `Explicit(Rotation)`，左手系时 det R = −1。笛卡尔坐标和笛卡尔 ↔ 分数换算一律用 `Lattice::matrix` / `to_cartesian` / `to_fractional`；`CellParams::standard_matrix` 只给不关心朝向的计算（moyo 搜索）。超胞保持原子的笛卡尔位置；CIF 只能写右手基，左手系经 `right_handed` 写成 −a、−b、−c。
 - **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性、键（共价半径之和 + 容差，跨周期边界，金属之间默认不成键）。
 - 能力、选区和测量都引用稳定 ID（`StructureEntryId`、`SiteId`、`AtomRef`），不用列表下标。
-- 编辑分对称模式和 P1 模式，都是可序列化的命令（`mw_crystal::Edit`），带精确的逆命令，进入 `CrystalDocument` 的撤销栈（M4）。转为 P1 是命令 `ExpandToP1`（逆命令恢复整个结构，`IdMap` 的 `Split` / `Merged` 让选区和测量跟着原子走）；超胞是 `make_supercell` 生成的新结构，由外壳作为派生结构加进项目。命令只指向整个位点；指向单个原子的请求先经 `target_sites` 换算，对称模式下只改部分等效原子会被拒绝并给出引导。对称模式下的几何编辑（M7）：`MoveSite` 把被拖原子的分数位移经 `W_k⁻¹` 换算到代表点，再用 `P_s` 投影（可选择脱离特殊位置）；`SetCoordinate` 按行最简形参数化改主元或只依赖一个主元的跟随坐标；`AddSite` 吸附到位点对称群的平均位置，与已有轨道重合时拒绝并引导为混合占位；落到更高对称的特殊位置附近时吸附。吸附和多重度变化作为 `EditInfo` 随结果返回，界面显示为通知。界面、能力注册表（`mw-automation`）和以后的脚本调用的是同一批命令。
+- 编辑分对称模式和 P1 模式，都是可序列化的命令（`mw_crystal::Edit`），带精确的逆命令，进入 `CrystalDocument` 的撤销栈（M4）。转为 P1 是命令 `ExpandToP1`（逆命令恢复整个结构，`IdMap` 的 `Split` / `Merged` 让选区和测量跟着原子走）；超胞是 `make_supercell` 生成的新结构，由外壳作为派生结构加进项目。晶胞变换是命令 `TransformCell(P, p)`（M8）：不对称单元不变，逆命令恢复快照，`IdMap` 的 `Rebased` 按位置让引用跟着原子走；预设的 (P, p) 来自 moyo，再规范到离标准朝向最近、原点平移最短的等价选择。命令只指向整个位点；指向单个原子的请求先经 `target_sites` 换算，对称模式下只改部分等效原子会被拒绝并给出引导。对称模式下的几何编辑（M7）：`MoveSite` 把被拖原子的分数位移经 `W_k⁻¹` 换算到代表点，再用 `P_s` 投影（可选择脱离特殊位置）；`SetCoordinate` 按行最简形参数化改主元或只依赖一个主元的跟随坐标；`AddSite` 吸附到位点对称群的平均位置，与已有轨道重合时拒绝并引导为混合占位；落到更高对称的特殊位置附近时吸附。吸附和多重度变化作为 `EditInfo` 随结果返回，界面显示为通知。界面、能力注册表（`mw-automation`）和以后的脚本调用的是同一批命令。
 
 ### 视口
 

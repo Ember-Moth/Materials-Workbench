@@ -3,9 +3,9 @@
 //! by stable ids.
 
 use mw_crystal::{
-    AtomRef, Axis, CellParam, CellValues, Constraint, CoordinateConstraint, CrystalDocument, Edit,
-    EditError, EditMode, Formula, Measured, Measurement, Outcome, Setting, SiteId, SpaceGroupType,
-    Species, Structure, Target,
+    AtomRef, Axis, CellParam, CellPreset, CellTransform, CellValues, Constraint,
+    CoordinateConstraint, CrystalDocument, Edit, EditError, EditMode, Formula, Measured,
+    Measurement, Outcome, Rational, Setting, SiteId, SpaceGroupType, Species, Structure, Target,
 };
 
 use crate::registry::{
@@ -422,6 +422,70 @@ schema_struct! {
     }
 }
 
+string_enum! {
+    pub enum CellChoice {
+        Primitive => "primitive",
+        Conventional => "conventional",
+        Niggli => "niggli",
+        Setting => "setting",
+        Matrix => "matrix",
+    }
+}
+
+schema_struct! {
+    pub struct TransformCellInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// The new cell. primitive: the conventional cell's centering
+        /// removed. conventional: the conventional cell of the standard
+        /// setting. niggli: the Niggli-reduced primitive cell. setting:
+        /// another tabulated setting of the same space group type, named
+        /// by `setting`. matrix: the change of cell given by `matrix` and
+        /// `origin`.
+        pub cell: CellChoice,
+        /// For cell = setting: the Hermann–Mauguin symbol of the setting,
+        /// e.g. P 1 1 21/a, P n m a, F d -3 m :1 or R -3 c :R. Empty
+        /// otherwise.
+        pub setting: String,
+        /// For cell = matrix: the transformation matrix P of International
+        /// Tables A, three rows of three fractions such as "1/2" or "-1".
+        /// Column j holds new basis vector j in the old basis, so
+        /// [["0","1/2","1/2"],["1/2","0","1/2"],["1/2","1/2","0"]] makes
+        /// a′ = (b + c)/2, b′ = (a + c)/2, c′ = (a + b)/2. Its determinant
+        /// must be positive and between 1/8 and 8. Empty otherwise.
+        pub matrix: Vec<[String; 3]>,
+        /// For cell = matrix: the new origin p in the old basis, three
+        /// fractions. Empty to keep the origin.
+        pub origin: Vec<String>,
+    }
+}
+
+schema_struct! {
+    pub struct TransformCellOutput {
+        /// False when the structure already was in that cell; nothing
+        /// changed.
+        pub changed: bool,
+        /// The document's revision after the call; it counts changes.
+        pub revision: u64,
+        /// The change of cell made, in International Tables notation: the
+        /// new basis vectors in the old ones, then the new origin, e.g.
+        /// a-b, a+b, c; 0, 0, 1/4.
+        pub transformation: String,
+        /// The rows of P, as fractions.
+        pub matrix: Vec<[String; 3]>,
+        /// The new origin in the old basis, as fractions.
+        pub origin: Vec<String>,
+        /// In the new cell; null if identification failed.
+        pub space_group: Option<SpaceGroupOutput>,
+        pub cell: CellOutput,
+        /// Atoms in the new unit cell.
+        pub atoms_in_cell: usize,
+        /// Symmetry operations in the new cell, including centering
+        /// translations.
+        pub operations: usize,
+    }
+}
+
 schema_struct! {
     pub struct WarningOutput {
         /// Stable, e.g. occupancy_sum or short_contact.
@@ -599,6 +663,75 @@ fn site_text(document: &CrystalDocument, site: SiteId) -> String {
         label(document.structure(), site),
         if count == 1 { "atom" } else { "atoms" }
     )
+}
+
+/// The change of cell a call asks for.
+fn cell_transform(
+    document: &CrystalDocument,
+    input: &TransformCellInput,
+) -> Result<CellTransform, CallError> {
+    let structure = document.structure();
+    let unavailable = |what: &str| {
+        CallError::new(
+            "no_transformation",
+            format!("no {what} could be found for this structure"),
+        )
+    };
+    let preset = match input.cell {
+        CellChoice::Primitive => CellPreset::Primitive,
+        CellChoice::Conventional => CellPreset::Conventional,
+        CellChoice::Niggli => CellPreset::Niggli,
+        CellChoice::Setting => {
+            let setting = mw_crystal::find_setting(&input.setting).ok_or_else(|| {
+                invalid(format!(
+                    "{:?} names no tabulated setting; give a Hermann–Mauguin symbol such as \
+                     P 1 1 21/a",
+                    input.setting
+                ))
+            })?;
+            let current = document.derived().symmetry.space_group.as_ref();
+            if current.is_some_and(|sg| sg.number != setting.number) {
+                return Err(CallError::new(
+                    "other_type",
+                    format!(
+                        "{} is a setting of another space group type; structure.summary gives the \
+                         structure's",
+                        setting.hm_symbol
+                    ),
+                ));
+            }
+            CellPreset::Setting {
+                hall_number: setting.hall_number,
+            }
+        }
+        CellChoice::Matrix => {
+            let fraction = |text: &String| {
+                Rational::parse(text)
+                    .ok_or_else(|| invalid(format!("{text:?} is not a fraction such as 1/2 or -1")))
+            };
+            let [r0, r1, r2] = <&[[String; 3]; 3]>::try_from(input.matrix.as_slice())
+                .map_err(|_| invalid("matrix needs three rows of three fractions"))?;
+            let row = |r: &[String; 3]| -> Result<[Rational; 3], CallError> {
+                Ok([fraction(&r[0])?, fraction(&r[1])?, fraction(&r[2])?])
+            };
+            let matrix = [row(r0)?, row(r1)?, row(r2)?];
+            let origin = match input.origin.as_slice() {
+                [] => [Rational::ZERO; 3],
+                [x, y, z] => [fraction(x)?, fraction(y)?, fraction(z)?],
+                _ => return Err(invalid("origin needs three fractions, or none")),
+            };
+            return CellTransform::new(matrix, origin)
+                .map_err(|error| EditError::Transform(error).into());
+        }
+    };
+    preset.transform(structure).ok_or_else(|| {
+        unavailable(match input.cell {
+            CellChoice::Primitive => "primitive cell",
+            CellChoice::Conventional => "conventional cell",
+            CellChoice::Niggli => "Niggli cell",
+            _ => "change of cell to that setting",
+        })
+    })
 }
 
 fn space_group(space_group: &SpaceGroupType) -> SpaceGroupOutput {
@@ -1270,6 +1403,60 @@ pub(crate) fn register(registry: &mut Registry) {
                     site_text(document, input.site)
                 ),
             );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.transform_cell",
+            "Describe the structure in another cell (International Tables A): the new basis \
+             is A·P and the new origin lies at p in the old basis, so fractional coordinates \
+             become P⁻¹·(x − p). The atoms stay where they are; the asymmetric unit keeps its \
+             sites, ids and labels, and their equivalent atoms in a cell grow or shrink in \
+             number with the cell. A larger cell adds the old lattice translations as \
+             centering, a smaller one must consist of translations of the structure \
+             (transform_not_a_translation), and every symmetry operation must map the new \
+             lattice onto itself (transform_breaks_symmetry). Choose the primitive, \
+             conventional or Niggli cell, another tabulated setting (unique axis, cell choice, \
+             axis order, origin choice, hexagonal or rhombohedral axes), or give P and p. \
+             Atom references and measurements follow the atoms. Undoable.",
+        ),
+        |host: &mut dyn Host, input: TransformCellInput| {
+            let document = document_mut(host, input.structure)?;
+            let before = document.derived().atoms_in_cell();
+            let transform = cell_transform(document, &input)?;
+            let outcome = document.edit(Edit::TransformCell { transform })?;
+            let derived = document.derived();
+            let text = |r: &Rational| r.to_string();
+            let output = TransformCellOutput {
+                changed: outcome.changed,
+                revision: document.revision(),
+                transformation: transform.to_string(),
+                matrix: transform
+                    .matrix()
+                    .iter()
+                    .map(|row| row.each_ref().map(text))
+                    .collect(),
+                origin: transform.origin().iter().map(text).collect(),
+                space_group: derived.symmetry.space_group.as_ref().map(space_group),
+                cell: cell(document),
+                atoms_in_cell: derived.atoms_in_cell(),
+                operations: document.structure().symmetry.operations().len(),
+            };
+            let summary = if output.changed {
+                let group = output.space_group.as_ref().map_or_else(String::new, |sg| {
+                    format!(" in {} ({})", sg.symbol, sg.setting)
+                });
+                format!(
+                    "Changed the cell ({}): {}{group}, {} atoms in the cell instead of {before}.",
+                    output.transformation,
+                    cell_text(&output.cell),
+                    output.atoms_in_cell
+                )
+            } else {
+                "Nothing changed: the structure already is in that cell.".into()
+            };
             Ok(Output::new(output, summary))
         },
     );
