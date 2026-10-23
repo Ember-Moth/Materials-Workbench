@@ -193,6 +193,7 @@ async fn open_a_project_summarize_and_export() {
             "structure_summary",
             "structure_sites",
             "structure_site_symmetry",
+            "structure_detect_symmetry",
             "structure_measure_distance",
             "structure_measure_angle",
             "structure_neighbors",
@@ -319,6 +320,25 @@ async fn open_a_project_summarize_and_export() {
     let supercell = read_resource(&client, &uri(TIO2, SUPERCELL)).await;
     assert!(supercell.contains("Ti1_1"), "{supercell}");
     assert_eq!(client.list_all_resources().await.unwrap().len(), 2);
+    // The supercell is in P1; its atoms have rutile's symmetry, which the
+    // preview finds without changing anything.
+    let supercell = structures[1]["structure"].as_u64().unwrap();
+    let detect = json!({ "structure": supercell, "tolerance": 0.0, "standardize": true });
+    let detected = call(&client, "structure_detect_symmetry", detect).await;
+    let detected = output(&tools, "structure_detect_symmetry", &detected);
+    assert_eq!(detected["detected"]["number"], 136);
+    assert_eq!(detected["atoms_in_cell"], 6);
+    assert_eq!(detected["cell_changed"], true);
+    let summary = call(
+        &client,
+        "structure_summary",
+        json!({ "structure": supercell }),
+    )
+    .await;
+    assert_eq!(
+        output(&tools, "structure_summary", &summary)["operations"],
+        1
+    );
     let missing = ReadResourceRequestParams::new(uri(TIO2, TIO2));
     assert!(client.read_resource(missing).await.is_err());
 
@@ -330,7 +350,7 @@ async fn stateless_clients_get_the_same_answers() {
     let projects = Projects::install();
     let client = start_stateless(&projects).await;
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 14);
     let path = projects.tio2.to_str().unwrap();
     let opened = call(&client, "project_open", json!({ "path": path })).await;
     let id = output(&tools, "project_open", &opened)["structures"][0]["structure"].clone();

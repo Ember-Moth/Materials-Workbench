@@ -116,6 +116,8 @@ fn effects() {
     let registry = Registry::standard();
     let effect = |name| registry.get(name).unwrap().effect;
     assert_eq!(effect("structure.summary"), Effect::ReadOnly);
+    // A preview: the MCP server offers it.
+    assert_eq!(effect("structure.detect_symmetry"), Effect::ReadOnly);
     // Returns text; writing files would be External.
     assert_eq!(effect("structure.export"), Effect::ReadOnly);
     assert_eq!(effect("structure.delete_sites"), Effect::Undoable);
@@ -125,6 +127,7 @@ fn effects() {
         "structure.set_coordinate",
         "structure.add_site",
         "structure.transform_cell",
+        "structure.symmetrize",
     ] {
         assert_eq!(effect(name), Effect::Undoable, "{name}");
     }
@@ -783,6 +786,106 @@ fn transforming_cells() {
     assert_eq!(refused(&mut documents, other), "other_type");
     let unknown = json!({ "cell": "setting", "setting": "Q 9", "matrix": [], "origin": [] });
     assert_eq!(refused(&mut documents, unknown), "invalid_arguments");
+}
+
+#[test]
+fn symmetrizing() {
+    let (registry, mut documents, [rutile, _, supercell]) = session();
+    let input = |structure, tolerance: f64, standardize: bool| json!({ "structure": structure, "tolerance": tolerance, "standardize": standardize });
+    let summary = |documents: &mut Documents, structure| {
+        call(
+            &registry,
+            documents,
+            "structure.summary",
+            json!({ "structure": structure }),
+        )
+        .unwrap()
+        .output
+    };
+
+    // The P1 supercell has the symmetry of rutile. The preview changes
+    // nothing.
+    let preview = call(
+        &registry,
+        &mut documents,
+        "structure.detect_symmetry",
+        input(supercell, 0.0, false),
+    )
+    .unwrap();
+    let result = &preview.output;
+    assert_eq!(result["detected"]["number"], 136);
+    assert_eq!(result["space_group"]["number"], 136);
+    assert_eq!(result["sites"], 2);
+    assert_eq!(result["atoms_in_cell"], 48);
+    assert_eq!(result["operations"], 16 * 8);
+    assert_eq!(result["cell_changed"], false);
+    assert!(result["max_displacement"].as_f64().unwrap() < 1e-9);
+    assert!(
+        preview.summary.contains("P 4_2/m n m"),
+        "{}",
+        preview.summary
+    );
+    assert_eq!(summary(&mut documents, supercell)["operations"], 1);
+    // Standardized: the rutile cell.
+    let standard = call(
+        &registry,
+        &mut documents,
+        "structure.detect_symmetry",
+        input(supercell, 0.0, true),
+    )
+    .unwrap();
+    assert_eq!(standard.output["atoms_in_cell"], 6);
+    assert_eq!(standard.output["cell_changed"], true);
+    assert_eq!(standard.output["cell"]["c"], 2.959);
+    assert!(
+        standard.summary.contains("the cell becomes"),
+        "{}",
+        standard.summary
+    );
+
+    let done = call(
+        &registry,
+        &mut documents,
+        "structure.symmetrize",
+        input(supercell, 0.0, true),
+    )
+    .unwrap();
+    assert_eq!(done.output["changed"], true);
+    assert_eq!(done.output["result"], standard.output);
+    let after = summary(&mut documents, supercell);
+    assert_eq!(after["edit_mode"], "symmetry");
+    assert_eq!(after["space_group"]["number"], 136);
+    assert_eq!(after["atoms_in_cell"], 6);
+    let undo = call(
+        &registry,
+        &mut documents,
+        "history.undo",
+        json!({ "structure": supercell }),
+    )
+    .unwrap();
+    assert_eq!(undo.output["command"], "symmetrize");
+    assert_eq!(summary(&mut documents, supercell)["atoms_in_cell"], 48);
+
+    // Refused calls.
+    let refused = |documents: &mut Documents, name, input: Value| {
+        call(&registry, documents, name, input).unwrap_err().code
+    };
+    assert_eq!(
+        refused(
+            &mut documents,
+            "structure.symmetrize",
+            input(rutile, 0.0, false)
+        ),
+        "symmetrize_no_higher_symmetry"
+    );
+    assert_eq!(
+        refused(
+            &mut documents,
+            "structure.detect_symmetry",
+            input(supercell, -1.0, false)
+        ),
+        "invalid_arguments"
+    );
 }
 
 #[test]
