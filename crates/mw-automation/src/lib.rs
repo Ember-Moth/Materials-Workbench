@@ -12,11 +12,13 @@
 //! The schemas come from the Rust types ([`schema`]) and stay within the
 //! strict subset both model vendors accept (design §6.2.6).
 
+mod files;
 mod history;
 mod registry;
 pub mod schema;
 mod structure;
 
+pub use files::{MAX_EXPORT_BYTES, diagnostic_message};
 pub use registry::{
     Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output, Registry,
     Spec, StructureEntryId, StructureInfo,

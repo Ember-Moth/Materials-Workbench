@@ -8,7 +8,7 @@
 
 Materials Workbench 是一个用 Rust 编写的现代化、开源、跨平台的材料科学桌面工作台。第一阶段做晶体学：查看、测量、编辑晶体结构，再导出给下游计算。之后逐步加入 XRD、相图和显微组织分析。
 
-当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集、原子展开、成键和对称性分析（空间群识别、位点对称性与坐标约束、Wyckoff 位置、晶胞约束，导入时吸附到特殊位置并合并混合占位，M2）是真实计算的；视口画出原子、键和晶胞边框，可以点选原子、测量距离和键角（M3）。晶胞参数、元素、占位率与混合占位、删除位点、P1 下的坐标可以编辑并撤销，同一批命令也注册在能力注册表里（M4）；结构可以导出为 CIF、POSCAR 和扩展 XYZ，CIF 会写回源文件里模型不保存的字段（M5）。项目是磁盘上的 `.mwproj` 目录，保存结构、测量、来源记录、编辑记录和视图状态，关闭再打开完整恢复；最近项目和设置跨重启保存（M6）。结构可以转为 P1（原结构上执行、可撤销，选区和测量跟着原子走），可以生成超胞，作为带来源记录的派生结构加进项目（M5b）。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
+当前状态：界面按设计稿实现；可以打开 CIF 文件（M1），对称操作集、原子展开、成键和对称性分析（空间群识别、位点对称性与坐标约束、Wyckoff 位置、晶胞约束，导入时吸附到特殊位置并合并混合占位，M2）是真实计算的；视口画出原子、键和晶胞边框，可以点选原子、测量距离和键角（M3）。晶胞参数、元素、占位率与混合占位、删除位点、P1 下的坐标可以编辑并撤销，同一批命令也注册在能力注册表里（M4）；结构可以导出为 CIF、POSCAR 和扩展 XYZ，CIF 会写回源文件里模型不保存的字段（M5）。项目是磁盘上的 `.mwproj` 目录，保存结构、测量、来源记录、编辑记录和视图状态，关闭再打开完整恢复；最近项目和设置跨重启保存（M6）。结构可以转为 P1（原结构上执行、可撤销，选区和测量跟着原子走），可以生成超胞，作为带来源记录的派生结构加进项目（M5b）。v0.2 的实验性只读 MCP Server 已提前做出原型（`mw-mcp`）：MCP 客户端可以打开 CIF 文件、查询结构、取得导出文本。第 9 节列出所有模拟，第 10 节给出替换它们的顺序。
 
 架构上为后续模块预留的位置：XRD、热力学、显微组织各自是"计算 crate（无界面）+ 界面能力 crate"的组合，与晶体学模块并列，共享项目系统、命令与撤销、视口与图表、国际化。计划中的 crate 见[产品路线图](roadmap.md)第 8–10 节。
 
@@ -28,6 +28,7 @@ materials-workbench/
 │   ├── mw-project-file/      项目文件的格式与读写、示例项目（纯 Rust，无界面）
 │   ├── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
 │   ├── mw-automation/        能力注册表：GUI、脚本、MCP、助手共用的能力（纯 Rust，无界面）
+│   ├── mw-mcp/               实验性 MCP Server（纯 Rust，无界面；可执行文件 mw-mcp）
 │   └── mw-llm/               内置助手的模型服务客户端（纯 Rust，无界面）
 └── docs/
     ├── architecture.md       本文
@@ -52,12 +53,13 @@ apps/workbench ─────────┬───────────�
                     mw-crystal          mw-crystal-render
 ```
 
-`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-project-file`（项目文件的读写）依赖 `mw-crystal` 和 `mw-crystal-io`，`mw-project`、`mw-structure` 和外壳使用它，以后 MCP 的无界面模式也用它读写项目。`mw-automation`（能力注册表）只依赖 `mw-crystal`；`mw-project` 依赖它，只为重新导出 `StructureEntryId`，以后 MCP Server 和内置助手也从它取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-project-file`（项目文件的读写）依赖 `mw-crystal` 和 `mw-crystal-io`，`mw-project`、`mw-structure` 和外壳使用它，以后 MCP 的无界面模式也用它读写项目。`mw-automation`（能力注册表）依赖 `mw-crystal` 和 `mw-crystal-io`（导入诊断与导出文本）；`mw-project` 依赖它，只为重新导出 `StructureEntryId`。`mw-mcp`（MCP Server）依赖 `mw-automation`、`mw-crystal-io` 和官方 MCP SDK `rmcp`，不依赖 GPUI，也没有别的 crate 依赖它；以后内置助手也从注册表取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
 | `mw-crystal` | 晶体结构的数据类型（晶胞、对称操作集、位点、容差）、原子展开与派生数据（含 `AtomRef`、成键、化学式和近邻）、测量的几何、对称性分析（空间群识别、位点对称性、Wyckoff 位置、晶胞约束；符号表和对称性搜索来自 moyo，只在 `tables.rs` 里调用）、编辑命令与带撤销栈的文档（`CrystalDocument`）、元素表，以及内置示例 | 否 |
 | `mw-automation` | 能力注册表（[AI 集成设计稿](design/ai-integration.md)第 4 节）：每个能力有名称、英文说明、由 Rust 类型生成的输入输出 JSON Schema、副作用等级、可用性和处理函数；结构的查询与编辑、撤销与重做已注册。处理函数通过 `Host` 拿到文档，调用 `mw-crystal` 的领域命令 | 否 |
+| `mw-mcp` | 实验性只读 MCP Server（[AI 集成设计稿](design/ai-integration.md)第 5 节）：把注册表里只读、无界面可用的能力映射成 MCP 工具（带只读注解和输出 Schema），加上自己的 `file_open`（只能打开启动时允许的目录里的 CIF 文件）；每个打开的结构的 CIF 文本是资源；来自文件的文本标为不可信。可执行文件 `mw-mcp` 走 stdio，同时支持 `initialize` 和 2026-07-28 的无状态生命周期 | 否 |
 | `mw-crystal-io` | 解析结构文件（CIF 1.1 子集），整理位点（吸附到特殊位置、合并混合占位、去掉重复行），产出结构和带源文件行号的导入诊断，并保留模型不存的字段；把结构写成 CIF、POSCAR 和扩展 XYZ 文本。诊断和导出错误是数据，文字由界面翻译 | 否 |
 | `mw-crystal-render` | 离屏渲染球、键、线段和高亮圈并回读像素；按需渲染 ID 纹理回答"鼠标下是什么"；只依赖 wgpu | 否 |
 | `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧与拾取、悬停高亮、3D 坐标投影到屏幕 | 是 |
@@ -183,6 +185,7 @@ Workbench（窗口根视图，apps/workbench）：打开着的工作区、当前
 | 显示范围、多面体、添加位点 | 各处的 `not_implemented` | 对应功能 | 见第 10 节；添加位点属于 v0.2 |
 | P1 结构检测到更高对称性后的"对称化…"只提示尚未实现（检测本身是真实的） | `mw-structure/src/panel.rs` | `Symmetrize` 命令（晶体学设计稿 7.10 节） | v0.2 |
 | "多面体"显示模型画成球棍 | `mw-structure/src/scene.rs` 的 `DisplayModel` | 半透明多面体管线 | v0.3 |
+| MCP Server 打开的文件只留在进程里，放在一个名为 `session` 的项目下（资源 URI 里的项目一段） | `mw-mcp/src/session.rs` | 项目文件、`project.open` | v0.2：接上 M6 的项目文件，见 AI 集成设计稿 5.1 节 |
 
 ## 10. 路线图
 
@@ -201,3 +204,5 @@ Workbench（窗口根视图，apps/workbench）：打开着的工作区、当前
 | M6 持久化 | 项目文件、最近项目、设置保存；示例结构改为从项目文件读 | 新增 `mw-project-file`；`mw-project`、`mw-structure`、外壳 | 已实现（[项目文件设计稿](design/project-format.md)）。项目是 `.mwproj` 目录：清单、每个结构一个文件（结构、测量、编辑记录）、导入文件的原样副本（按 SHA-256 命名，导入诊断和 CIF 保留字段由它重新解析）、视图状态；格式版本 1，旧格式在内存里迁移，第一次保存前备份。新建、打开、保存、另存为、关闭项目，未保存时先问；最近项目、退出时打开着的项目和设置存在系统配置目录里。示例项目由 fixture 真实导入生成，随应用附带，第一次启动装到数据目录。验收：全部示例和每个 fixture 结构写成项目再读回逐项相同；界面集成测试编辑、测量、换视角后 ⌘S、关闭、再打开，状态完整恢复（`apps/workbench/src/ui_tests.rs`） |
 
 对称模式下移动、添加原子（特殊位置吸附）、对称性检测与对称化、晶胞变换属于 v0.2。
+
+v0.2 的实验性 MCP Server 已提前做出原型（`mw-mcp`，2026-10-22）：无界面、只读、stdio，独立可执行文件；能力注册表为此加了 `structure.diagnostics` 和 `structure.export`。连接运行中的应用、项目工具（等 M6）和并入 `materials-workbench mcp` 见 AI 集成设计稿 5.1 节。

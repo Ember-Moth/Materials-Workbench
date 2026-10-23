@@ -1,6 +1,8 @@
 use std::fmt;
+use std::sync::Arc;
 
 use mw_crystal::{CrystalDocument, EditError, Guidance};
+use mw_crystal_io::ImportedBlock;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -70,6 +72,13 @@ pub trait Host {
     fn structures(&self) -> Vec<StructureInfo>;
     fn document(&self, id: StructureEntryId) -> Option<&CrystalDocument>;
     fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument>;
+    /// The data block the structure was read from: its import diagnostics,
+    /// and the CIF fields the structure does not hold. `None` for a
+    /// structure that came from no file, such as a sample.
+    fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
+        let _ = id;
+        None
+    }
     /// Whether the application's window is there.
     fn has_window(&self) -> bool {
         false
@@ -80,7 +89,14 @@ pub trait Host {
 /// MCP server's headless mode and the command line.
 #[derive(Clone, Debug, Default)]
 pub struct Documents {
-    entries: Vec<(StructureInfo, CrystalDocument)>,
+    entries: Vec<Entry>,
+}
+
+#[derive(Clone, Debug)]
+struct Entry {
+    info: StructureInfo,
+    document: CrystalDocument,
+    source: Option<Arc<ImportedBlock>>,
 }
 
 impl Documents {
@@ -95,29 +111,64 @@ impl Documents {
         project: impl Into<String>,
         document: CrystalDocument,
     ) -> StructureEntryId {
-        let next = self.entries.iter().map(|(info, _)| info.id.0).max();
+        self.push(name.into(), project.into(), document, None)
+    }
+
+    /// Adds a document read from `source`, a file's data block, under the
+    /// next free id.
+    pub fn add_imported(
+        &mut self,
+        name: impl Into<String>,
+        project: impl Into<String>,
+        document: CrystalDocument,
+        source: Arc<ImportedBlock>,
+    ) -> StructureEntryId {
+        self.push(name.into(), project.into(), document, Some(source))
+    }
+
+    fn push(
+        &mut self,
+        name: String,
+        project: String,
+        document: CrystalDocument,
+        source: Option<Arc<ImportedBlock>>,
+    ) -> StructureEntryId {
+        let next = self.entries.iter().map(|entry| entry.info.id.0).max();
         let id = StructureEntryId(next.map_or(1, |n| n + 1));
-        self.entries
-            .push((StructureInfo::new(id, name, project), document));
+        self.entries.push(Entry {
+            info: StructureInfo::new(id, name, project),
+            document,
+            source,
+        });
         id
+    }
+
+    fn entry(&self, id: StructureEntryId) -> Option<&Entry> {
+        self.entries.iter().find(|entry| entry.info.id == id)
     }
 }
 
 impl Host for Documents {
     fn structures(&self) -> Vec<StructureInfo> {
-        self.entries.iter().map(|(info, _)| info.clone()).collect()
+        self.entries
+            .iter()
+            .map(|entry| entry.info.clone())
+            .collect()
     }
 
     fn document(&self, id: StructureEntryId) -> Option<&CrystalDocument> {
-        self.entries
-            .iter()
-            .find_map(|(info, document)| (info.id == id).then_some(document))
+        self.entry(id).map(|entry| &entry.document)
     }
 
     fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument> {
         self.entries
             .iter_mut()
-            .find_map(|(info, document)| (info.id == id).then_some(document))
+            .find(|entry| entry.info.id == id)
+            .map(|entry| &mut entry.document)
+    }
+
+    fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
+        self.entry(id)?.source.as_deref()
     }
 }
 
@@ -129,6 +180,17 @@ impl Host for Documents {
 pub struct CallResult {
     pub output: Value,
     pub summary: String,
+}
+
+impl CallResult {
+    /// For entry points that add operations of their own next to the
+    /// registry's, such as opening a file in the MCP server.
+    pub fn new(output: Value, summary: impl Into<String>) -> Self {
+        Self {
+            output,
+            summary: summary.into(),
+        }
+    }
 }
 
 /// A failed call. Callers can recover: the message says what was wrong in
@@ -246,6 +308,7 @@ impl Registry {
     pub fn standard() -> Self {
         let mut registry = Self::new();
         crate::structure::register(&mut registry);
+        crate::files::register(&mut registry);
         crate::history::register(&mut registry);
         registry
     }
