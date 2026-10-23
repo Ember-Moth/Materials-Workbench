@@ -9,8 +9,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtomFate, Derived, Edit, EditError, EditMode, EditWarning, IdMap, Measurement, SiteId,
-    Structure, Target, edit,
+    AtomFate, Derived, Edit, EditError, EditInfo, EditMode, EditWarning, IdMap, Measurement,
+    SiteId, Structure, Target, edit,
 };
 
 /// A command on a document: a structure edit, or a change to its
@@ -48,6 +48,9 @@ pub struct Outcome {
     /// For updating selections (design §7.11).
     pub ids: IdMap,
     pub warnings: Vec<EditWarning>,
+    /// What the edit did besides what it was asked, e.g. a site snapped
+    /// onto a special position.
+    pub info: Vec<EditInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +187,7 @@ impl CrystalDocument {
                 if applied.structure == *self.structure {
                     return Ok(Outcome {
                         warnings: applied.warnings,
+                        info: applied.info,
                         ..Outcome::default()
                     });
                 }
@@ -195,6 +199,7 @@ impl CrystalDocument {
                     changed: true,
                     ids: applied.ids,
                     warnings: applied.warnings,
+                    info: applied.info,
                 };
                 (Some((applied.inverse, edit.clone())), outcome)
             }
@@ -249,6 +254,7 @@ impl CrystalDocument {
                     changed: true,
                     ids: applied.ids,
                     warnings: applied.warnings,
+                    info: applied.info,
                 }
             }
             None => {
@@ -273,6 +279,7 @@ impl CrystalDocument {
                     changed: true,
                     ids: applied.ids,
                     warnings: applied.warnings,
+                    info: applied.info,
                 }
             }
             None => {

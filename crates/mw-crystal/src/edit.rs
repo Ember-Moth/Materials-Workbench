@@ -11,9 +11,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::constraints::cell_constraints;
+use crate::placement::{self, Placement};
 use crate::{
-    AtomFate, AtomRef, CellParam, CellParams, Constraint, Derived, EditMode, IdMap, Measured,
-    Occupant, Site, SiteFate, SiteId, Species, Structure, element, expand, transform,
+    AtomFate, AtomRef, Axis, CellParam, CellParams, Constraint, CoordinateConstraint, Derived,
+    EditMode, IdMap, Measured, Occupant, Site, SiteFate, SiteId, Species, Structure, element,
+    expand, special_position, transform,
 };
 
 /// How far the occupancies of one site may add up above 1 before an edit
@@ -21,8 +23,13 @@ use crate::{
 pub const OCCUPANCY_TOLERANCE: f64 = 0.01;
 
 /// A cell parameter given again within this many Å or degrees of its
-/// value counts as unchanged.
+/// value counts as unchanged, and so does a fractional coordinate.
 const SAME_VALUE: f64 = 1e-9;
+
+/// Å. Snapping a site by less than this is not reported: it is below the
+/// precision of coordinates given to 4–5 decimals, as the importer judges
+/// too.
+const REPORTED_SNAP: f64 = 1e-4;
 
 /// New values for some cell parameters, in Å and degrees. A parameter left
 /// out keeps its value, or follows the parameter it is linked to.
@@ -111,10 +118,49 @@ pub enum Edit {
         occupant: String,
         label: String,
     },
-    /// Moves a site, in P1 only. Moving sites under symmetry, with
-    /// projection onto special positions and snapping, is design §7.4–7.5
-    /// and comes with v0.2.
+    /// Moves a site to new fractional coordinates. Under symmetry the site
+    /// takes the site symmetry of its new position: within the position
+    /// tolerance of a special position, it snaps onto it (design §7.4).
     SetPosition { site: SiteId, position: [f64; 3] },
+    /// Drags one atom by a fractional displacement, and all the atoms
+    /// equivalent to it with it (design §7.4). The displacement is taken
+    /// back to the site and projected onto the directions its special
+    /// position allows, so the site stays on it; with
+    /// `leave_special_position` it is not projected, and the site symmetry
+    /// may drop. A site that ends up near a special position with more
+    /// symmetry snaps onto it.
+    MoveSite {
+        atom: AtomRef,
+        displacement: [f64; 3],
+        #[serde(default)]
+        leave_special_position: bool,
+    },
+    /// Sets one fractional coordinate of a site without leaving its special
+    /// position (design §7.5): a free coordinate, or one that follows a
+    /// single free coordinate. The coordinates that depend on it follow; a
+    /// fixed coordinate cannot change.
+    SetCoordinate {
+        site: SiteId,
+        axis: Axis,
+        value: f64,
+    },
+    /// Puts a site back where it was, uncertainties included, without
+    /// projecting or snapping.
+    RestorePosition {
+        site: SiteId,
+        position: [f64; 3],
+        position_su: [Option<f64>; 3],
+    },
+    /// Adds a site to the end of the asymmetric unit, with the next unused
+    /// id, snapped onto the special position it lies near (design §7.6). A
+    /// site that would coincide with an atom of another is refused. Without
+    /// a label, the element symbol and the smallest unused number make one.
+    AddSite {
+        position: [f64; 3],
+        species: Species,
+        occupancy: Measured,
+        label: Option<String>,
+    },
     /// Removes a site with all its equivalent atoms (design §7.6).
     RemoveSite { site: SiteId },
     /// Puts a site back at its place in the asymmetric unit.
@@ -140,6 +186,14 @@ pub struct Applied {
     pub inverse: Edit,
     pub ids: IdMap,
     pub warnings: Vec<EditWarning>,
+    pub info: Vec<EditInfo>,
+}
+
+/// What an edit reports besides its result.
+#[derive(Default)]
+struct Report {
+    warnings: Vec<EditWarning>,
+    info: Vec<EditInfo>,
 }
 
 /// Something an edit did that the user should know about, without
@@ -156,6 +210,10 @@ pub enum EditWarning {
         other: SiteId,
         distance: f64,
     },
+    /// After a move, equivalent atoms of `site` are closer than the
+    /// short-contact distance to each other, in Å: it left a special
+    /// position by a little (design §7.4).
+    CloseImages { site: SiteId, distance: f64 },
 }
 
 impl EditWarning {
@@ -164,6 +222,7 @@ impl EditWarning {
         match self {
             Self::OccupancySum { .. } => "occupancy_sum",
             Self::ShortContact { .. } => "short_contact",
+            Self::CloseImages { .. } => "close_images",
         }
     }
 }
@@ -186,6 +245,61 @@ impl fmt::Display for EditWarning {
                 "an atom of site {} is {distance:.3} Å from an atom of site {}",
                 site.0, other.0
             ),
+            Self::CloseImages { site, distance } => write!(
+                f,
+                "equivalent atoms of site {} are {distance:.3} Å apart",
+                site.0
+            ),
+        }
+    }
+}
+
+/// Something an edit did besides what it was asked, which the user should
+/// see (design §8, Info): a position snapped, or a site whose number of
+/// equivalent atoms changed.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum EditInfo {
+    /// The site was pulled onto a special position nearby, by
+    /// `displacement` Å (design §7.4, §7.6).
+    Snapped { site: SiteId, displacement: f64 },
+    /// The site left a special position or landed on one: it has `after`
+    /// equivalent atoms in the cell instead of `before` (design §7.4).
+    Multiplicity {
+        site: SiteId,
+        before: usize,
+        after: usize,
+    },
+}
+
+impl EditInfo {
+    /// A stable identifier for programs and logs.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Snapped { .. } => "snapped",
+            Self::Multiplicity { .. } => "multiplicity",
+        }
+    }
+}
+
+/// English, for programs, logs and AI callers.
+impl fmt::Display for EditInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Snapped { site, displacement } => write!(
+                f,
+                "site {} was moved {displacement:.4} Å onto the special position nearby",
+                site.0
+            ),
+            Self::Multiplicity {
+                site,
+                before,
+                after,
+            } => write!(
+                f,
+                "site {} now has {after} equivalent atoms in the cell instead of {before}",
+                site.0
+            ),
         }
     }
 }
@@ -200,6 +314,8 @@ pub enum Guidance {
     ConvertToP1,
     /// Remove the whole site.
     RemoveSite { site: SiteId },
+    /// Add the species to this site as a mixed occupant instead.
+    AddOccupant { site: SiteId },
 }
 
 /// Why an edit was refused. The structure is unchanged.
@@ -219,8 +335,20 @@ pub enum EditError {
         atoms: usize,
         equivalent: usize,
     },
-    /// Moving sites under symmetry comes with v0.2.
-    MoveUnderSymmetry {
+    /// The site's special position fixes this coordinate, e.g. z = 1/4
+    /// (design §7.5).
+    FixedCoordinate {
+        site: SiteId,
+        axis: Axis,
+    },
+    /// The coordinate is a combination of two free coordinates, which only
+    /// non-standard settings give; those can be set instead.
+    CombinedCoordinate {
+        site: SiteId,
+        axis: Axis,
+    },
+    /// A new site would coincide with an atom of `site` (design §7.6).
+    CoincidentSite {
         site: SiteId,
     },
     FixedCellParameter {
@@ -271,7 +399,7 @@ impl EditError {
             Self::BreaksSymmetry { site, .. } => {
                 vec![Guidance::WholeSite { site }, Guidance::ConvertToP1]
             }
-            Self::MoveUnderSymmetry { .. } => vec![Guidance::ConvertToP1],
+            Self::CoincidentSite { site } => vec![Guidance::AddOccupant { site }],
             Self::LastOccupant { site } => vec![Guidance::RemoveSite { site }],
             _ => Vec::new(),
         }
@@ -284,7 +412,9 @@ impl EditError {
             Self::UnknownAtom(_) => "unknown_atom",
             Self::UnknownOccupant { .. } => "unknown_occupant",
             Self::BreaksSymmetry { .. } => "breaks_symmetry",
-            Self::MoveUnderSymmetry { .. } => "move_under_symmetry",
+            Self::FixedCoordinate { .. } => "fixed_coordinate",
+            Self::CombinedCoordinate { .. } => "combined_coordinate",
+            Self::CoincidentSite { .. } => "coincident_site",
             Self::FixedCellParameter { .. } => "fixed_cell_parameter",
             Self::LinkedCellParameters { .. } => "linked_cell_parameters",
             Self::InvalidCell => "invalid_cell",
@@ -338,9 +468,22 @@ impl fmt::Display for EditError {
                  the symmetry; edit the whole site, or convert the structure to P1 first",
                 site.0
             ),
-            Self::MoveUnderSymmetry { site } => write!(
+            Self::FixedCoordinate { site, axis } => write!(
                 f,
-                "site {} cannot be moved while the structure has symmetry; convert it to P1 first",
+                "{} of site {} is fixed by its site symmetry",
+                axis.name(),
+                site.0
+            ),
+            Self::CombinedCoordinate { site, axis } => write!(
+                f,
+                "{} of site {} is a combination of its free coordinates; set those instead",
+                axis.name(),
+                site.0
+            ),
+            Self::CoincidentSite { site } => write!(
+                f,
+                "the new site would coincide with an atom of site {}; add the species to that \
+                 site as a mixed occupant instead",
                 site.0
             ),
             Self::FixedCellParameter { param } => {
@@ -448,20 +591,21 @@ impl Edit {
     /// applied, also for a batch whose later edit fails.
     pub fn apply(&self, structure: &Structure) -> Result<Applied, EditError> {
         let mut next = structure.clone();
-        let mut warnings = Vec::new();
-        let (inverse, ids) = self.apply_to(&mut next, &mut warnings)?;
+        let mut report = Report::default();
+        let (inverse, ids) = self.apply_to(&mut next, &mut report)?;
         Ok(Applied {
             structure: next,
             inverse,
             ids,
-            warnings,
+            warnings: report.warnings,
+            info: report.info,
         })
     }
 
     fn apply_to(
         &self,
         structure: &mut Structure,
-        warnings: &mut Vec<EditWarning>,
+        report: &mut Report,
     ) -> Result<(Edit, IdMap), EditError> {
         let same = IdMap::default();
         Ok(match self {
@@ -493,7 +637,9 @@ impl Edit {
                 check_occupancy(occupancy.value())?;
                 let slot = occupant_mut(structure, *site, occupant)?;
                 let old = std::mem::replace(&mut slot.occupancy, *occupancy);
-                warnings.extend(occupancy_warning(site_ref(structure, *site)?));
+                report
+                    .warnings
+                    .extend(occupancy_warning(site_ref(structure, *site)?));
                 let inverse = Self::SetOccupancy {
                     site: *site,
                     occupant: occupant.clone(),
@@ -521,7 +667,7 @@ impl Edit {
                 target
                     .occupants
                     .push(Occupant::new(&label, species.clone(), *occupancy));
-                warnings.extend(occupancy_warning(target));
+                report.warnings.extend(occupancy_warning(target));
                 let inverse = Self::RemoveOccupant {
                     site: *site,
                     occupant: label,
@@ -576,29 +722,101 @@ impl Edit {
             }
             Self::SetPosition { site, position } => {
                 site_ref(structure, *site)?;
-                if structure.edit_mode() == EditMode::Symmetric {
-                    return Err(EditError::MoveUnderSymmetry { site: *site });
-                }
-                if !position.iter().all(|v| v.is_finite()) {
+                check_position(position)?;
+                let placed = placement::settle(structure, *position, 1);
+                place(structure, *site, placed, report)?
+            }
+            Self::MoveSite {
+                atom,
+                displacement,
+                leave_special_position,
+            } => {
+                check_position(displacement)?;
+                let site = site_ref(structure, atom.site)?;
+                let members = expand::members(structure, site);
+                let &(op, _) = members
+                    .get(usize::from(atom.member))
+                    .ok_or(EditError::UnknownAtom(*atom))?;
+                let placed = placement::moved(
+                    structure,
+                    site.position,
+                    &structure.symmetry.operations()[op],
+                    *displacement,
+                    *leave_special_position,
+                );
+                place(structure, atom.site, placed, report)?
+            }
+            Self::SetCoordinate { site, axis, value } => {
+                let current = site_ref(structure, *site)?.position;
+                if !value.is_finite() {
                     return Err(EditError::InvalidPosition);
                 }
-                let old = std::mem::replace(&mut site_mut(structure, *site)?.position, *position);
-                let orbits = expand::orbits(structure);
-                let short = structure.tolerances.short_contact;
-                warnings.extend(
-                    expand::contacts_with(structure, &orbits, *site, short)
-                        .into_iter()
-                        .map(|contact| EditWarning::ShortContact {
-                            site: *site,
-                            other: contact.b,
-                            distance: contact.distance,
-                        }),
-                );
-                let inverse = Self::SetPosition {
-                    site: *site,
-                    position: old,
+                let placed = if (value - current[*axis as usize]).abs() <= SAME_VALUE {
+                    Placement::at(current)
+                } else {
+                    placement::with_coordinate(structure, current, *axis, *value).map_err(
+                        |constraint| match constraint {
+                            CoordinateConstraint::Fixed => EditError::FixedCoordinate {
+                                site: *site,
+                                axis: *axis,
+                            },
+                            _ => EditError::CombinedCoordinate {
+                                site: *site,
+                                axis: *axis,
+                            },
+                        },
+                    )?
                 };
-                (inverse, same)
+                place(structure, *site, placed, report)?
+            }
+            Self::RestorePosition {
+                site,
+                position,
+                position_su,
+            } => {
+                check_position(position)?;
+                relocate(structure, *site, *position, *position_su, report)?
+            }
+            Self::AddSite {
+                position,
+                species,
+                occupancy,
+                label,
+            } => {
+                check_position(position)?;
+                check_element(&species.element)?;
+                check_occupancy(occupancy.value())?;
+                let label = match label {
+                    Some(label) => {
+                        check_label(structure, label, None)?;
+                        label.clone()
+                    }
+                    None => new_label(structure, &species.element),
+                };
+                let special = special_position(structure, *position);
+                let id = SiteId(structure.sites.iter().map(|s| s.id.0).max().unwrap_or(0) + 1);
+                let occupant = Occupant::new(&label, species.clone(), *occupancy);
+                structure
+                    .sites
+                    .push(Site::new(id, special.position, vec![occupant]));
+                let orbits = expand::orbits(structure);
+                let tolerance = structure.tolerances.position;
+                let coincident = expand::contacts_with(structure, &orbits, id, tolerance)
+                    .into_iter()
+                    .min_by(|a, b| a.distance.total_cmp(&b.distance));
+                if let Some(contact) = coincident {
+                    return Err(EditError::CoincidentSite { site: contact.b });
+                }
+                if special.displacement >= REPORTED_SNAP {
+                    report.info.push(EditInfo::Snapped {
+                        site: id,
+                        displacement: special.displacement,
+                    });
+                }
+                report
+                    .warnings
+                    .extend(contact_warnings(structure, &orbits, id));
+                (Self::RemoveSite { site: id }, same)
             }
             Self::RemoveSite { site } => {
                 let index = site_index(structure, *site)?;
@@ -626,7 +844,7 @@ impl Edit {
                 let mut inverses = Vec::with_capacity(edits.len());
                 let mut ids = IdMap::default();
                 for edit in edits {
-                    let (inverse, map) = edit.apply_to(structure, warnings)?;
+                    let (inverse, map) = edit.apply_to(structure, report)?;
                     inverses.push(inverse);
                     ids = ids.then(map);
                 }
@@ -798,6 +1016,121 @@ fn set_cell(structure: &mut Structure, params: CellParams) -> Result<(Edit, IdMa
         .filter(|(before, after)| before != after)
         .map(|((site, _), _)| site);
     Ok((Edit::RestoreCell { params: old }, IdMap::reshaped(reshaped)))
+}
+
+/// Moves a site to where `placed` puts it. Coordinates that change lose
+/// their uncertainty (design §4.5). Reports the snap, a change in the
+/// number of equivalent atoms and atoms that come too close; a site that
+/// stays where it is reports nothing.
+fn place(
+    structure: &mut Structure,
+    site: SiteId,
+    placed: Placement,
+    report: &mut Report,
+) -> Result<(Edit, IdMap), EditError> {
+    let old = site_ref(structure, site)?;
+    let su = [0, 1, 2].map(|i| {
+        (placed.position[i] == old.position[i])
+            .then_some(old.position_su[i])
+            .flatten()
+    });
+    if placed.position == old.position {
+        let inverse = Edit::RestorePosition {
+            site,
+            position: old.position,
+            position_su: old.position_su,
+        };
+        return Ok((inverse, IdMap::default()));
+    }
+    if placed.snapped >= REPORTED_SNAP {
+        report.info.push(EditInfo::Snapped {
+            site,
+            displacement: placed.snapped,
+        });
+    }
+    let moved = relocate(structure, site, placed.position, su, report)?;
+    let orbits = expand::orbits(structure);
+    report
+        .warnings
+        .extend(contact_warnings(structure, &orbits, site));
+    Ok(moved)
+}
+
+/// Puts a site at `position` with these uncertainties. Reports a change in
+/// its number of equivalent atoms. References to its atoms keep their
+/// member numbers only while the orbit's members come from the same
+/// operations as before (design §7.11); otherwise they keep the site.
+fn relocate(
+    structure: &mut Structure,
+    site: SiteId,
+    position: [f64; 3],
+    position_su: [Option<f64>; 3],
+    report: &mut Report,
+) -> Result<(Edit, IdMap), EditError> {
+    let index = site_index(structure, site)?;
+    let operations = |structure: &Structure| -> Vec<usize> {
+        expand::members(structure, &structure.sites[index])
+            .into_iter()
+            .map(|(op, _)| op)
+            .collect()
+    };
+    let before = operations(structure);
+    let target = &mut structure.sites[index];
+    let inverse = Edit::RestorePosition {
+        site,
+        position: std::mem::replace(&mut target.position, position),
+        position_su: std::mem::replace(&mut target.position_su, position_su),
+    };
+    let after = operations(structure);
+    if before.len() != after.len() {
+        report.info.push(EditInfo::Multiplicity {
+            site,
+            before: before.len(),
+            after: after.len(),
+        });
+    }
+    let ids = if before == after {
+        IdMap::default()
+    } else {
+        IdMap::reshaped([site])
+    };
+    Ok((inverse, ids))
+}
+
+/// Atoms of `site` closer than the short-contact distance to atoms of other
+/// sites, or to each other (design §7.4).
+fn contact_warnings(
+    structure: &Structure,
+    orbits: &[expand::Orbit],
+    site: SiteId,
+) -> Vec<EditWarning> {
+    let short = structure.tolerances.short_contact;
+    let images = orbits
+        .iter()
+        .find(|orbit| orbit.site == site)
+        .and_then(|orbit| orbit.nearest_image)
+        .filter(|distance| *distance < short)
+        .map(|distance| EditWarning::CloseImages { site, distance });
+    images
+        .into_iter()
+        .chain(
+            expand::contacts_with(structure, orbits, site, short)
+                .into_iter()
+                .map(|contact| EditWarning::ShortContact {
+                    site,
+                    other: contact.b,
+                    distance: contact.distance,
+                }),
+        )
+        .collect()
+}
+
+fn check_position(position: &[f64; 3]) -> Result<(), EditError> {
+    if position.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err(EditError::InvalidPosition)
+    }
 }
 
 fn site_index(structure: &Structure, site: SiteId) -> Result<usize, EditError> {
@@ -1314,17 +1647,6 @@ mod tests {
             .err(),
             Some(EditError::InvalidPosition)
         );
-
-        let (rutile, _) = load(SampleKey::Rutile);
-        let o = site(&rutile, "O1");
-        let error = Edit::SetPosition {
-            site: o,
-            position: [0.3, 0.3, 0.0],
-        }
-        .apply(&rutile)
-        .unwrap_err();
-        assert_eq!(error, EditError::MoveUnderSymmetry { site: o });
-        assert_eq!(error.guidance(), [Guidance::ConvertToP1]);
     }
 
     #[test]

@@ -457,20 +457,24 @@ fn deleting_sites() {
 }
 
 #[test]
-fn moving_atoms_only_in_p1() {
+fn moving_atoms() {
     let (registry, mut documents, [rutile, _, supercell]) = session();
-    let refused = call(
+    // Under symmetry, O1 snaps back onto 4f, x, x, 0, 0.0015 Å away.
+    call(
         &registry,
         &mut documents,
         "structure.set_position",
-        json!({ "structure": rutile, "site": 2, "position": [0.3, 0.3, 0.0] }),
+        json!({ "structure": rutile, "site": 2, "position": [0.3, 0.3, 0.0005] }),
     )
-    .unwrap_err();
-    assert_eq!(refused.code, "move_under_symmetry");
-    assert_eq!(
-        refused.to_json()["guidance"],
-        json!([{ "kind": "convert_to_p1" }])
-    );
+    .unwrap();
+    let sites = call(
+        &registry,
+        &mut documents,
+        "structure.sites",
+        json!({ "structure": rutile, "offset": 1, "limit": 1 }),
+    )
+    .unwrap();
+    assert_eq!(sites.output["sites"][0]["position"], json!([0.3, 0.3, 0.0]));
 
     let moved = call(
         &registry,

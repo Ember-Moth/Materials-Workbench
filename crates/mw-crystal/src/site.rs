@@ -95,19 +95,19 @@ impl Stabilizer {
     }
 
     /// `x_sym = P_s·x + t̄`: the average of x's images (design §7.6).
-    fn snap(&self, x: [f64; 3]) -> [f64; 3] {
+    pub(crate) fn snap(&self, x: [f64; 3]) -> [f64; 3] {
         let (projector, translation) = self.averages();
         [0, 1, 2].map(|i| {
             (0..3).map(|j| projector[i][j].to_f64() * x[j]).sum::<f64>() + translation[i].to_f64()
         })
     }
 
-    fn form(&self) -> CoordinateForm {
+    pub(crate) fn form(&self) -> CoordinateForm {
         let (projector, translation) = self.averages();
         CoordinateForm::new(&projector, translation)
     }
 
-    fn projector(&self) -> [[f64; 3]; 3] {
+    pub(crate) fn projector(&self) -> [[f64; 3]; 3] {
         self.averages().0.map(|row| row.map(Rational::to_f64))
     }
 }
@@ -195,6 +195,58 @@ impl CoordinateForm {
     /// The expression for one coordinate, e.g. `2x` for y in `x, 2x, 1/4`.
     pub fn expression(&self, axis: Axis) -> String {
         self.0[axis as usize].to_string()
+    }
+
+    /// The point of this special position whose `axis` coordinate is
+    /// `value`, near `current` (design §7.5). A free coordinate takes the
+    /// value; one that follows a single free coordinate gives that one the
+    /// value that reproduces it. The coordinates that depend on the changed
+    /// free coordinate follow it, keeping their lattice translation from
+    /// `current` (y stays 0.75 rather than −0.25 in `x, −x, 1/2`); the
+    /// others, and the typed coordinate itself, keep their values exactly.
+    /// A fixed coordinate, or a combination of free ones, cannot be set:
+    /// the error is its constraint.
+    pub(crate) fn with_coordinate(
+        &self,
+        current: [f64; 3],
+        axis: Axis,
+        value: f64,
+    ) -> Result<[f64; 3], CoordinateConstraint> {
+        let at = |i: usize, free: &[f64; 3]| {
+            let coordinate = &self.0[i];
+            (0..3)
+                .map(|k| coordinate.coefficients[k].to_f64() * free[k])
+                .sum::<f64>()
+                + coordinate.constant.to_f64()
+        };
+        let j = axis as usize;
+        let changed = match self.constraints()[j] {
+            CoordinateConstraint::Free => j,
+            CoordinateConstraint::Follows(free) => free as usize,
+            other => return Err(other),
+        };
+        // Free coordinates are their own values, so `current` serves as
+        // the free parameters.
+        let offset = |i: usize| (current[i] - at(i, &current)).round();
+        let mut free = current;
+        free[changed] = if changed == j {
+            value
+        } else {
+            let coordinate = &self.0[j];
+            (value - offset(j) - coordinate.constant.to_f64())
+                / coordinate.coefficients[changed].to_f64()
+        };
+        let mut position = [0, 1, 2].map(|i| {
+            if i == changed {
+                free[i]
+            } else if self.0[i].coefficients[changed].is_zero() {
+                current[i]
+            } else {
+                at(i, &free) + offset(i)
+            }
+        });
+        position[j] = value;
+        Ok(position)
     }
 
     pub fn constraints(&self) -> [CoordinateConstraint; 3] {

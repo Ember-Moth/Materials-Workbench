@@ -44,7 +44,11 @@ pub(crate) fn command_name(command: &Command) -> SharedString {
             }
             Edit::RemoveOccupant { .. } => tr!("edit.command.remove_occupant"),
             Edit::RenameLabel { .. } => tr!("edit.command.rename_label"),
-            Edit::SetPosition { .. } => tr!("edit.command.set_position"),
+            Edit::SetPosition { .. } | Edit::MoveSite { .. } | Edit::RestorePosition { .. } => {
+                tr!("edit.command.set_position")
+            }
+            Edit::SetCoordinate { .. } => tr!("edit.command.set_coordinate"),
+            Edit::AddSite { .. } => tr!("edit.command.add_site"),
             Edit::ExpandToP1 | Edit::RestoreStructure { .. } => tr!("edit.command.expand_to_p1"),
             // Batches delete several sites at once, or convert to P1 first.
             Edit::Batch { edits } if matches!(edits.first(), Some(Edit::ExpandToP1)) => {

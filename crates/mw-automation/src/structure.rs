@@ -1139,9 +1139,11 @@ pub(crate) fn register(registry: &mut Registry) {
     registry.register(
         edit(
             "structure.set_position",
-            "Move a site to new fractional coordinates. Only in P1 mode; under symmetry it is \
-             refused (convert the structure to P1 first). Warns when an atom comes closer to \
-             another than the short-contact distance, 0.5 Å by default. Undoable.",
+            "Move a site to new fractional coordinates. Under symmetry all its equivalent \
+             atoms move with it and the site takes the site symmetry of the new position: \
+             within 0.01 Å of a special position it snaps onto it, so its number of equivalent \
+             atoms can change. Warns when an atom comes closer to another than the \
+             short-contact distance, 0.5 Å by default. Undoable.",
         ),
         |host: &mut dyn Host, input: SetPositionInput| {
             let document = document_mut(host, input.structure)?;

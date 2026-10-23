@@ -444,6 +444,12 @@ edit:
     set_position:
       en: Move atom
       zh-CN: 移动原子
+    set_coordinate:
+      en: Change coordinate
+      zh-CN: 修改坐标
+    add_site:
+      en: Add site
+      zh-CN: 添加位点
     remove_site:
       en: Delete sites
       zh-CN: 删除位点

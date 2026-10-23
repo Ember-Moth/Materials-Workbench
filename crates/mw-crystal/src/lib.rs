@@ -10,7 +10,8 @@
 //!
 //! Editing (design §7): an [`Edit`] is a serializable command on whole
 //! sites with an exact inverse; [`target_sites`] refuses edits of single
-//! atoms that would break the symmetry. A [`CrystalDocument`] keeps a
+//! atoms that would break the symmetry. Under symmetry, moved and added
+//! sites keep to their special positions and snap onto ones nearby. A [`CrystalDocument`] keeps a
 //! structure with its derived data, measurements and undo history.
 
 mod atom_ref;
@@ -27,6 +28,7 @@ mod lattice;
 mod linalg;
 mod measured;
 mod neighbors;
+mod placement;
 pub mod sample;
 mod site;
 mod space_group;
@@ -44,8 +46,8 @@ pub use derived::{
 };
 pub use document::{Annotation, Checkpoint, Command, CrystalDocument, Outcome};
 pub use edit::{
-    Applied, CellValues, Edit, EditError, EditWarning, Guidance, OCCUPANCY_TOLERANCE, Target,
-    expand_and_remove, target_sites,
+    Applied, CellValues, Edit, EditError, EditInfo, EditWarning, Guidance, OCCUPANCY_TOLERANCE,
+    Target, expand_and_remove, target_sites,
 };
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
