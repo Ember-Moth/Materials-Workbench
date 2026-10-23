@@ -72,6 +72,8 @@ pub trait Host {
     /// The structures callers can name, in listing order.
     fn structures(&self) -> Vec<StructureInfo>;
     fn document(&self, id: StructureEntryId) -> Option<&CrystalDocument>;
+    /// `None` for a document capabilities may read but not edit, as in
+    /// the application for now: edits there go through its interface.
     fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument>;
     /// The data block the structure was read from: its import diagnostics,
     /// and the CIF fields the structure does not hold. `None` for a

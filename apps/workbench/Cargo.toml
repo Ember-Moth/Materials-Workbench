@@ -17,6 +17,7 @@ path = "src/main.rs"
 screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image"]
 
 [dependencies]
+mw-automation.workspace = true
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
 mw-mcp.workspace = true

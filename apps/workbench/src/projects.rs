@@ -66,7 +66,7 @@ fn with_extension(path: PathBuf) -> PathBuf {
     PathBuf::from(name)
 }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -112,16 +112,7 @@ impl Workbench {
         for (path, result) in projects {
             match result {
                 Ok((dir, manifest, view)) => {
-                    let (id, name, file_id) = self.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.update_catalog(cx, |catalog| {
-                            let id = catalog
-                                .find(&path, manifest.id)
-                                .unwrap_or_else(|| catalog.open(dir, manifest, view));
-                            let project = catalog.project(id).expect("just added");
-                            (id, project.name().to_string(), project.file_id())
-                        })
-                    });
-                    self.session.remember(&path, file_id, &name);
+                    let id = self.add_project(&path, dir, manifest, view, cx);
                     if shown.is_none() || activate.as_deref() == Some(path.as_path()) {
                         shown = Some(id);
                     }
@@ -146,6 +137,30 @@ impl Workbench {
         }
         self.refresh_status(cx);
         cx.notify();
+    }
+
+    /// Adds a project read from `path` to the sidebar, or finds it there
+    /// when it is open already, and puts it first among the recent ones.
+    /// Shows nothing; the caller saves the session.
+    pub(crate) fn add_project(
+        &mut self,
+        path: &Path,
+        dir: ProjectDir,
+        manifest: Manifest,
+        view: ViewState,
+        cx: &mut Context<Self>,
+    ) -> ProjectId {
+        let (id, name, file_id) = self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.update_catalog(cx, |catalog| {
+                let id = catalog
+                    .find(path, manifest.id)
+                    .unwrap_or_else(|| catalog.open(dir, manifest, view));
+                let project = catalog.project(id).expect("just added");
+                (id, project.name().to_string(), project.file_id())
+            })
+        });
+        self.session.remember(path, file_id, &name);
+        id
     }
 
     /// Shows the structure last open in a project, or its first.

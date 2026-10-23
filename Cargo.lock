@@ -4195,7 +4195,9 @@ dependencies = [
 name = "mw-mcp"
 version = "0.0.0"
 dependencies = [
+ "dirs 6.0.0",
  "env_logger",
+ "libc",
  "log",
  "mw-automation",
  "mw-crystal",
@@ -4207,6 +4209,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -8807,6 +8810,7 @@ dependencies = [
  "gpui-pre-macos",
  "image",
  "log",
+ "mw-automation",
  "mw-crystal",
  "mw-crystal-io",
  "mw-mcp",

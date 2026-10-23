@@ -55,6 +55,10 @@ tempfile = "3"
 # The experimental MCP server (mw-mcp), see docs/design/ai-integration.md §5.
 # The official Rust SDK; each crate turns on the features it needs.
 rmcp = { version = "3.7", default-features = false }
+# The current user's id and runtime directory, for the channel between
+# `materials-workbench mcp` and the running application (ai-integration
+# design §5.1).
+libc = "0.2"
 
 # GPUI and the component library are slow in unoptimized builds; this follows
 # the GPUI Kit installation guide. The symmetry search is optimized too, so

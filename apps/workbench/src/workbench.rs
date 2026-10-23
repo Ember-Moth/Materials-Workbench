@@ -18,12 +18,14 @@ use mw_project::{
 };
 use mw_project_file::{
     EntryId, EntryView, Operation, ProjectDir, Provenance, ReadError, StructureFile,
+    structure_sha256,
 };
 use mw_structure::import::OpenedFile;
 use mw_structure::{StructureDocument, StructureWorkspace, StructureWorkspaceEvent, Supercell};
 
 use crate::actions::*;
 use crate::config::{AppPaths, Session};
+use crate::settings::McpSetting;
 use crate::{palette, settings};
 
 /// A structure opened in this session. Kept while its project is open, so
@@ -33,6 +35,16 @@ pub(crate) struct Opened {
     pub id: StructureEntryId,
     pub workspace: Entity<StructureWorkspace>,
     _subscriptions: [Subscription; 2],
+}
+
+/// A structure to read from its project before it can be shown.
+struct ToRead {
+    dir: ProjectDir,
+    entry: EntryId,
+    provenance: Provenance,
+    project_name: String,
+    name: String,
+    view: Option<EntryView>,
 }
 
 /// The main window: project sidebar on the window background, and the open
@@ -54,6 +66,8 @@ pub struct Workbench {
     opening: Option<StructureEntryId>,
     pub(crate) session: Session,
     pub(crate) palette: Entity<CommandState>,
+    /// Listening for MCP clients, while the setting is on (`mcp.rs`).
+    pub(crate) mcp: Option<crate::mcp::Serving>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -64,8 +78,11 @@ impl Workbench {
             cx.subscribe_in(&sidebar, window, Self::on_sidebar_event),
             cx.on_app_quit(|this, cx| {
                 this.persist(cx);
+                // Takes the socket and the token away before the process ends.
+                this.mcp = None;
                 async {}
             }),
+            cx.observe_global_in::<McpSetting>(window, Self::sync_mcp),
         ];
         let session = Session::load(cx.global::<AppPaths>());
         let first_start = session.is_none();
@@ -80,9 +97,12 @@ impl Workbench {
             opening: None,
             session: session.unwrap_or_default(),
             palette: cx.new(|cx| CommandState::new(window, cx)),
+            mcp: None,
             _subscriptions: subscriptions,
         };
         this.focus_handle.focus(window, cx);
+        // Once the window is there: a failure is shown as a notification.
+        cx.defer_in(window, Self::sync_mcp);
         if first_start {
             this.open_samples(window, cx);
         } else {
@@ -114,41 +134,19 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((project, entry)) = self.catalog(cx).structure(id) else {
-            return;
-        };
-        let project_id = project.id();
-        let project_name = project.name().to_string();
-        let name = entry.name().to_string();
-        let provenance = entry.entry().provenance.clone();
-        let entry_id = entry.entry().id;
-        let view = project.view().entries.get(&entry_id).cloned();
-        let pending = entry.pending().cloned();
-        let dir = project.dir().cloned();
-
-        self.active_project = Some(project_id);
-        self.last_shown.insert(project_id, id);
-        self.sidebar
-            .update(cx, |sidebar, cx| sidebar.set_selected(Some(id), cx));
-        if let Some(opened) = self.opened.iter().find(|o| o.id == id) {
-            opened.workspace.focus_handle(cx).focus(window, cx);
-            self.current = Some(id);
-            self.opening = None;
-            cx.notify();
-            return;
-        }
-        if let Some(pending) = pending {
-            let file = StructureFile::clone(&pending.file);
-            let document =
-                StructureDocument::new(project_name, name, file, provenance, pending.block);
-            self.show_document(id, document, view, window, cx);
-            return;
-        }
-        let Some(dir) = dir else {
+        let Some(to_read) = self.begin_showing(id, window, cx) else {
             return;
         };
         self.opening = Some(id);
-        let read = cx.background_spawn(async move { read_structure(&dir, entry_id, &provenance) });
+        let ToRead {
+            dir,
+            entry,
+            provenance,
+            project_name,
+            name,
+            view,
+        } = to_read;
+        let read = cx.background_spawn(async move { read_structure(&dir, entry, &provenance) });
         cx.spawn_in(window, async move |this, cx| {
             let result = read.await;
             this.update_in(cx, |this, window, cx| {
@@ -177,6 +175,77 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// Shows a structure as [`Self::open_structure`] does, but reads it on
+    /// this thread, so that it is open when this returns: for MCP clients,
+    /// whose next call uses it (`host.rs`).
+    pub(crate) fn open_structure_now(
+        &mut self,
+        id: StructureEntryId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::result::Result<(), ReadError> {
+        let Some(to_read) = self.begin_showing(id, window, cx) else {
+            return Ok(());
+        };
+        let (file, provenance, block) =
+            read_structure(&to_read.dir, to_read.entry, &to_read.provenance)?;
+        // A read of the same structure the user started is done now; one of
+        // another stays theirs and shows its structure when it arrives.
+        if self.opening == Some(id) {
+            self.opening = None;
+        }
+        let document =
+            StructureDocument::new(to_read.project_name, to_read.name, file, provenance, block);
+        self.show_document(id, document, to_read.view, window, cx);
+        Ok(())
+    }
+
+    /// Makes a structure the one shown: at once if it was opened before or
+    /// is not on disk yet; otherwise says what to read first.
+    fn begin_showing(
+        &mut self,
+        id: StructureEntryId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ToRead> {
+        let (project, entry) = self.catalog(cx).structure(id)?;
+        let project_id = project.id();
+        let project_name = project.name().to_string();
+        let name = entry.name().to_string();
+        let provenance = entry.entry().provenance.clone();
+        let entry_id = entry.entry().id;
+        let view = project.view().entries.get(&entry_id).cloned();
+        let pending = entry.pending().cloned();
+        let dir = project.dir().cloned();
+
+        self.active_project = Some(project_id);
+        self.last_shown.insert(project_id, id);
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_selected(Some(id), cx));
+        if let Some(opened) = self.opened.iter().find(|o| o.id == id) {
+            opened.workspace.focus_handle(cx).focus(window, cx);
+            self.current = Some(id);
+            self.opening = None;
+            cx.notify();
+            return None;
+        }
+        if let Some(pending) = pending {
+            let file = StructureFile::clone(&pending.file);
+            let document =
+                StructureDocument::new(project_name, name, file, provenance, pending.block);
+            self.show_document(id, document, view, window, cx);
+            return None;
+        }
+        Some(ToRead {
+            dir: dir?,
+            entry: entry_id,
+            provenance,
+            project_name,
+            name,
+            view,
+        })
     }
 
     fn show_document(
@@ -699,7 +768,14 @@ fn read_structure(
     let file = dir.read_structure(entry)?;
     let block = provenance.import().and_then(|import| {
         let bytes = dir.read_source(import).ok()?;
-        import.read_block(&bytes).map(Arc::new)
+        let mut block = import.read_block(&bytes)?;
+        // Whether the structure is still the one imported is the project's
+        // to say, by hash (project format §7.1); the block says the same,
+        // for capabilities that export it (`mw_automation`), as the MCP
+        // server without a window reads it.
+        block.structure = (structure_sha256(&file.structure) == import.structure_sha256)
+            .then(|| file.structure.clone());
+        Some(Arc::new(block))
     });
     Ok((file, provenance.clone(), block))
 }

@@ -1,6 +1,7 @@
-//! Appearance and language: the settings dialog and the commands behind it.
-//! Choices are saved as they are made and applied at the next start
-//! (`config.rs`).
+//! Appearance, language and MCP clients: the settings dialog and the
+//! commands behind it. Choices are saved as they are made; appearance and
+//! language are applied at the next start (`config.rs`), MCP clients at
+//! once (`mcp.rs`).
 
 use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::switch::Switch;
@@ -22,9 +23,23 @@ fn mode(dark: bool) -> ThemeMode {
     }
 }
 
+/// Whether MCP clients may connect to the application, as the settings
+/// say. The workbench listens for them while it is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct McpSetting(pub bool);
+
+impl Global for McpSetting {}
+
+impl McpSetting {
+    pub fn get(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|setting| setting.0)
+    }
+}
+
 /// Applies the saved settings; at start, before the window opens.
 pub fn apply_saved(cx: &mut App) {
     let settings = Settings::load(cx.global::<AppPaths>());
+    cx.set_global(McpSetting(settings.mcp));
     let language = LANGUAGES
         .iter()
         .find(|(code, _)| *code == settings.language)
@@ -38,6 +53,7 @@ fn save(cx: &App) {
     let settings = Settings {
         dark: cx.theme().is_dark(),
         language: locale().to_string(),
+        mcp: McpSetting::get(cx),
         ..Settings::default()
     };
     settings.save(cx.global::<AppPaths>());
@@ -55,6 +71,13 @@ pub fn toggle_dark_mode(window: &mut Window, cx: &mut App) {
 
 pub fn set_language(code: &str, cx: &mut App) {
     set_locale(code);
+    cx.refresh_windows();
+    save(cx);
+}
+
+/// Lets MCP clients connect, or stops them; the workbench follows.
+pub fn set_mcp(enabled: bool, cx: &mut App) {
+    cx.set_global(McpSetting(enabled));
     cx.refresh_windows();
     save(cx);
 }
@@ -106,7 +129,34 @@ pub fn open(window: &mut Window, cx: &mut App) {
                             }
                         })
                         .into_any_element(),
-                )),
+                ))
+                .child(
+                    // The explanation is the decision: who gets in, and
+                    // what they can do.
+                    h_flex()
+                        .items_start()
+                        .justify_between()
+                        .gap_4()
+                        .py_2()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(div().text_sm().child(tr!("settings.mcp")))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(tr!("settings.mcp_description")),
+                                ),
+                        )
+                        .child(
+                            Switch::new("settings-mcp")
+                                .checked(McpSetting::get(cx))
+                                .on_change(|enabled, _, cx| set_mcp(*enabled, cx)),
+                        ),
+                ),
         )
     });
 }

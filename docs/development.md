@@ -177,6 +177,14 @@ MW_LLM_PROVIDER=ollama MW_LLM_MODEL=qwen3 MW_LLM_TOOLS=1 cargo run -p mw-llm --e
 cargo build --release --bin materials-workbench
 ```
 
+应用开着、并且在设置里打开了"允许 MCP 客户端连接"（默认关）时，同一条命令不再自己读项目，而是连接正在运行的应用（M12，AI 集成设计稿 5.1 节）：客户端看到的是窗口里打开着的项目和结构，`structure_open` 在窗口里显示结构，查询读到还没保存的编辑；没有 `file_open`。`--allow` 的含义不变，限制的是从磁盘打开项目。应用在当前用户的运行目录里监听（macOS 是用户临时目录下的 `materials-workbench/`，Linux 是 `$XDG_RUNTIME_DIR/materials-workbench/`），设置了 `MW_CONFIG_DIR` 时在它下面的 `run/`，所以客户端启动命令时要带上同一个 `MW_CONFIG_DIR`，才找得到这个实例；Unix 域套接字的路径不能超过 103 字节（macOS），这个目录太深时应用不监听，并用通知说明。标准错误里有 `connected to the running application`（`RUST_LOG=info`）就是连上了。在终端里试：
+
+```bash
+MW_CONFIG_DIR=/tmp/mw-dev cargo run --bin materials-workbench
+```
+
+在设置里打开开关后，用下面的 Inspector 命令连接，并把同一个 `MW_CONFIG_DIR` 交给它启动的服务器。MCP 客户端一般只把少数环境变量传给服务器（`HOME`、`PATH` 等），在 shell 里 `export` 不够，Inspector 要用 `-e MW_CONFIG_DIR=/tmp/mw-dev` 显式传（按它的说明写，还没有运行过）。不设 `MW_CONFIG_DIR` 时两边用的是同一个默认目录，不必传。
+
 `crates/mw-mcp` 另有独立的可执行文件 `mw-mcp`（`cargo run -p mw-mcp -- --allow 目录`），参数相同，但不读配置目录、没有最近项目，留给开发和协议测试用。
 
 用 MCP Inspector 检查。它要从 npm 下载，需要 Node 22.19 或更新，运行前先问用户。下面的命令按 Inspector 2.12.0 的用法写：2026-10-22 用它对原型（独立的 `mw-mcp`、只能打开 CIF 文件）跑过命令行和 `mcpdo` 的写法；改成 `materials-workbench mcp` 和项目工具之后还没有重跑。网页界面的命令按它的文档写，没有打开过。网页界面默认在 `http://localhost:6274`，`--` 之后的参数交给服务器。例子里允许的是仓库里的示例项目，服务器只读，不会改动它们：
@@ -318,9 +326,9 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
 | 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部只读能力放进一个严格请求也合规，其余每 20 个一组（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试。项目能力用一个内存里的假宿主测试：列出和打开项目、没打开的结构返回 `structure_not_open`、打开后可用、没有项目的 `Host` 上返回 `unavailable` | `crates/mw-automation/tests/capabilities.rs`、`tests/projects.rs` |
-| MCP Server | 用 rmcp 的客户端经 stdio 驱动开发用的 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）；打开装在临时目录里的示例项目（再开一次得到同样的 ID）、没打开的结构先报错、打开结构、摘要、测量、诊断、导出 POSCAR、按项目 ID 读 CIF 资源（没打开的结构读时打开）；项目之外的 CIF 用 `file_open` 打开，放在未命名项目里；结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、不是项目、非 CIF 的路径和错误的参数都是模型能读的工具错误。访问策略、无界面宿主（只读、副本缺失、格式更新的项目、复制的项目、最近项目的过滤）和参数解析另有单元测试 | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/headless.rs`、`src/server.rs`、`src/cli.rs` |
-| `materials-workbench mcp` | 经 stdio 驱动应用的可执行文件：用临时配置目录（`MW_CONFIG_DIR`）给出最近项目，只列出 `--allow` 范围内的，从它打开项目、打开结构、摘要、导出 POSCAR、读资源，结束后配置目录里的文件一字节不变；`mcp --help` 不开窗口 | `apps/workbench/tests/mcp.rs` |
-| 外壳的界面集成测试 | 在无头窗口里用临时配置目录启动外壳：第一次启动打开示例项目；编辑、测量、换视角后 ⌘S、关闭项目、再打开，结构、测量、编辑记录和视图状态完整恢复（路线图 M6 的验收）；有未保存的更改时关闭和退出先问；导入的文件随项目保存，带源文件副本；POSCAR 和 CONTCAR 按文件名认出、以文件夹命名，随项目保存为 `.vasp` 副本，显式朝向存进结构文件，认不出的文件给通知；生成的超胞作为派生结构排在来源之后，保存后带着矩阵和来源记录 | `apps/workbench/src/ui_tests.rs` |
+| MCP Server | 用 rmcp 的客户端经 stdio 驱动开发用的 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）；打开装在临时目录里的示例项目（再开一次得到同样的 ID）、没打开的结构先报错、打开结构、摘要、测量、诊断、导出 POSCAR、按项目 ID 读 CIF 资源（没打开的结构读时打开）；项目之外的 CIF 用 `file_open` 打开，放在未命名项目里；结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、不是项目、非 CIF 的路径和错误的参数都是模型能读的工具错误。访问策略（含从另一个工作目录算相对路径）、无界面宿主（只读、副本缺失、格式更新的项目、复制的项目、最近项目的过滤）和参数解析另有单元测试。连接应用的通道（M12）：令牌随机、整个比较，令牌文件和目录的权限，别人能进入的目录不被信任，令牌不对时拒绝，第二个实例不接管，停止后清掉文件，路径太长时什么都不留，遗留的套接字算没有应用；一个只回显的假应用确认转发进程把任意字节原样转发；经通道用 rmcp 的客户端调用宿主线程上的宿主；派发的调用在宿主线程上执行，线程不在时返回 `unavailable` | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/headless.rs`、`src/server.rs`、`src/cli.rs`、`src/endpoint.rs`、`src/relay.rs` |
+| `materials-workbench mcp` | 经 stdio 驱动应用的可执行文件：用临时配置目录（`MW_CONFIG_DIR`）给出最近项目，只列出 `--allow` 范围内的，从它打开项目、打开结构、摘要、导出 POSCAR、读资源，结束后配置目录里的文件一字节不变；`mcp --help` 不开窗口。连接应用（M12）：测试里在 `MW_CONFIG_DIR` 下启动监听端，命令转接过去（只读工具里没有 `file_open`，相对路径从命令的工作目录算，读资源），监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用 | `apps/workbench/tests/mcp.rs` |
+| 外壳的界面集成测试 | 在无头窗口里用临时配置目录启动外壳：第一次启动打开示例项目；编辑、测量、换视角后 ⌘S、关闭项目、再打开，结构、测量、编辑记录和视图状态完整恢复（路线图 M6 的验收）；有未保存的更改时关闭和退出先问；导入的文件随项目保存，带源文件副本；POSCAR 和 CONTCAR 按文件名认出、以文件夹命名，随项目保存为 `.vasp` 副本，显式朝向存进结构文件，认不出的文件给通知；生成的超胞作为派生结构排在来源之后，保存后带着矩阵和来源记录；MCP 客户端连接应用（M12）：经 `Server::dispatching` 调用应用端的宿主，列出打开的项目和结构，打开没打开的结构时窗口显示它，读到用户的编辑，`project_open` 加进边栏而不切换显示、允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不崩溃 | `apps/workbench/src/ui_tests.rs` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、转为 P1（选区跟随、撤销一步回到原样）与"转为 P1 后删除"、生成超胞交给外壳、坐标编辑（对称模式下的跟随坐标与吸附）、移动模式下用真实的鼠标事件拖动原子（沿特殊位置、⌥ 脱离且不移动指针也更新预览并保持视图不动、Esc 放回、按下后拾取还没回来就松手、移动模式外仍然旋转视图）、添加位点与重合时的对话框。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |

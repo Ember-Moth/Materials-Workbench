@@ -1,7 +1,9 @@
 //! `materials-workbench mcp` as MCP clients start it (ai-integration design
-//! §5.1): no window, the protocol on stdio, and the projects the
-//! application opened recently, read from its configuration directory
-//! (`MW_CONFIG_DIR`). The protocol itself is tested in `mw-mcp`.
+//! §5.1): connected to the application when it listens, here a listener
+//! this test starts; otherwise without a window, the protocol on stdio, and
+//! the projects the application opened recently, read from its
+//! configuration directory (`MW_CONFIG_DIR`). The protocol itself is tested
+//! in `mw-mcp`, the application's host in `src/ui_tests.rs`.
 
 use std::fs;
 use std::path::Path;
@@ -19,7 +21,9 @@ const APP: &str = env!("CARGO_BIN_EXE_materials-workbench");
 const TIO2: &str = "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c00";
 const RUTILE: &str = "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c01";
 
-async fn call(client: &RunningService<RoleClient, ()>, tool: &str, arguments: Value) -> Value {
+type Client = RunningService<RoleClient, ()>;
+
+async fn call(client: &Client, tool: &str, arguments: Value) -> Value {
     let Value::Object(arguments) = arguments else {
         panic!("arguments are an object");
     };
@@ -117,6 +121,116 @@ async fn recent_project_to_exported_text() {
 
     // Read-only: the application's session is as it was.
     assert_eq!(fs::read(config.join("state.json")).unwrap(), session);
+}
+
+/// The client of `materials-workbench mcp`, with the configuration
+/// directory `config` and the directory `allow`, started in `cwd`.
+async fn start(config: &Path, allow: &Path, cwd: &Path) -> Client {
+    let command = Command::new(APP).configure(|command| {
+        command
+            .arg("mcp")
+            .arg("--allow")
+            .arg(allow)
+            .env("MW_CONFIG_DIR", config)
+            .current_dir(cwd);
+    });
+    let transport = TokioChildProcess::new(command).expect("the server starts");
+    ().serve(transport).await.expect("initialize")
+}
+
+async fn tools(client: &Client) -> Vec<String> {
+    let tools = client.list_all_tools().await.unwrap();
+    tools.into_iter().map(|t| t.name.to_string()).collect()
+}
+
+/// Runs the calls of the application's servers on a host of their own, as
+/// the application does on its main thread. The host opens what the first
+/// call's client allows, as the application would for that client.
+fn host_thread(mut calls: mw_mcp::Calls) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut host = None;
+            while let Some(call) = calls.next().await {
+                let host = host.get_or_insert_with(|| mw_mcp::Headless::new(call.access().clone()));
+                call.run(host);
+            }
+        });
+    })
+}
+
+/// Milestone M12: with the application listening, the command relays the
+/// client to it; the application serves the tools it has with a window.
+#[tokio::test]
+async fn relays_to_the_running_application() {
+    let temp = tempfile::tempdir().unwrap();
+    let projects = temp.path().join("projects");
+    fs::create_dir(&projects).unwrap();
+    mw_project_file::samples::install(&projects).unwrap();
+    let config = temp.path().join("config");
+    // Where the application listens with this configuration directory.
+    let endpoint = mw_mcp::Endpoint::in_dir(config.join("run"));
+    let (dispatcher, calls) = mw_mcp::dispatcher();
+    let listening = mw_mcp::listen(&endpoint, dispatcher).unwrap();
+    let host = host_thread(calls);
+
+    // Started in the projects' directory: relative paths are taken from
+    // there, not from the application's working directory.
+    let client = start(&config, &projects, &projects).await;
+    let info = client.peer_info().expect("server info");
+    let instructions = info.instructions.as_deref().unwrap();
+    assert!(
+        instructions.contains("connected to the application"),
+        "{instructions}"
+    );
+    let served = tools(&client).await;
+    assert!(served.contains(&"project_open".to_string()));
+    assert!(!served.contains(&"file_open".to_string()));
+
+    let project = call(&client, "project_open", json!({ "path": "tio2.mwproj" })).await;
+    assert_eq!(project["name"], "TiO₂ 相研究");
+    let id = project["structures"][0]["structure"].clone();
+    call(&client, "structure_open", json!({ "structure": id })).await;
+    let summary = call(&client, "structure_summary", json!({ "structure": id })).await;
+    assert_eq!(summary["formula"], "O2Ti");
+    let uri = format!("mw://project/{TIO2}/structure/{RUTILE}.cif");
+    let read = client
+        .read_resource(ReadResourceRequestParams::new(uri))
+        .await
+        .unwrap();
+    let cif = serde_json::to_value(&read.contents[0]).unwrap();
+    assert!(cif["text"].as_str().unwrap().contains("data_rutile"));
+    client.cancel().await.unwrap();
+
+    // The application stops listening: the next client runs without it.
+    drop(listening);
+    host.join().unwrap();
+    let client = start(&config, &projects, &projects).await;
+    assert!(tools(&client).await.contains(&"file_open".to_string()));
+    client.cancel().await.unwrap();
+}
+
+/// An application that did not quit cleanly leaves its socket and token
+/// behind; the command runs without a window then.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stale_socket_is_no_application() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let run = config.join("run");
+    fs::create_dir_all(&run).unwrap();
+    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+    let endpoint = mw_mcp::Endpoint::in_dir(&run);
+    drop(std::os::unix::net::UnixListener::bind(endpoint.socket()).unwrap());
+    fs::write(endpoint.token_file(), "0".repeat(64)).unwrap();
+    let client = start(&config, temp.path(), temp.path()).await;
+    assert!(tools(&client).await.contains(&"file_open".to_string()));
+    let list = call(&client, "project_list", json!({})).await;
+    assert_eq!(list["open"], json!([]));
+    client.cancel().await.unwrap();
 }
 
 #[test]
