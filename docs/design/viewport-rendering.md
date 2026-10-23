@@ -1,6 +1,6 @@
 # 3D 视口：技术选型与 GPUI 集成
 
-> 状态：已决定 · macOS 上已用 PoC 验证方案 A（见 8.1 节），Linux / Windows 待测 · M3 已实现键、晶胞边框、ID 纹理拾取和测量（5.4–5.6 节、8.2 节）· 2026-10-22；2026-10-23 补充上游现状和不改 GPUI 的零拷贝路线（方案 F，3.5、6.1–6.3 节）
+> 状态：已决定 · macOS 上已用 PoC 验证方案 A（见 8.1 节），Linux / Windows 待测 · M3 已实现键、晶胞边框、ID 纹理拾取和测量（5.4–5.6 节、8.2 节）· 2026-10-22；2026-10-23 补充上游现状和不改 GPUI 的零拷贝路线（方案 F，3.5、6.1–6.3 节），方案 F 的可行性见[可行性报告](viewport-underlay-feasibility.md)
 > 相关：[晶体学模块：数据模型与编辑语义](crystallography-model.md)（`mw-crystal-render` 持有的视图状态，以及拾取结果如何映射到 `AtomRef`）
 > 源码结论基于 GPUI Kit 0.8.0 锁定的 `gpui-pre 0.3.9` 系列 crate，于 2026-10-22 从 crates.io 下载后逐一核对。升级 GPUI Kit 时，按附录清单重新核对。
 
@@ -81,6 +81,7 @@ GPUI 有一个 `Surface` 图元，但它是为通话视频设计的：
 | `gpui-pre-apple`：`src/metal_renderer.rs:182`、`484` | 透明背景时，GPUI 的 Metal 图层设为非不透明（`set_opaque(!transparent)`），下面的内容能透上来 |
 | `gpui-pre`：`src/window.rs:7572` | `Window` 实现了 `HasWindowHandle`，可以拿到原生窗口（NSView、HWND、Wayland 表面） |
 | `gpui-pre-windows`：`src/directx_renderer.rs:1017` | GPUI 用 `CreateTargetForHwnd(hwnd, true)` 建的是"顶层"DirectComposition 目标。每个窗口还可以有一个非顶层目标，系统把它合成在顶层目标下面 |
+| `gpui-pre-macos`：`src/window.rs` 1087–1089、1192–1200 | GPUI 的 `GPUIView` 只是窗口内容视图的一个普通子视图；GPUI 自己插模糊背景视图时，也是放进内容视图的最底层（1886–1899） |
 | `wgpu-29.0.4`：`src/api/surface.rs:392`、`400` | `SurfaceTargetUnsafe::CoreAnimationLayer` 和 `SurfaceTargetUnsafe::CompositionVisual`：wgpu 能直接在 Core Animation 图层和 DirectComposition 视觉对象上创建绘制目标。后者只有 DX12 后端支持 |
 
 ## 4. 方案比较
@@ -92,7 +93,7 @@ GPUI 有一个 `Surface` 图元，但它是为通话视频设计的：
 | C 打补丁零拷贝 | 给 GPUI 加一个"外部纹理"图元 | 能 | 逐个平台实现 | 需要维护 `gpui-pre` 补丁 | **视实测结果，第二阶段采用** |
 | D GPUI 原生绘制 | 用 `paint_path` 和图片精灵画 2.5D 球棍模型，在 CPU 上按深度排序 | 能 | 全部 | 没有真实深度，相交处画错，大结构性能差 | 不作为主视口，可用于缩略图 |
 | E Bevy | 用 Bevy 渲染 | 同方案 A / C | — | 见第 7 节 | 不采用 |
-| F 底层合成 | wgpu 直接画在一个原生子图层上，这个图层放在 GPUI 内容的**下面**；GPUI 窗口用透明背景，只在视口处留洞，由系统合成器把两层叠起来 | 能 | Windows、Linux Wayland、macOS（较脆弱）；X11 不可用 | 每个平台要写一层图层胶水（unsafe）；两层要同步提交；整个窗口变透明；截图和测试拍不到 3D 画面 | **备选**：方案 A 不够用、方案 C 又进不了上游时，先做原型验证（6.2 节） |
+| F 底层合成 | wgpu 直接画在一个原生子图层上，这个图层放在 GPUI 内容的**下面**；GPUI 窗口用透明背景，只在视口处留洞，由系统合成器把两层叠起来 | 能 | Windows、Linux Wayland、macOS（较脆弱）；X11 不可用 | 每个平台要写一层图层胶水（unsafe）；两层要同步提交；整个窗口变透明；截图和测试拍不到 3D 画面 | **备选，现在不采用**：macOS 原型可行但有风险，Windows、Wayland 只在源码上可行（6.2 节、[可行性报告](viewport-underlay-feasibility.md)） |
 
 **方案 A 的带宽估算**：每帧字节数 = 宽 × 高 × 4。
 
@@ -217,6 +218,8 @@ Zed 的贡献指南要求新功能先开讨论、拿到员工确认，复杂度�
 
 ### 6.2 方案 F：底层合成（不改 GPUI）
 
+> 2026-10-23 已做可行性论证，详见[可行性报告](viewport-underlay-feasibility.md)：macOS 做了原型并实测，Windows 和 Wayland 只核查了源码。**结论是现在不采用**，下面的平台表和风险已按报告更新。
+
 **做法**：
 
 1. wgpu 渲染到一个原生子图层上，这个子图层不是 GPUI 的。
@@ -236,17 +239,18 @@ Zed 的贡献指南要求新功能先开讨论、拿到员工确认，复杂度�
 
 | 平台 | 胶水要做的事 | 接口 | 难度 |
 |---|---|---|---|
-| Windows | 建一个非顶层的 DirectComposition 目标和视觉对象，wgpu（DX12 后端）在上面渲染；设置偏移和裁剪，提交 | DirectComposition（windows-rs） | 中，系统本来就支持这种分层 |
-| Linux Wayland | 用 GPUI 的 Wayland 连接建一个子表面，放在 GPUI 表面的下面，设置位置，开启同步模式；wgpu 走 Vulkan | wayland-client | 中 |
-| macOS | 一个图层自己的内容总是画在它的子图层下面，所以没法直接放到 GPUI 的 Metal 图层底下。只能在视图层级里把我们的视图插到 GPUI 视图后面：要么改窗口的内容视图，要么改系统私有的外层视图。两种都可能破坏 GPUI 对窗口结构的假设，系统更新后也可能失效。两层同步提交要用 Core Animation 事务，并打开 Metal 图层的 `presentsWithTransaction`，wgpu 的普通接口没有暴露这个属性 | AppKit、Core Animation（objc2） | 中到高，而且脆弱 |
+| Windows | 建一个非顶层的 DirectComposition 目标和视觉对象，wgpu（DX12 后端）在上面渲染；设置偏移和裁剪，提交。GPUI 的合成交换链总是预乘 alpha，透明时清成 0。两个设备各自提交，没有跨设备的原子提交，预计布局动画时会偶发错开一帧 | DirectComposition（windows-rs） | 中；**源码上可行，未实测**，同步要在实机上量 |
+| Linux Wayland | 在 GPUI 的 Wayland 连接上另开事件队列，自己绑定 `wl_subcompositor`，建一个子表面放在 GPUI 表面的下面；用 `wp_viewport` 处理分数缩放；wgpu 走 Vulkan。子表面的位置、层叠和内容在同步模式下随 GPUI 的下一次提交一起生效 | wayland-client | 中；**源码上可行，未实测**。三个平台里同步条件最好，风险是 Vulkan 送显节流和部分驱动不支持预乘 alpha |
+| macOS | GPUI 的 `GPUIView` 只是窗口内容视图的普通子视图（3.5 节），在内容视图里、`GPUIView` 的下面插一个承载图层的兄弟视图即可，不碰系统私有视图；鼠标、拖放、输入法和焦点仍归 GPUI。必须自己建 `CAMetalLayer`：`create_surface(window)` 会拿到 GPUI 自己的图层。`presentsWithTransaction` 可以自己设，wgpu 不覆盖。GPUI Kit 的根视图要清掉背景，各区域自己画背景 | AppKit、Core Animation（objc2） | 中；**可行但有风险，已实测**：静止和匀速旋转时两层完全对齐；GPUI 平时异步送显，外部图层没法和它原子提交，侧栏动画时约 1.5 % 的帧边缘错开一帧（底色设成视口背景色可以掩盖）；主线程取 drawable 偶尔阻塞 7–20 ms，量产要改到渲染线程 |
 | Linux X11 | 子窗口只能画在上面 | — | 做不到，继续用方案 A |
 
 每个平台的胶水大约几百行，藏在同一个接口后面：设置位置和大小、显示或隐藏、提交。不支持的平台，以及无界面、截图巡览和界面集成测试，都退回方案 A。
 
 **风险**：
 
-- **两层不同步**：调整窗口大小、拖动面板、收起侧栏时，GPUI 和子图层各自提交，可能错开一帧，边缘出现缝隙或重叠。要用平台的事务机制让两边一起提交。
-- **测量标注慢一帧**：视口会自己出帧，不再跟 GPUI 的帧绑在一起。旋转可能更流畅，但 GPUI 按相机投影画的标注可能比 3D 画面慢一帧。
+- **两层不同步**：拖动面板、收起侧栏时，GPUI 和子图层各自提交，可能错开一帧，边缘出现缝隙或重叠。macOS 实测约 1.5 % 的帧（上表）；只有 Wayland 能真正一起提交。拖动改变窗口大小时 macOS 理论上同步，尚未实测。
+- **标注与画面**：macOS 原型在 GPUI 的同一轮里送显，匀速旋转时 3D 画面和 GPUI 画的标注实测是同一帧。顺带发现方案 A 的标注反而比画面快 1–2 帧，因为投影用的是当前相机，应改用屏幕上那一帧的相机（报告 4.5 节）。
+- **主线程阻塞**：`CAMetalLayer` 的 drawable 归还得晚时，取下一个会在界面线程上等 7–20 ms；渲染线程能解决，但会削弱和 GPUI 同轮送显带来的同步。
 - **整个窗口变透明**：系统合成的开销会增加；GPUI Kit 的组件都要保证自己画了不透明背景，否则会透出下面的内容。
 - **截图和测试拍不到 3D 画面**：`render_to_image` 只拍到 GPUI 这一层，视口位置是个空洞，所以测试必须走方案 A。
 - **裁剪和移动**：子图层是矩形，圆角要单独加遮罩；视口所在区域能滚动时，图层要跟着移动。
@@ -254,7 +258,15 @@ Zed 的贡献指南要求新功能先开讨论、拿到员工确认，复杂度�
 
 **收益**：和方案 C 相同。每帧省掉回读、拷贝和上传，在 1792×1600 下约 1.5–4 ms（8.1 节），延迟也少大约一帧。到 4K 或 120 Hz 屏幕，差别更明显。
 
-**何时启动**：只有在 4K、120 Hz 或 Linux、Windows 上实测，证明方案 A 及其优化不够用，而方案 C 又进不了上游时才启动。先挑最顺的 Windows 或 Wayland，在 `viewport-poc` 里花一两天做原型，验证两层能否同步、透明窗口的开销有多大，再决定是否接进应用；macOS 放在最后。
+**工作量**：三个平台合计约三周（报告第 5 节），另有每次升级 GPUI Kit 时的复核（报告第 8 节的清单）。
+
+**何时启动**：只有在 4K、120 Hz 或 Linux、Windows 上实测，证明方案 A 及其优化不够用，而方案 C 又进不了上游时才启动。顺序：
+
+1. **Linux Wayland**：同步条件最好，GPUI 在 Linux 上本来就用 wgpu。
+2. **Windows**：分层是系统支持的，胶水简单，但同步要先在实机上量。
+3. **macOS**：先等上游 #61291（6.1 节），那样能在 GPUI 自己的帧里合成，天然同步，窗口也不必透明；等不到再用原型的做法，并先解决 drawable 阻塞。
+
+启动前先补完原型的三项测量：拖动改变窗口大小时的同步、屏幕常亮下两种方案的完整基准、渲染线程送显后的同步和界面线程开销。原型代码在分支 `claude/underlay-feasibility-5c0830`（提交 `54641c9`），没有合并进 main。
 
 ### 6.3 不采用：用 unsafe 访问 GPUI 内部，或改用 C
 
@@ -400,4 +412,4 @@ VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 5. `Window::paint_image`、`Window::drop_image` 和 `RenderImage` 的签名与格式说明有没有变化。
 6. 是否出现了新的外部纹理或自定义渲染接口。如果有，重新评估方案 C。
 7. 6.1 节所列上游 PR 和讨论的进展。#61291 合并后，macOS 可以经 `surface()` 走 BGRA 的 IOSurface 零拷贝。
-8. 方案 F 依赖的接口（3.5 节）：GPUI 是否仍支持透明窗口背景、macOS 的 Metal 图层是否仍随之设为非不透明；`Window` 是否仍实现 `HasWindowHandle`；Windows 上 GPUI 是否仍只用顶层 DirectComposition 目标。
+8. 方案 F 依赖的接口（3.5 节）：GPUI 是否仍支持透明窗口背景、macOS 的 Metal 图层是否仍随之设为非不透明；`Window` 是否仍实现 `HasWindowHandle`；Windows 上 GPUI 是否仍只用顶层 DirectComposition 目标。完整清单见[可行性报告](viewport-underlay-feasibility.md)第 8 节。

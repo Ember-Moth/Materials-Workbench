@@ -2,7 +2,7 @@
 
 > 状态：macOS 已做原型并实测；Windows、Linux 只做了源码核查，**未实测** · 2026-10-23
 > 相关：[3D 视口：技术选型与 GPUI 集成](viewport-rendering.md)（方案 F 的设想在 6.2 节，方案 A 的实测在 8.1、8.2 节）
-> 原型代码：只在分支 `claude/underlay-feasibility-5c0830` 上，不合并进 main。下文提到的 `apps/viewport-poc` 的方案 F 模式、`src/underlay.rs` 和 `Renderer::render_to` 都在那个分支里。
+> 原型代码：只在分支 `claude/underlay-feasibility-5c0830` 上（提交 `54641c9`），不合并进 main。下文提到的 `apps/viewport-poc` 的方案 F 模式、`src/underlay.rs` 和 `Renderer::render_to` 都在那个分支里。
 > 源码依据：`Cargo.lock` 锁定的 GPUI Kit 0.8.0、`gpui-pre-*` 0.3.9、`gpui-component` 0.8.0、`gpui-base` 0.8.0、`wgpu`/`wgpu-hal`/`wgpu-types` 29.0.4、`raw-window-metal` 1.1.0、`wayland-client` 0.31.15，位于 `~/.cargo/registry/src/index.crates.io-*/`。文中“文件:行号”都指这些 crate。
 
 ## 1. 结论
