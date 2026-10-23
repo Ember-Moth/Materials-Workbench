@@ -1,20 +1,52 @@
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::select::{SearchableVec, SelectEvent, SelectState};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, Theme, h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, StyledExt, Theme, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal::{AtomRef, CellParam, CoordinateConstraint, EditMode, SiteId};
+use mw_crystal::{AtomRef, CellParam, CoordinateConstraint, EditMode, SiteId, element};
 use mw_viewport::Viewport;
 
 use crate::actions::*;
 use crate::document::StructureDocument;
 use crate::scene::{self, DisplayModel, LineColors};
 use crate::selection::Selection;
-use crate::{dialogs, format};
+use crate::{dialogs, editing, format};
+
+/// Element symbols, the items of every element picker.
+pub(crate) type ElementList = SearchableVec<&'static str>;
+
+/// The fields for one occupant of the edited site.
+pub(crate) struct OccupantEditor {
+    pub label: SharedString,
+    pub element: Entity<SelectState<ElementList>>,
+    pub occupancy: Entity<InputState>,
+}
+
+/// A searchable element picker showing `selected`.
+pub(crate) fn element_picker(
+    selected: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<SelectState<ElementList>> {
+    let symbols: Vec<&'static str> = element::symbols().collect();
+    let index = symbols
+        .iter()
+        .position(|symbol| *symbol == selected)
+        .map(|row| IndexPath::default().row(row));
+    cx.new(|cx| SelectState::new(SearchableVec::new(symbols), index, window, cx).searchable(true))
+}
+
+/// Whether an input event commits the typed value: Enter, or leaving the
+/// field.
+fn commits(event: &InputEvent) -> bool {
+    matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PanelTab {
@@ -35,10 +67,8 @@ impl PanelTab {
 
 /// One open structure: header, 3D view with its overlays, and the side
 /// panel. Owns presentation state (panel, display model, selection,
-/// measurement in progress) and the field editors.
-///
-/// Mock: the field editors accept input, but nothing is applied to the
-/// document yet.
+/// measurement in progress) and the field editors, which edit the document
+/// (`editing.rs`).
 pub struct StructureWorkspace {
     pub(crate) document: StructureDocument,
     pub(crate) viewport: Entity<Viewport>,
@@ -52,14 +82,17 @@ pub struct StructureWorkspace {
     pub(crate) selection: Selection,
     pub(crate) cell_inputs: Vec<(CellParam, Entity<InputState>)>,
     pub(crate) coordinate_inputs: [Entity<InputState>; 3],
-    pub(crate) occupancy_input: Entity<InputState>,
+    /// The site the coordinate and occupant fields show.
+    pub(crate) editing_site: Option<SiteId>,
+    pub(crate) occupants: Vec<OccupantEditor>,
     _subscriptions: Vec<Subscription>,
+    _occupant_subscriptions: Vec<Subscription>,
 }
 
 impl StructureWorkspace {
     pub fn new(document: StructureDocument, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let viewport = cx.new(|_| Viewport::new());
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             // Overlays (labels) follow the camera, so redraw with the viewport.
             cx.observe(&viewport, |_, _, cx| cx.notify()),
             cx.subscribe_in(&viewport, window, Self::on_viewport_event),
@@ -67,41 +100,56 @@ impl StructureWorkspace {
             cx.observe_global::<Theme>(|this, cx| this.refresh_scene(cx)),
         ];
 
-        let params = *document.structure.lattice.params();
-        let cell_inputs = CellParam::ALL
+        let params = *document.structure().lattice.params();
+        let cell_inputs: Vec<(CellParam, Entity<InputState>)> = CellParam::ALL
             .iter()
             .map(|&param| {
-                let value = match param {
-                    CellParam::A => format::length(params.a.value()),
-                    CellParam::B => format::length(params.b.value()),
-                    CellParam::C => format::length(params.c.value()),
-                    CellParam::Alpha => format::angle(params.alpha.value()),
-                    CellParam::Beta => format::angle(params.beta.value()),
-                    CellParam::Gamma => format::angle(params.gamma.value()),
-                };
+                let value = format::cell_param(param, params.get(param).value());
                 (
                     param,
                     cx.new(|cx| InputState::new(window, cx).default_value(value)),
                 )
             })
             .collect();
+        for (param, input) in &cell_inputs {
+            let param = *param;
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |this, _, event, window, cx| {
+                    if commits(event) {
+                        this.commit_cell(param, window, cx);
+                    }
+                },
+            ));
+        }
         let mut input = |cx: &mut Context<Self>| cx.new(|cx| InputState::new(window, cx));
         let coordinate_inputs = [input(cx), input(cx), input(cx)];
-        let occupancy_input = input(cx);
+        for (axis, input) in coordinate_inputs.iter().enumerate() {
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |this, _, event, window, cx| {
+                    if commits(event) {
+                        this.commit_coordinate(axis, window, cx);
+                    }
+                },
+            ));
+        }
 
         // Start on the first site that has something to edit, which shows the
         // symmetry constraints best.
         let selection = document
-            .structure
+            .structure()
             .sites
             .iter()
             .find(|site| {
                 document
-                    .derived
+                    .derived()
                     .site_symmetry(site.id)
                     .is_some_and(|s| s.coordinates.contains(&CoordinateConstraint::Free))
             })
-            .or(document.structure.sites.first())
+            .or(document.structure().sites.first())
             .map_or_else(Selection::default, |site| Selection::site(site.id));
 
         let mut this = Self {
@@ -116,8 +164,10 @@ impl StructureWorkspace {
             selection,
             cell_inputs,
             coordinate_inputs,
-            occupancy_input,
+            editing_site: None,
+            occupants: Vec::new(),
             _subscriptions: subscriptions,
+            _occupant_subscriptions: Vec::new(),
         };
         this.sync_site_inputs(window, cx);
         this.refresh_scene(cx);
@@ -159,23 +209,92 @@ impl StructureWorkspace {
         }
     }
 
-    pub(crate) fn sync_site_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Shows the document's cell parameters in the cell fields.
+    pub(crate) fn sync_cell_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let params = *self.document.structure().lattice.params();
+        for (param, input) in &self.cell_inputs {
+            let value = format::cell_param(*param, params.get(*param).value());
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+    }
+
+    /// Shows the selected site in the coordinate and occupant fields. The
+    /// occupant fields are made again only when the site or its occupants'
+    /// labels change, so a field keeps its focus across other edits.
+    pub(crate) fn sync_site_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self
             .selected_site()
-            .and_then(|id| self.document.structure.site(id))
+            .and_then(|id| self.document.structure().site(id))
+            .cloned()
         else {
+            self.editing_site = None;
+            self.occupants.clear();
+            self._occupant_subscriptions.clear();
             return;
         };
-        let position = site.position;
-        let occupancy = site.occupants.first().map_or(1.0, |o| o.occupancy.value());
-        for (input, value) in self.coordinate_inputs.iter().zip(position) {
+        for (input, value) in self.coordinate_inputs.iter().zip(site.position) {
             input.update(cx, |state, cx| {
                 state.set_value(format::coordinate(value), window, cx)
             });
         }
-        self.occupancy_input.update(cx, |state, cx| {
-            state.set_value(format::occupancy(occupancy), window, cx)
-        });
+        let same_occupants = self.editing_site == Some(site.id)
+            && self
+                .occupants
+                .iter()
+                .map(|editor| editor.label.as_ref())
+                .eq(site.occupants.iter().map(|o| o.label.as_str()));
+        self.editing_site = Some(site.id);
+        if same_occupants {
+            for (editor, occupant) in self.occupants.iter().zip(&site.occupants) {
+                let element = occupant.species.element.as_str();
+                let symbol = element::symbols().find(|symbol| *symbol == element);
+                editor.element.update(cx, |state, cx| match symbol {
+                    Some(symbol) => state.set_selected_value(&symbol, window, cx),
+                    None => state.set_selected_index(None, window, cx),
+                });
+                let occupancy = format::occupancy(occupant.occupancy.value());
+                editor
+                    .occupancy
+                    .update(cx, |state, cx| state.set_value(occupancy, window, cx));
+            }
+            return;
+        }
+        self.occupants.clear();
+        self._occupant_subscriptions.clear();
+        for occupant in &site.occupants {
+            let label = SharedString::from(occupant.label.clone());
+            let element = element_picker(&occupant.species.element, window, cx);
+            let occupancy = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(format::occupancy(occupant.occupancy.value()))
+            });
+            let site = site.id;
+            let picked = label.clone();
+            self._occupant_subscriptions.push(cx.subscribe_in(
+                &element,
+                window,
+                move |this, _, event: &SelectEvent<ElementList>, window, cx| {
+                    if let SelectEvent::Confirm(Some(symbol)) = event {
+                        this.set_element(site, picked.clone(), symbol, window, cx);
+                    }
+                },
+            ));
+            let typed = label.clone();
+            self._occupant_subscriptions.push(cx.subscribe_in(
+                &occupancy,
+                window,
+                move |this, _, event, window, cx| {
+                    if commits(event) {
+                        this.commit_occupancy(typed.clone(), window, cx);
+                    }
+                },
+            ));
+            self.occupants.push(OccupantEditor {
+                label,
+                element,
+                occupancy,
+            });
+        }
     }
 
     /// Rebuilds what the viewport draws, after the display model or the
@@ -218,19 +337,10 @@ impl StructureWorkspace {
     /// selection.
     fn clear_selection(&mut self, _: &ClearSelection, window: &mut Window, cx: &mut Context<Self>) {
         if self.measuring && !self.measure_picks.is_empty() {
-            self.measure_pick(None, cx);
+            self.measure_pick(None, window, cx);
         } else {
             self.set_selection(Selection::default(), window, cx);
         }
-    }
-
-    fn delete_selection(
-        &mut self,
-        _: &DeleteSelection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        dialogs::open_delete(self, window, cx);
     }
 
     fn convert_to_p1(&mut self, _: &ConvertToP1, window: &mut Window, cx: &mut Context<Self>) {
@@ -296,7 +406,7 @@ impl StructureWorkspace {
     // MARK: Rendering
 
     pub(crate) fn mode_label(&self) -> SharedString {
-        let structure = &self.document.structure;
+        let structure = self.document.structure();
         match (structure.edit_mode(), self.document.space_group_symbol()) {
             (EditMode::Symmetric, Some(symbol)) => tr!("header.mode.symmetric", symbol = symbol),
             (EditMode::Symmetric, None) => tr!("header.mode.symmetric_unnamed"),
@@ -306,6 +416,7 @@ impl StructureWorkspace {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let crystal = &self.document.crystal;
         h_flex()
             .h_12()
             .flex_none()
@@ -337,7 +448,58 @@ impl StructureWorkspace {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(tr!("header.saved")),
+                    // Mock: nothing is saved until project files exist (M6);
+                    // the status only tells whether there are edits.
+                    .child(match crystal.undo_command() {
+                        Some(_) => tr!("header.unsaved"),
+                        None => tr!("header.saved"),
+                    }),
+            )
+            .child(
+                Button::new("undo")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(Lucide::Undo2))
+                    .disabled(crystal.undo_command().is_none())
+                    .tooltip_with_action(
+                        crystal.undo_command().map_or_else(
+                            || tr!("header.undo"),
+                            |command| {
+                                tr!(
+                                    "header.undo_command",
+                                    command = editing::command_name(command)
+                                )
+                            },
+                        ),
+                        &Undo,
+                        Some(KEY_CONTEXT),
+                    )
+                    .on_click(
+                        cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(Undo), cx)),
+                    ),
+            )
+            .child(
+                Button::new("redo")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(Lucide::Redo2))
+                    .disabled(crystal.redo_command().is_none())
+                    .tooltip_with_action(
+                        crystal.redo_command().map_or_else(
+                            || tr!("header.redo"),
+                            |command| {
+                                tr!(
+                                    "header.redo_command",
+                                    command = editing::command_name(command)
+                                )
+                            },
+                        ),
+                        &Redo,
+                        Some(KEY_CONTEXT),
+                    )
+                    .on_click(
+                        cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(Redo), cx)),
+                    ),
             )
             .child(
                 Button::new("export")
@@ -400,6 +562,8 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::toggle_measure))
             .on_action(cx.listener(Self::clear_selection))
             .on_action(cx.listener(Self::delete_selection))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::convert_to_p1))
             .on_action(cx.listener(Self::make_supercell))
             .on_action(cx.listener(Self::export))

@@ -190,8 +190,8 @@ pub(crate) fn scene(
     model: DisplayModel,
     colors: LineColors,
 ) -> Scene {
-    let derived = &document.derived;
-    let lattice = &document.structure.lattice;
+    let derived = document.derived();
+    let lattice = &document.structure().lattice;
     let spheres: Vec<SphereInstance> = derived
         .atoms
         .iter()
@@ -242,7 +242,9 @@ pub(crate) fn scene(
         .map(|(i, j)| line(corner(i), corner(j), CELL_EDGE_WIDTH, 0.0, cell_color))
         .collect();
     let measurement_color = linear(colors.measurement);
-    for measurement in &document.measurements {
+    // Stale measurements may refer to atoms that are gone or moved.
+    for annotation in document.crystal.annotations().iter().filter(|a| !a.stale) {
+        let measurement = &annotation.measurement;
         let points: Option<Vec<[f64; 3]>> = measurement
             .atoms()
             .iter()

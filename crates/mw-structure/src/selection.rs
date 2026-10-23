@@ -3,7 +3,7 @@
 //! viewport single atoms; ⇧- or ⌘-click adds and removes atoms.
 
 use gpui_kit::*;
-use mw_crystal::{AtomRef, SiteId};
+use mw_crystal::{AtomFate, AtomRef, IdMap, SiteId, Target};
 use mw_viewport::{Pick, Viewport, ViewportEvent};
 
 use crate::workspace::StructureWorkspace;
@@ -55,6 +55,50 @@ impl Selection {
             .any(|item| *item == Selected::Atom(atom) || *item == Selected::Site(atom.site))
     }
 
+    /// What an edit of the selection names: whole sites, and single atoms.
+    pub fn targets(&self) -> Vec<Target> {
+        self.0
+            .iter()
+            .map(|item| match *item {
+                Selected::Site(site) => Target::Site(site),
+                Selected::Atom(atom) => Target::Atom(atom),
+            })
+            .collect()
+    }
+
+    /// The sites selected or with a selected atom, in selection order.
+    pub fn sites(&self) -> Vec<SiteId> {
+        let mut sites = Vec::new();
+        for item in &self.0 {
+            if !sites.contains(&item.site()) {
+                sites.push(item.site());
+            }
+        }
+        sites
+    }
+
+    /// The selection after an edit (design §7.11): an atom that no longer
+    /// exists as it was becomes its whole site, and removed sites drop out.
+    pub fn remap(&self, ids: &IdMap) -> Self {
+        let mut items = Vec::new();
+        for item in &self.0 {
+            let mapped = match *item {
+                Selected::Site(site) => ids.site(site).map(Selected::Site),
+                Selected::Atom(atom) => match ids.atom(atom) {
+                    AtomFate::Kept(atom) => Some(Selected::Atom(atom)),
+                    AtomFate::Site(site) => Some(Selected::Site(site)),
+                    AtomFate::Removed => None,
+                },
+            };
+            if let Some(mapped) = mapped
+                && !items.contains(&mapped)
+            {
+                items.push(mapped);
+            }
+        }
+        Self(items)
+    }
+
     /// Adds the atom, or removes it if it is selected by itself.
     pub fn toggle_atom(&mut self, atom: AtomRef) {
         let item = Selected::Atom(atom);
@@ -102,7 +146,7 @@ impl StructureWorkspace {
         };
         let spheres: Vec<usize> = self
             .document
-            .derived
+            .derived()
             .atoms
             .iter()
             .enumerate()
@@ -116,7 +160,7 @@ impl StructureWorkspace {
     /// document's displayed atoms.
     pub(crate) fn picked_atom(&self, pick: Option<Pick>) -> Option<AtomRef> {
         match pick? {
-            Pick::Sphere(ix) => self.document.derived.atoms.get(ix).map(|atom| atom.atom),
+            Pick::Sphere(ix) => self.document.derived().atoms.get(ix).map(|atom| atom.atom),
             Pick::Bond(_) => None,
         }
     }
@@ -125,7 +169,7 @@ impl StructureWorkspace {
     /// window, for driving the viewport with synthetic pointer events (the
     /// screenshot tour). `None` if no such atom is displayed.
     pub fn displayed_atom_position(&self, fractional: [f64; 3], cx: &App) -> Option<Point<Pixels>> {
-        let derived = &self.document.derived;
+        let derived = self.document.derived();
         let atom = derived.atoms.iter().find(|atom| {
             derived
                 .fractional(atom.atom)
@@ -149,7 +193,7 @@ impl StructureWorkspace {
         if self.measuring {
             // A click on a bond neither picks nor resets.
             if atom.is_some() || pick.is_none() {
-                self.measure_pick(atom, cx);
+                self.measure_pick(atom, window, cx);
             }
             return;
         }
@@ -171,7 +215,8 @@ impl StructureWorkspace {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's glob would shadow the `test` attribute.
-    use mw_crystal::{AtomRef, SiteId};
+    use mw_crystal::sample::{self, SampleKey};
+    use mw_crystal::{AtomRef, CrystalDocument, Edit, SiteId, Target};
 
     use super::Selection;
 
@@ -201,5 +246,28 @@ mod tests {
         assert_eq!(selection.primary_site(), Some(SiteId(1)));
         selection.toggle_atom(atom(1, 0));
         assert_eq!(selection, Selection::default());
+    }
+
+    #[test]
+    fn selections_follow_edits() {
+        let sample = sample::load(SampleKey::StrontiumTitanate);
+        let mut document = CrystalDocument::with_derived(sample.structure, sample.derived);
+        let mut selection = Selection::atom(atom(1, 0));
+        selection.toggle_atom(atom(3, 2));
+        selection.0.push(super::Selected::Site(SiteId(2)));
+        assert_eq!(
+            selection.targets()[1],
+            Target::Atom(atom(3, 2)),
+            "atoms stay atoms"
+        );
+        assert_eq!(selection.sites(), [SiteId(1), SiteId(3), SiteId(2)]);
+
+        let outcome = document.edit(Edit::RemoveSite { site: SiteId(3) }).unwrap();
+        let remapped = selection.remap(&outcome.ids);
+        assert_eq!(remapped.sites(), [SiteId(1), SiteId(2)]);
+        assert!(remapped.contains_atom(atom(1, 0)));
+        // Nothing else changed: the same selection.
+        let outcome = document.undo().unwrap();
+        assert_eq!(remapped.remap(&outcome.ids), remapped);
     }
 }

@@ -1,6 +1,6 @@
 use gpui_kit::SharedString;
 use mw_crystal::sample::{self, SampleKey};
-use mw_crystal::{Derived, Measurement, Structure};
+use mw_crystal::{CrystalDocument, Derived, Structure};
 use mw_crystal_io::{Diagnostic, ImportedBlock, Severity};
 
 use crate::diagnostics::DiagnosticRow;
@@ -26,14 +26,13 @@ impl DocumentDiagnostic {
     }
 }
 
-/// One open structure and everything shown about it.
+/// One open structure and everything shown about it. The structure, its
+/// derived data, measurements and undo history are the domain document;
+/// edits go through it (`CrystalDocument::execute`).
 pub struct StructureDocument {
     pub(crate) project_name: SharedString,
     pub(crate) name: SharedString,
-    pub(crate) structure: Structure,
-    pub(crate) derived: Derived,
-    /// Distances and angles measured in this session, in the order taken.
-    pub(crate) measurements: Vec<Measurement>,
+    pub(crate) crystal: CrystalDocument,
     pub(crate) diagnostics: Vec<DocumentDiagnostic>,
 }
 
@@ -53,16 +52,22 @@ impl StructureDocument {
         Self {
             project_name: project_name.into(),
             name: name.into(),
-            structure: sample.structure,
-            derived: sample.derived,
-            measurements: Vec::new(),
+            crystal: CrystalDocument::with_derived(sample.structure, sample.derived),
             diagnostics,
         }
     }
 
+    pub(crate) fn structure(&self) -> &Structure {
+        self.crystal.structure()
+    }
+
+    pub(crate) fn derived(&self) -> &Derived {
+        self.crystal.derived()
+    }
+
     /// The identified space group type in display form, e.g. `P4₂/mnm`.
     pub(crate) fn space_group_symbol(&self) -> Option<String> {
-        let space_group = self.derived.symmetry.space_group.as_ref()?;
+        let space_group = self.derived().symmetry.space_group.as_ref()?;
         Some(format::space_group(space_group.hm_symbol))
     }
 
@@ -77,9 +82,7 @@ impl StructureDocument {
         Some(Self {
             project_name: project_name.into(),
             name: name.into(),
-            derived: Derived::compute(&structure),
-            structure,
-            measurements: Vec::new(),
+            crystal: CrystalDocument::new(structure),
             diagnostics: block
                 .diagnostics
                 .iter()
@@ -104,12 +107,12 @@ mod tests {
         );
         let document =
             StructureDocument::from_import("p", "x", &report.blocks[0]).expect("structure");
-        assert_eq!(document.derived.atoms.len(), 8);
+        assert_eq!(document.derived().atoms.len(), 8);
         // Three defaulted angles and one element taken from its label.
         assert_eq!(document.diagnostics.len(), 4);
         assert_eq!(document.space_group_symbol().as_deref(), Some("P1"));
         // A lone atom in a cubic cell: the atoms have the full cubic symmetry.
-        let detected = document.derived.symmetry.detected.as_ref().unwrap();
+        let detected = document.derived().symmetry.detected.as_ref().unwrap();
         assert_eq!(detected.number, 221);
     }
 

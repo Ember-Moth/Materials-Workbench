@@ -33,7 +33,7 @@ impl StructureWorkspace {
         let theme = cx.theme();
         let labels = self.measurement_labels(cx);
         let hovered = self.render_hovered_atom(cx);
-        let atom_count = self.document.derived.atoms.len();
+        let atom_count = self.document.derived().atoms.len();
         let chip = || {
             div()
                 .absolute()
@@ -104,9 +104,9 @@ impl StructureWorkspace {
         let theme = cx.theme();
         let viewport = self.viewport.read(cx);
         let atom = self.picked_atom(viewport.hovered())?;
-        let derived = &self.document.derived;
-        let site = self.document.structure.site(atom.site)?;
-        let lattice = &self.document.structure.lattice;
+        let derived = self.document.derived();
+        let site = self.document.structure().site(atom.site)?;
+        let lattice = &self.document.structure().lattice;
         let position = viewport.project(derived.cartesian(lattice, atom)?)? + HOVER_OFFSET;
         let coordinates = derived.fractional(atom)?.map(format::coordinate).join(", ");
         Some(

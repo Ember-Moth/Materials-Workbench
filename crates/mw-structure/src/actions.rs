@@ -10,6 +10,8 @@ gpui_kit::actions!(
         ToggleMeasure,
         ClearSelection,
         DeleteSelection,
+        Undo,
+        Redo,
         ConvertToP1,
         MakeSupercell,
         ExportStructure,
@@ -34,6 +36,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-b", TogglePanel, context),
         KeyBinding::new("cmd-0", ResetView, context),
         KeyBinding::new("cmd-e", ExportStructure, context),
+        // Text fields undo their own typing in their deeper context.
+        KeyBinding::new("cmd-z", Undo, context),
+        KeyBinding::new("cmd-shift-z", Redo, context),
         // Text fields bind these keys in their own, deeper context, so typing
         // still edits text.
         KeyBinding::new("m", ToggleMeasure, context),
@@ -68,6 +73,18 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             }
         };
     vec![
+        command(
+            tr!("command.undo"),
+            &["undo", "chexiao"],
+            Lucide::Undo2,
+            Box::new(Undo),
+        ),
+        command(
+            tr!("command.redo"),
+            &["redo", "chongzuo"],
+            Lucide::Redo2,
+            Box::new(Redo),
+        ),
         command(
             tr!("command.make_supercell"),
             &["supercell", "chaobao", "chao bao"],

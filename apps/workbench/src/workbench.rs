@@ -26,6 +26,11 @@ pub struct Workbench {
     sidebar: Entity<ProjectSidebar>,
     sidebar_open: bool,
     workspace: Option<Entity<StructureWorkspace>>,
+    /// Every structure opened in this session, so that switching back finds
+    /// it as it was left, edits, undo history and view included.
+    ///
+    /// Mock: stands in for saving the edits to the project file (M6).
+    opened: Vec<(StructureEntryId, Entity<StructureWorkspace>)>,
     palette: Entity<CommandState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -40,6 +45,7 @@ impl Workbench {
             sidebar,
             sidebar_open: true,
             workspace: None,
+            opened: Vec::new(),
             palette: cx.new(|cx| CommandState::new(window, cx)),
             _subscriptions: subscriptions,
         };
@@ -57,6 +63,15 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some((_, workspace)) = self.opened.iter().find(|(opened, _)| *opened == id) {
+            let workspace = workspace.clone();
+            workspace.focus_handle(cx).focus(window, cx);
+            self.workspace = Some(workspace);
+            self.sidebar
+                .update(cx, |sidebar, cx| sidebar.set_selected(Some(id), cx));
+            cx.notify();
+            return;
+        }
         let Some(document) =
             self.sidebar
                 .read(cx)
@@ -79,6 +94,7 @@ impl Workbench {
         let workspace = cx.new(|cx| StructureWorkspace::new(document, window, cx));
         let focus = workspace.focus_handle(cx);
         focus.focus(window, cx);
+        self.opened.push((id, workspace.clone()));
         self.workspace = Some(workspace);
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_selected(Some(id), cx));

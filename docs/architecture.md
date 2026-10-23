@@ -151,9 +151,10 @@ Workbench（窗口根视图，apps/workbench）
 | 超胞的诊断 | `mw-structure/src/document.rs` | 派生结构的来源记录 | M5 |
 | 显示固定为一个晶胞，面、棱、角上的原子在对面补一份 | `mw-crystal/src/expand.rs` 的 `display_atoms` | 视图层的显示范围 | v0.3 |
 | 导入时不保留未识别的字段 | `mw-crystal-io` | CIF 往返导出 | M5 变换与导出 |
-| 字段可以输入，但不会改变结构 | `mw-structure` 的属性面板 | 编辑命令与撤销 | M4 编辑 |
-| 删除、转为 P1、生成超胞、导出：对话框齐全，确认后只提示"尚未实现" | `mw-structure/src/dialogs.rs` | 对应的编辑命令 | M4、M5 |
-| 新建项目、显示范围、多面体、更换元素、混合占位 | 各处的 `not_implemented` | 对应功能 | 见第 10 节 |
+| 编辑只留在本次会话里：切换到别的结构再回来仍在，退出应用即丢失；顶栏的保存状态只表示有没有编辑 | `apps/workbench` 的 `Workbench::opened`、`mw-structure` 的顶栏 | 项目文件 | M6 持久化 |
+| 对称模式下移动位点：自由坐标可以输入，提交时提示尚未实现（P1 模式下是真实的） | `mw-structure/src/editing.rs` | 沿特殊位置移动与吸附（晶体学设计稿 7.4、7.5 节） | v0.2 |
+| 转为 P1（含删除对话框里的"转为 P1 后删除这一个"）、生成超胞、导出：对话框齐全，确认后只提示"尚未实现" | `mw-structure/src/dialogs.rs`、`workspace.rs` | 对应的命令 | M5 |
+| 新建项目、显示范围、多面体、添加位点 | 各处的 `not_implemented` | 对应功能 | 见第 10 节；添加位点属于 v0.2 |
 | P1 结构检测到更高对称性后的"对称化…"只提示尚未实现（检测本身是真实的） | `mw-structure/src/panel.rs` | `Symmetrize` 命令（晶体学设计稿 7.10 节） | v0.2 |
 | "多面体"显示模型画成球棍 | `mw-structure/src/scene.rs` 的 `DisplayModel` | 半透明多面体管线 | v0.3 |
 | 设置不保存 | `apps/workbench/src/settings.rs` | 设置持久化 | M6 |

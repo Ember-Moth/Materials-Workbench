@@ -7,7 +7,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use mw_crystal::{AtomRef, Measurement};
+use mw_crystal::{Annotation, AtomRef, Command, Measurement};
 
 use crate::document::StructureDocument;
 use crate::format;
@@ -20,7 +20,7 @@ pub(crate) fn label(document: &StructureDocument, measurement: &Measurement) -> 
         .iter()
         .map(|atom| {
             document
-                .structure
+                .structure()
                 .site(atom.site)
                 .map_or("?", |s| s.label())
         })
@@ -29,8 +29,19 @@ pub(crate) fn label(document: &StructureDocument, measurement: &Measurement) -> 
 }
 
 /// The value with its unit, or `None` when the measurement is stale.
+pub(crate) fn annotation_value(
+    document: &StructureDocument,
+    annotation: &Annotation,
+) -> Option<String> {
+    if annotation.stale {
+        return None;
+    }
+    value(document, &annotation.measurement)
+}
+
+/// The value with its unit, or `None` when an atom is missing.
 pub(crate) fn value(document: &StructureDocument, measurement: &Measurement) -> Option<String> {
-    let value = measurement.value(&document.structure.lattice, &document.derived)?;
+    let value = measurement.value(&document.structure().lattice, document.derived())?;
     Some(match measurement {
         Measurement::Distance(_) => format::distance(value),
         Measurement::Angle(_) => format::bond_angle(value),
@@ -62,8 +73,13 @@ fn direction(from: Point<Pixels>, to: Point<Pixels>) -> Option<(f32, f32)> {
 
 impl StructureWorkspace {
     /// Adds a clicked atom to the measurement in progress; `None` (empty
-    /// space) starts over.
-    pub(crate) fn measure_pick(&mut self, atom: Option<AtomRef>, cx: &mut Context<Self>) {
+    /// space) starts over. A finished measurement is an undo step.
+    pub(crate) fn measure_pick(
+        &mut self,
+        atom: Option<AtomRef>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match atom {
             None => self.measure_picks.clear(),
             Some(atom) if self.measure_picks.contains(&atom) => return,
@@ -77,12 +93,8 @@ impl StructureWorkspace {
                     }
                     _ => None,
                 };
-                if let Some(measurement) = measurement
-                    && !self.document.measurements.contains(&measurement)
-                {
-                    self.document.measurements.push(measurement);
-                    // The dashed measurement lines are part of the scene.
-                    self.refresh_scene(cx);
+                if let Some(measurement) = measurement {
+                    let _ = self.run(Command::AddMeasurement(measurement), window, cx);
                 }
             }
         }
@@ -90,12 +102,13 @@ impl StructureWorkspace {
         cx.notify();
     }
 
-    pub(crate) fn remove_measurement(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.document.measurements.len() {
-            self.document.measurements.remove(index);
-            self.refresh_scene(cx);
-            cx.notify();
-        }
+    pub(crate) fn remove_measurement(
+        &mut self,
+        measurement: Measurement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = self.run(Command::RemoveMeasurement(measurement), window, cx);
     }
 
     /// The prompt shown over the viewport while measuring.
@@ -116,8 +129,8 @@ impl StructureWorkspace {
         let project = |atom: AtomRef| {
             viewport.project(
                 document
-                    .derived
-                    .cartesian(&document.structure.lattice, atom)?,
+                    .derived()
+                    .cartesian(&document.structure().lattice, atom)?,
             )
         };
         let position = |m: &Measurement| match *m {
@@ -137,58 +150,62 @@ impl StructureWorkspace {
             }
         };
         document
-            .measurements
+            .crystal
+            .annotations()
             .iter()
-            .filter_map(|m| Some((position(m)?, value(document, m)?)))
+            .filter_map(|a| Some((position(&a.measurement)?, annotation_value(document, a)?)))
             .collect()
     }
 
     pub(crate) fn render_measurements(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let rows = self
-            .document
-            .measurements
-            .iter()
-            .enumerate()
-            .map(|(ix, m)| {
-                let value = value(&self.document, m);
-                h_flex()
-                    .id(("measurement", ix))
-                    .gap_2()
-                    .pl_2()
-                    .py_0p5()
-                    .text_sm()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(label(&self.document, m)),
-                    )
-                    .child(match value {
-                        Some(value) => div()
-                            .font_family(theme.mono_font_family.clone())
-                            .child(value),
-                        None => div()
-                            .text_color(theme.muted_foreground)
-                            .child(tr!("panel.measurements.stale")),
-                    })
-                    .child(
-                        Button::new(("remove-measurement", ix))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .tooltip(tr!("panel.measurements.remove"))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.remove_measurement(ix, cx)),
-                            ),
-                    )
-            });
+        let rows =
+            self.document
+                .crystal
+                .annotations()
+                .iter()
+                .enumerate()
+                .map(|(ix, annotation)| {
+                    let m = &annotation.measurement;
+                    let measurement = *m;
+                    let value = annotation_value(&self.document, annotation);
+                    h_flex()
+                        .id(("measurement", ix))
+                        .gap_2()
+                        .pl_2()
+                        .py_0p5()
+                        .text_sm()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(label(&self.document, m)),
+                        )
+                        .child(match value {
+                            Some(value) => div()
+                                .font_family(theme.mono_font_family.clone())
+                                .child(value),
+                            None => div()
+                                .text_color(theme.muted_foreground)
+                                .child(tr!("panel.measurements.stale")),
+                        })
+                        .child(
+                            Button::new(("remove-measurement", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .tooltip(tr!("panel.measurements.remove"))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.remove_measurement(measurement, window, cx)
+                                })),
+                        )
+                });
         v_flex()
             .p_2()
             .gap_1()
             .children(rows)
-            .when(self.document.measurements.is_empty(), |this| {
+            .when(self.document.crystal.annotations().is_empty(), |this| {
                 this.child(
                     div()
                         .p_2()
@@ -226,7 +243,7 @@ mod tests {
         let document = rutile();
         // Member of a site's orbit at a fractional position, in the home cell.
         let at = |site: u32, p: [f64; 3]| {
-            let orbit = document.derived.orbit(SiteId(site)).unwrap();
+            let orbit = document.derived().orbit(SiteId(site)).unwrap();
             let member = orbit
                 .positions
                 .iter()

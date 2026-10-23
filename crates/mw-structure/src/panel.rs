@@ -5,6 +5,7 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::select::Select;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -173,8 +174,8 @@ impl StructureWorkspace {
 
     fn render_properties(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let structure = &self.document.structure;
-        let derived = &self.document.derived;
+        let structure = self.document.structure();
+        let derived = self.document.derived();
         let params = structure.lattice.params();
 
         let analysis = &derived.symmetry;
@@ -365,8 +366,8 @@ impl StructureWorkspace {
 
     fn render_selected_site(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let structure = &self.document.structure;
-        let derived = &self.document.derived;
+        let structure = self.document.structure();
+        let derived = self.document.derived();
         let selected = self.selected_site().and_then(|id| structure.site(id));
         let Some(site) = selected else {
             return v_flex()
@@ -392,11 +393,54 @@ impl StructureWorkspace {
                 cx,
             )
         };
-        let element = site
-            .occupants
-            .first()
-            .map(|o| o.species.element.clone())
-            .unwrap_or_default();
+        let site_id = site.id;
+        let mixed = self.occupants.len() > 1;
+        let column = |text: SharedString| {
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(text)
+        };
+        // Label, element and occupancy line up in three columns.
+        let occupants = self.occupants.iter().map(|editor| {
+            let label = editor.label.clone();
+            h_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .w_12()
+                        .flex_none()
+                        .truncate()
+                        .text_sm()
+                        .child(label.clone()),
+                )
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Select::new(&editor.element)
+                            .small()
+                            .menu_max_h(rems(16.))
+                            .search_placeholder(tr!("panel.site.search_element")),
+                    ),
+                )
+                .child(
+                    div()
+                        .w_20()
+                        .flex_none()
+                        .child(Input::new(&editor.occupancy).small()),
+                )
+                .when(mixed, |row| {
+                    row.child(
+                        Button::new(ElementId::Name(format!("remove-{label}").into()))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .tooltip(tr!("panel.site.remove_occupant", label = label.clone()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.remove_occupant(site_id, label.clone(), window, cx)
+                            })),
+                    )
+                })
+        });
 
         section(
             tr!("panel.site.title", label = site.label().to_string()),
@@ -421,46 +465,28 @@ impl StructureWorkspace {
         )
         .child(h_flex().gap_2().children([0, 1, 2].map(coordinate)))
         .child(
-            h_flex()
-                .gap_2()
+            v_flex()
+                .gap_1()
                 .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_1()
+                    h_flex()
+                        .gap_2()
                         .child(
                             div()
-                                .h_4()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(tr!("panel.site.element")),
+                                .w_12()
+                                .flex_none()
+                                .child(column(tr!("panel.site.label"))),
                         )
+                        .child(div().flex_1().child(column(tr!("panel.site.element"))))
                         .child(
-                            Button::new("site-element")
-                                .outline()
-                                .small()
-                                .w_full()
-                                .child(
-                                    h_flex().w_full().justify_between().child(element).child(
-                                        Icon::new(IconName::ChevronDown)
-                                            .xsmall()
-                                            .text_color(theme.muted_foreground),
-                                    ),
-                                )
-                                .on_click(cx.listener(|_, _, window, cx| {
-                                    dialogs::not_implemented(
-                                        tr!("feature.change_element"),
-                                        window,
-                                        cx,
-                                    )
-                                })),
-                        ),
+                            div()
+                                .w_20()
+                                .flex_none()
+                                .child(column(tr!("panel.site.occupancy"))),
+                        )
+                        // Room for the remove buttons.
+                        .when(mixed, |row| row.child(div().w_6().flex_none())),
                 )
-                .child(field(
-                    tr!("panel.site.occupancy"),
-                    FieldNote::None,
-                    Input::new(&self.occupancy_input),
-                    cx,
-                )),
+                .children(occupants),
         )
         .child(
             h_flex().child(
@@ -469,8 +495,9 @@ impl StructureWorkspace {
                     .small()
                     .icon(IconName::Plus)
                     .label(tr!("panel.site.add_occupant"))
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        dialogs::not_implemented(tr!("feature.mixed_occupancy"), window, cx)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let entity = cx.entity();
+                        dialogs::open_add_occupant(this, entity, window, cx)
                     })),
             ),
         )
@@ -478,10 +505,10 @@ impl StructureWorkspace {
 
     fn render_sites(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let structure = &self.document.structure;
+        let structure = self.document.structure();
         let rows = structure.sites.iter().map(|site| {
             let id = site.id;
-            let derived = &self.document.derived;
+            let derived = self.document.derived();
             let wyckoff = derived
                 .site_symmetry(id)
                 .and_then(|s| s.wyckoff.as_ref())
@@ -554,6 +581,8 @@ impl StructureWorkspace {
                             .child(tr!("panel.sites.count", count = structure.sites.len())),
                     )
                     .child(
+                        // Mock: adding sites, with snapping to special
+                        // positions, is v0.2 (crystallography design §7.6).
                         Button::new("add-site")
                             .outline()
                             .xsmall()

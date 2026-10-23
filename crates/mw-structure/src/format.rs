@@ -28,6 +28,15 @@ pub(crate) fn coordinate(value: f64) -> String {
     }
 }
 
+/// A cell parameter as its field shows it: a length or an angle.
+pub(crate) fn cell_param(param: mw_crystal::CellParam, value: f64) -> String {
+    use mw_crystal::CellParam;
+    match param {
+        CellParam::A | CellParam::B | CellParam::C => length(value),
+        CellParam::Alpha | CellParam::Beta | CellParam::Gamma => angle(value),
+    }
+}
+
 pub(crate) fn occupancy(value: f64) -> String {
     format!("{value:.3}")
 }

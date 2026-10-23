@@ -13,6 +13,21 @@ header:
   saved:
     en: Saved
     zh-CN: 已保存
+  unsaved:
+    en: Unsaved changes
+    zh-CN: 有未保存的更改
+  undo:
+    en: Undo
+    zh-CN: 撤销
+  redo:
+    en: Redo
+    zh-CN: 重做
+  undo_command:
+    en: "Undo %{command}"
+    zh-CN: "撤销「%{command}」"
+  redo_command:
+    en: "Redo %{command}"
+    zh-CN: "重做「%{command}」"
   export:
     en: Export…
     zh-CN: 导出…
@@ -160,12 +175,21 @@ panel:
     form:
       en: "Coordinates %{form}"
       zh-CN: "坐标形式 %{form}"
+    label:
+      en: Label
+      zh-CN: 标签
     element:
       en: Element
       zh-CN: 元素
     occupancy:
       en: Occupancy
       zh-CN: 占位率
+    search_element:
+      en: Element symbol
+      zh-CN: 元素符号
+    remove_occupant:
+      en: "Remove %{label} from this site"
+      zh-CN: "从此位点删除 %{label}"
     add_occupant:
       en: Add mixed occupant…
       zh-CN: 添加混合占位…
@@ -228,19 +252,12 @@ crystal_system:
     en: Cubic
     zh-CN: 立方晶系
 dialog:
+  list_separator:
+    en: ", "
+    zh-CN: 、
   cancel:
     en: Cancel
     zh-CN: 取消
-  delete:
-    en: Delete
-    zh-CN: 删除
-  delete_site:
-    title:
-      en: "Delete %{label}?"
-      zh-CN: "删除 %{label}？"
-    description:
-      en: You can undo this.
-      zh-CN: 删除后可以撤销。
   delete_atom:
     title:
       en: "Which atoms of %{label} should be deleted?"
@@ -257,6 +274,15 @@ dialog:
     one:
       en: Convert to P1 and delete this one
       zh-CN: 转为 P1 后删除这一个
+    title_many:
+      en: Which atoms should be deleted?
+      zh-CN: 删除哪些原子？
+    description_many:
+      en: "The structure is in symmetry mode (%{symbol}), and the selected atoms belong to %{labels}, which have %{count} equivalent atoms in the cell. Deleting the sites removes all %{count}; deleting only the selected atoms needs the structure converted to P1 first. Both can be undone."
+      zh-CN: "当前结构处于对称模式（%{symbol}），选中的原子分属 %{labels}，它们在晶胞内共有 %{count} 个等效原子。删除这些位点会同时删掉这 %{count} 个；只删除选中的原子，需要先把结构转为 P1。两种操作都可以撤销。"
+    one_many:
+      en: Convert to P1 and delete the selected atoms
+      zh-CN: 转为 P1 后删除选中的原子
   convert:
     title:
       en: Convert to P1?
@@ -270,6 +296,22 @@ dialog:
     already_p1:
       en: This structure is already in P1 mode.
       zh-CN: 这个结构已经是 P1 模式。
+  add_occupant:
+    title:
+      en: "Add a mixed occupant to %{label}"
+      zh-CN: "向 %{label} 添加混合占位"
+    description:
+      en: The new element shares the site with the ones already there. Lower their occupancy afterwards if the site is full.
+      zh-CN: 新元素与位点上已有的元素共占这个位置。位点已满时，之后再调低原有元素的占位率。
+    choose_element:
+      en: Choose an element
+      zh-CN: 选择元素
+    no_element:
+      en: Choose the element to add.
+      zh-CN: 请选择要添加的元素。
+    ok:
+      en: Add
+      zh-CN: 添加
   supercell:
     title:
       en: Make supercell
@@ -281,6 +323,12 @@ dialog:
       en: Make supercell
       zh-CN: 生成超胞
 command:
+  undo:
+    en: Undo
+    zh-CN: 撤销
+  redo:
+    en: Redo
+    zh-CN: 重做
   make_supercell:
     en: Make supercell…
     zh-CN: 生成超胞…
@@ -291,8 +339,8 @@ command:
     en: Export…
     zh-CN: 导出…
   delete_selection:
-    en: Delete selection…
-    zh-CN: 删除所选…
+    en: Delete selection
+    zh-CN: 删除所选
   toggle_measure:
     en: Measure
     zh-CN: 测量
@@ -324,24 +372,97 @@ feature:
   symmetrize:
     en: Symmetrizing
     zh-CN: 对称化
-  change_element:
-    en: Changing the element
-    zh-CN: 更换元素
-  mixed_occupancy:
-    en: Mixed occupancy
-    zh-CN: 混合占位
   add_site:
     en: Adding sites
     zh-CN: 添加位点
-  delete:
-    en: Deleting
-    zh-CN: 删除
+  move_site:
+    en: Moving sites in symmetry mode
+    zh-CN: 对称模式下移动位点
   convert_to_p1:
     en: Converting to P1
     zh-CN: 转为 P1
   supercell:
     en: Supercells
     zh-CN: 生成超胞
+edit:
+  deleted_site:
+    en: "Deleted %{label} (%{count} atoms). You can undo this."
+    zh-CN: "已删除 %{label}（%{count} 个原子），可以撤销。"
+  deleted_sites:
+    en: "Deleted %{sites} sites (%{count} atoms). You can undo this."
+    zh-CN: "已删除 %{sites} 个位点（共 %{count} 个原子），可以撤销。"
+  command:
+    set_cell:
+      en: Change cell parameters
+      zh-CN: 修改晶胞参数
+    set_species:
+      en: Change element
+      zh-CN: 更换元素
+    set_occupancy:
+      en: Change occupancy
+      zh-CN: 修改占位率
+    add_occupant:
+      en: Add mixed occupant
+      zh-CN: 添加混合占位
+    remove_occupant:
+      en: Remove mixed occupant
+      zh-CN: 删除混合占位
+    rename_label:
+      en: Rename label
+      zh-CN: 重命名标签
+    set_position:
+      en: Move atom
+      zh-CN: 移动原子
+    remove_site:
+      en: Delete sites
+      zh-CN: 删除位点
+    add_measurement:
+      en: Add measurement
+      zh-CN: 添加测量
+    remove_measurement:
+      en: Remove measurement
+      zh-CN: 删除测量
+  error:
+    breaks_symmetry:
+      en: "Changing only some of the %{count} equivalent atoms of %{label} would break the symmetry. Edit the whole site, or convert the structure to P1 first."
+      zh-CN: "只改 %{label} 的 %{count} 个等效原子中的一部分会破坏对称性。请编辑整个位点，或先把结构转为 P1。"
+    fixed_cell_parameter:
+      en: "%{param} is fixed by the symmetry."
+      zh-CN: "%{param} 由对称性固定，不能修改。"
+    linked_cell_parameters:
+      en: "%{param} and %{other} are equal by symmetry and cannot take different values."
+      zh-CN: "%{param} 与 %{other} 由对称性规定相等，不能取不同的值。"
+    invalid_cell:
+      en: "These cell parameters form no cell: lengths must be positive, and the angles must close a parallelepiped."
+      zh-CN: 这组晶胞参数无法构成晶胞：边长须为正数，三个夹角须能围成平行六面体。
+    not_a_number:
+      en: Enter a number.
+      zh-CN: 请输入数字。
+    occupancy_out_of_range:
+      en: Occupancy must be more than 0 and at most 1.
+      zh-CN: 占位率必须大于 0 且不超过 1。
+    last_occupant:
+      en: "%{label} is the last occupant of its site; delete the site instead."
+      zh-CN: "%{label} 是位点上唯一的占位者，请改为删除整个位点。"
+    unknown_element:
+      en: "%{symbol} is not an element symbol."
+      zh-CN: "%{symbol} 不是元素符号。"
+    invalid_label:
+      en: "%{label} cannot be a label: it must not be empty, contain spaces, or start with _ # $ ' \" [ ] or ;."
+      zh-CN: "%{label} 不能用作标签：不能为空、不能含空格，也不能以 _ # $ ' \" [ ] 或 ; 开头。"
+    duplicate_label:
+      en: "The label %{label} is already in use."
+      zh-CN: "标签 %{label} 已被使用。"
+    other:
+      en: "The edit was not made: %{reason}"
+      zh-CN: "没有完成编辑：%{reason}"
+  warning:
+    occupancy_sum:
+      en: "The occupancies of %{label} add up to %{sum}, more than 1."
+      zh-CN: "%{label} 的占位率之和为 %{sum}，大于 1。"
+    short_contact:
+      en: "Atoms of %{a} and %{b} are only %{distance} apart."
+      zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance}。"
 mock:
   not_implemented:
     en: "%{feature} is not implemented yet."
