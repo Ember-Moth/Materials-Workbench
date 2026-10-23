@@ -18,7 +18,8 @@ use std::f64::consts::PI;
 
 use mw_crystal::{
     Adp, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId, SpaceGroup,
-    SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, UNKNOWN_ELEMENT, element,
+    SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, Tolerances,
+    UNKNOWN_ELEMENT, element,
 };
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, Severity};
@@ -276,9 +277,13 @@ fn adp_number(
     parsed
 }
 
-/// Interprets one data block. The structure is `None` when any diagnostic,
-/// including a syntax error in the block, is an error.
-pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
+/// Interprets one data block into a structure with the given tolerances.
+/// The structure is `None` when any diagnostic, including a syntax error in
+/// the block, is an error.
+pub(crate) fn interpret(
+    block: &Block,
+    tolerances: Tolerances,
+) -> (Option<Structure>, Vec<Diagnostic>) {
     let mut diagnostics = block.diagnostics.clone();
     let fields = Fields { block };
     // Placeholder entries give the tags with nothing but `?`.
@@ -306,6 +311,7 @@ pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
         {
             let mut structure =
                 Structure::new(lattice, symmetry, sites.sites).with_space_group(space_group);
+            structure.tolerances = tolerances;
             let lines: HashMap<SiteId, u32> =
                 sites.rows.iter().map(|(id, row)| (*id, row.line)).collect();
             normalize::snap_sites(&mut structure, &lines, &mut diagnostics);
