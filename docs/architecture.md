@@ -1,7 +1,7 @@
 # 架构
 
 > 状态：v0.1 框架已搭好，M1 CIF 导入、M2 对称性、M3 渲染（键、晶胞边框、拾取、测量）、M4 基础编辑与能力注册表、M5 中的导出（CIF、POSCAR、扩展 XYZ）已实现，其余功能以模拟（mock）为主 · 2026-10-22
-> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [3D 视口](design/viewport-rendering.md) · [AI 集成](design/ai-integration.md)
+> 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [项目文件](design/project-format.md) · [3D 视口](design/viewport-rendering.md) · [AI 集成](design/ai-integration.md)
 > 开发流程与约定见 [开发指南](development.md)；版本规划见 [产品路线图](roadmap.md)。
 
 ## 1. 目标
@@ -25,6 +25,7 @@ materials-workbench/
 │   ├── mw-crystal-render/    wgpu 离屏渲染器（不依赖 GPUI）
 │   ├── mw-viewport/          3D 视口组件（GPUI + 渲染器）
 │   ├── mw-project/           项目：项目目录与左侧边栏
+│   ├── mw-project-file/      项目文件的格式与读写、示例项目（纯 Rust，无界面）
 │   ├── mw-structure/         结构工作区：文档、视图、面板、对话框、命令
 │   ├── mw-automation/        能力注册表：GUI、脚本、MCP、助手共用的能力（纯 Rust，无界面）
 │   └── mw-llm/               内置助手的模型服务客户端（纯 Rust，无界面）
@@ -51,7 +52,7 @@ apps/workbench ─────────┬───────────�
                     mw-crystal          mw-crystal-render
 ```
 
-`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-automation`（能力注册表）只依赖 `mw-crystal`；`mw-project` 依赖它，只为重新导出 `StructureEntryId`，以后 MCP Server 和内置助手也从它取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
+`mw-project` 和 `mw-structure` 也直接使用 `mw-crystal` 的类型，图中省略了这两条边。`mw-project-file`（项目文件的读写）依赖 `mw-crystal` 和 `mw-crystal-io`，以后由 `mw-project`、`mw-structure` 和 MCP 的无界面模式使用。`mw-automation`（能力注册表）只依赖 `mw-crystal`；`mw-project` 依赖它，只为重新导出 `StructureEntryId`，以后 MCP Server 和内置助手也从它取能力。`mw-llm` 不依赖其他 crate，目前也没有使用者；以后由内置助手 `mw-assistant` 依赖（[AI 集成设计稿](design/ai-integration.md)第 3 节）。
 
 | crate | 职责 | 依赖 GPUI |
 |---|---|---|
@@ -60,6 +61,7 @@ apps/workbench ─────────┬───────────�
 | `mw-crystal-io` | 解析结构文件（CIF 1.1 子集），整理位点（吸附到特殊位置、合并混合占位、去掉重复行），产出结构和带源文件行号的导入诊断，并保留模型不存的字段；把结构写成 CIF、POSCAR 和扩展 XYZ 文本。诊断和导出错误是数据，文字由界面翻译 | 否 |
 | `mw-crystal-render` | 离屏渲染球、键、线段和高亮圈并回读像素；按需渲染 ID 纹理回答"鼠标下是什么"；只依赖 wgpu | 否 |
 | `mw-viewport` | 把渲染结果放进 GPUI：相机交互、异步出帧与拾取、悬停高亮、3D 坐标投影到屏幕 | 是 |
+| `mw-project-file` | 项目文件（[项目文件设计稿](design/project-format.md)）：清单、结构文件、来源记录、视图状态的类型；读写 `.mwproj` 目录（原子写入、清单最后写、清理不再引用的文件、旧格式迁移）；导入文件的副本与哈希；随应用附带的示例项目 | 否 |
 | `mw-project` | 项目目录模型和左侧边栏视图 | 是 |
 | `mw-structure` | 一个打开的结构：顶栏、视口与浮层、右侧面板、对话框、命令；选区与测量；打开文件后的通知与错误列表；导出对话框与写文件 | 是 |
 | `apps/workbench` | 窗口外壳：组装边栏与工作区、全局命令、命令面板、主题与语言 | 是 |

@@ -58,6 +58,7 @@ pub use space_group::{
     DetectedSymmetry, Setting, SpaceGroupType, Wyckoff, detect_symmetry, it_number_of,
 };
 pub use structure::{
-    Adp, Disorder, EditMode, Occupant, Site, SiteId, SpaceGroup, Species, Structure, Tolerances,
+    Adp, Disorder, EditMode, Occupant, Site, SiteId, SpaceGroup, Species, Structure,
+    StructureError, Tolerances,
 };
 pub use symmetry::{Rational, SymOp, SymOpError, Symmetry, SymmetryError};

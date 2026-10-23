@@ -233,6 +233,8 @@ CrystalDocument
 
 **M4 的实现**（`mw-crystal/src/document.rs`）：`CrystalDocument` 持有结构（`Arc<Structure>`）、始终与之一致的派生数据、测量（`Annotation`，带"已失效"标记）、revision 和撤销历史。元数据、来源记录和成键规则的设置随 M5、M6 加入；会话里的文档名、所属项目和导入诊断仍由界面的 `StructureDocument` 持有。
 
+文档在项目文件里怎么存（结构、测量、来源记录、编辑记录、视图状态），见[项目文件设计稿](project-format.md)。
+
 **CIF 往返策略。** 导入时把字段分成三类：
 
 | 类别 | 例子 | 结构被修改后 |
@@ -399,6 +401,7 @@ M5 的实现（`mw-crystal-io/src/kept.rs`）：
 - 结果与当前结构完全相同的命令（例如再次输入原值）不产生一步；被拒绝的命令什么都不改。
 - `history()` 给出已提交的命令，供来源记录（M6）使用；`undo_command()` / `redo_command()` 供界面显示"撤销 删除 O1"之类的说明。
 - 撤销栈不限长度。
+- **保存点**（M6）：每一步有文档内唯一的编号，`mark_saved()` 记下保存时栈顶那一步，`is_modified()` 比较当前栈顶，所以撤销回保存时的状态又是"未修改"；撤销过保存点再做新命令后，就只有继续撤销才回得去。`CrystalDocument::restore` 由项目文件里的结构和测量重建文档，没有撤销历史，引用不存在的原子的测量标为已失效（[项目文件设计稿](project-format.md)第 6 节）。
 
 ## 8. 校验与诊断
 

@@ -1,0 +1,11 @@
+{
+  "format": "materials-workbench/project",
+  "version": 1,
+  "writer": "Materials Workbench 0.0.0",
+  "id": "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c00",
+  "name": "TiO₂ 相研究",
+  "entries": [
+    {"id": "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c01", "kind": "crystal_structure", "name": "金红石", "provenance": {"import": {"format": "cif", "file_name": "rutile.cif", "sha256": "fd43e5fd5ebbc2ac19a1322e14df0453062db324079355b574677a975ef69320", "block": "rutile", "imported_at": "2026-10-22T00:00:00Z", "structure_sha256": "5a58c364a091a10b830fd2c8712abdd2ebcb188397dff88fc6456f837972df0a"}}},
+    {"id": "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c02", "kind": "crystal_structure", "name": "金红石 2×2×2 超胞", "provenance": {"derived": {"from": "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c01", "from_name": "金红石", "from_structure_sha256": "5a58c364a091a10b830fd2c8712abdd2ebcb188397dff88fc6456f837972df0a", "operation": {"make_supercell": {"matrix": [[2, 0, 0], [0, 2, 0], [0, 0, 2]]}}, "derived_at": "2026-10-22T00:00:00Z"}}}
+  ]
+}

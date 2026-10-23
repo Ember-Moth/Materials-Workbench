@@ -48,6 +48,8 @@ pub struct Outcome {
 
 #[derive(Clone, Debug)]
 struct Step {
+    /// Unique within the document, for telling the saved state apart.
+    id: u64,
     command: Command,
     /// For a structure edit, the edits that undo and redo it. Each is the
     /// inverse the other gave when it was last applied, so both restore
@@ -68,6 +70,11 @@ pub struct CrystalDocument {
     revision: u64,
     done: Vec<Step>,
     undone: Vec<Step>,
+    next_step: u64,
+    /// The last step done when the document was saved, `None` for none.
+    /// After undoing past it and doing something else, no state matches it
+    /// any more.
+    saved: Option<u64>,
 }
 
 const INVERSE: &str = "an inverse applies to the structure it was made from";
@@ -87,7 +94,38 @@ impl CrystalDocument {
             revision: 0,
             done: Vec::new(),
             undone: Vec::new(),
+            next_step: 0,
+            saved: None,
         }
+    }
+
+    /// A document as it was saved: the structure and its measurements, with
+    /// no undo history. A measurement whose atoms no longer exist is marked
+    /// stale rather than dropped.
+    pub fn restore(structure: Structure, annotations: Vec<Annotation>) -> Self {
+        let mut document = Self::new(structure);
+        document.annotations = annotations
+            .into_iter()
+            .map(|mut annotation| {
+                if document.check_measurement(&annotation.measurement).is_err() {
+                    annotation.stale = true;
+                }
+                annotation
+            })
+            .collect();
+        document
+    }
+
+    /// Whether the document differs from its last saved state (or, if it
+    /// was never saved, from how it was made). Undoing back to that state
+    /// makes it unmodified again.
+    pub fn is_modified(&self) -> bool {
+        self.done.last().map(|step| step.id) != self.saved
+    }
+
+    /// Records the current state as saved.
+    pub fn mark_saved(&mut self) {
+        self.saved = self.done.last().map(|step| step.id);
     }
 
     pub fn structure(&self) -> &Structure {
@@ -178,11 +216,13 @@ impl CrystalDocument {
             }
         };
         self.done.push(Step {
+            id: self.next_step,
             command,
             edits,
             before,
             after: self.annotations.clone(),
         });
+        self.next_step += 1;
         self.undone.clear();
         Ok(outcome)
     }
@@ -443,6 +483,53 @@ mod tests {
             .execute(Command::AddMeasurement(Measurement::Distance([sr, image])))
             .unwrap();
         assert!(outcome.changed);
+    }
+
+    #[test]
+    fn the_saved_state_survives_undo_and_redo() {
+        let mut doc = document(SampleKey::StrontiumTitanate);
+        assert!(!doc.is_modified());
+        let a = |value| Edit::SetCell {
+            values: CellValues::default().with(CellParam::A, value),
+        };
+        doc.edit(a(4.0)).unwrap();
+        assert!(doc.is_modified());
+        doc.undo().unwrap();
+        assert!(!doc.is_modified());
+        doc.redo().unwrap();
+        doc.mark_saved();
+        assert!(!doc.is_modified());
+        doc.edit(a(4.1)).unwrap();
+        assert!(doc.is_modified());
+        doc.undo().unwrap();
+        assert!(!doc.is_modified());
+        // Undoing past the saved state and doing something else leaves no
+        // way back to it but undoing further.
+        doc.undo().unwrap();
+        assert!(doc.is_modified());
+        doc.edit(a(4.0)).unwrap();
+        assert!(doc.is_modified());
+        assert_eq!(doc.structure().lattice.params().a.value(), 4.0);
+    }
+
+    #[test]
+    fn restored_measurements_of_missing_atoms_are_stale() {
+        let doc = document(SampleKey::StrontiumTitanate);
+        let sr = atom(&doc, 0, 0);
+        let ti = atom(&doc, 1, 0);
+        let gone = AtomRef::new(SiteId(9), 0, [0; 3]);
+        let annotation = |atoms| Annotation {
+            measurement: Measurement::Distance(atoms),
+            stale: false,
+        };
+        let restored = CrystalDocument::restore(
+            doc.structure().clone(),
+            vec![annotation([sr, ti]), annotation([sr, gone])],
+        );
+        let stale: Vec<bool> = restored.annotations().iter().map(|a| a.stale).collect();
+        assert_eq!(stale, [false, true]);
+        assert!(!restored.is_modified());
+        assert_eq!(restored.history().count(), 0);
     }
 
     #[test]

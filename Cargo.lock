@@ -4201,6 +4201,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mw-project-file"
+version = "0.0.0"
+dependencies = [
+ "mw-crystal",
+ "mw-crystal-io",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "mw-structure"
 version = "0.0.0"
 dependencies = [

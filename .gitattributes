@@ -1,0 +1,4 @@
+# The sample projects hold byte-exact copies of imported files, checked
+# against their SHA-256 (docs/design/project-format.md §7.1): no line-ending
+# conversion.
+crates/mw-project-file/samples/** -text

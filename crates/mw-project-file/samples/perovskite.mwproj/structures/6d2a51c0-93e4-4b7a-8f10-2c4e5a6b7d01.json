@@ -1,0 +1,78 @@
+{
+  "structure": {
+    "cell": {
+      "a": {"value": 3.905},
+      "b": {"value": 3.905},
+      "c": {"value": 3.905},
+      "alpha": {"value": 90.0},
+      "beta": {"value": 90.0},
+      "gamma": {"value": 90.0}
+    },
+    "operations": [
+      "x,y,z",
+      "-y,x,z",
+      "z,x,y",
+      "-x,-y,-z",
+      "-x,-y,z",
+      "z,-y,x",
+      "y,-x,-z",
+      "-x,z,y",
+      "y,z,x",
+      "-z,-x,-y",
+      "y,-x,z",
+      "z,-x,-y",
+      "x,y,-z",
+      "x,z,-y",
+      "-z,y,-x",
+      "-z,-x,y",
+      "x,-z,-y",
+      "-z,y,x",
+      "-y,-z,-x",
+      "z,y,-x",
+      "-y,x,-z",
+      "-y,z,-x",
+      "-z,x,y",
+      "-z,x,-y",
+      "-x,-z,y",
+      "x,-z,y",
+      "y,-z,-x",
+      "z,x,-y",
+      "-y,-z,x",
+      "z,-y,-x",
+      "-z,-y,x",
+      "-z,-y,-x",
+      "y,-z,x",
+      "-x,-z,-y",
+      "z,-x,y",
+      "y,x,-z",
+      "-x,z,-y",
+      "-x,y,-z",
+      "-y,z,x",
+      "x,-y,-z",
+      "y,z,-x",
+      "z,y,x",
+      "-y,-x,-z",
+      "x,z,y",
+      "-y,-x,z",
+      "x,-y,z",
+      "-x,y,z",
+      "y,x,z"
+    ],
+    "space_group": {
+      "hm_symbol": "P m -3 m",
+      "it_number": 221
+    },
+    "sites": [
+      {"id": 1, "position": [0.0, 0.0, 0.0], "occupants": [{"label": "Sr1", "species": {"element": "Sr", "symbol": "Sr"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.0063}}}]},
+      {"id": 2, "position": [0.5, 0.5, 0.5], "occupants": [{"label": "Ti1", "species": {"element": "Ti", "symbol": "Ti"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.0041}}}]},
+      {"id": 3, "position": [0.0, 0.5, 0.5], "occupants": [{"label": "O1", "species": {"element": "O", "symbol": "O"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.008}}}]}
+    ],
+    "tolerances": {
+      "position": 0.01,
+      "symprec": 0.01,
+      "short_contact": 0.5
+    }
+  },
+  "measurements": [],
+  "edits": []
+}

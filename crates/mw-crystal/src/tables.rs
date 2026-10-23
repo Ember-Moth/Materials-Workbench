@@ -419,6 +419,17 @@ mod tests {
     }
 
     #[test]
+    fn every_tabulated_setting_reads_back_from_its_text() {
+        // Project files store operations as text (design §4.4).
+        for hall_number in 1..=530 {
+            let symmetry = &setting(hall_number).symmetry;
+            let json = serde_json::to_string(symmetry).unwrap();
+            let read: Symmetry = serde_json::from_str(&json).unwrap();
+            assert_eq!(&read, symmetry, "Hall {hall_number}: {json}");
+        }
+    }
+
+    #[test]
     fn hall_symbols_from_files() {
         // R -3 c in hexagonal axes, with the double prime as files write it.
         let corundum = hall_operations("-R 3 2\"c").expect("parsed");

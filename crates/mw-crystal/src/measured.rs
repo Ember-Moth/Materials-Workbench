@@ -3,6 +3,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Measured {
     value: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     su: Option<f64>,
 }
 

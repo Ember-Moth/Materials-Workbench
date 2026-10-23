@@ -13,6 +13,7 @@ mw-crystal = { path = "crates/mw-crystal" }
 mw-crystal-io = { path = "crates/mw-crystal-io" }
 mw-crystal-render = { path = "crates/mw-crystal-render" }
 mw-project = { path = "crates/mw-project" }
+mw-project-file = { path = "crates/mw-project-file" }
 mw-structure = { path = "crates/mw-structure" }
 mw-viewport = { path = "crates/mw-viewport" }
 gpui-kit = "0.8.0"
@@ -39,7 +40,16 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 futures = "0.3"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Exact float parsing: project files must read back every f64 bit for bit
+# (docs/design/project-format.md §6).
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+# Project files (docs/design/project-format.md): entry ids, content hashes of
+# imported files, and the system's configuration directory.
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+dirs = "6"
+tempfile = "3"
 
 # GPUI and the component library are slow in unoptimized builds; this follows
 # the GPUI Kit installation guide. The symmetry search is optimized too, so

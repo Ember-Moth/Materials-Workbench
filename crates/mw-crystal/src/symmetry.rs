@@ -173,8 +173,9 @@ impl std::error::Error for SymOpError {}
 
 /// One symmetry operation `x' = W·x + w`; `rotation[i][j]` is the
 /// coefficient of coordinate `j` in component `i`. The translation is kept
-/// modulo 1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// modulo 1. Serialized in CIF notation, e.g. `"-y+1/2,x+1/2,z+1/2"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub struct SymOp {
     rotation: [[i32; 3]; 3],
     translation: [Rational; 3],
@@ -359,6 +360,20 @@ fn parse_number(chars: &[char], i: &mut usize) -> Result<Option<Number>, SymOpEr
     Ok(Some(Number::Exact(Rational::integer(numerator))))
 }
 
+impl From<SymOp> for String {
+    fn from(op: SymOp) -> Self {
+        op.to_string()
+    }
+}
+
+impl TryFrom<String> for SymOp {
+    type Error = SymOpError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(&text)
+    }
+}
+
 impl fmt::Display for SymOp {
     /// Writes the CIF notation, e.g. `-y+1/2,x+1/2,z+1/2`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -424,9 +439,27 @@ const MAX_OPERATIONS: usize = 192;
 /// rotation is invertible over the integers, and it is closed under
 /// composition modulo lattice translations. The identity comes first, so the
 /// first member of every orbit is the site itself (design §5.1).
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Serialized as the list of operations in their order; reading checks
+/// that they form a group.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(into = "Vec<SymOp>", try_from = "Vec<SymOp>")]
 pub struct Symmetry {
     operations: Vec<SymOp>,
+}
+
+impl From<Symmetry> for Vec<SymOp> {
+    fn from(symmetry: Symmetry) -> Self {
+        symmetry.operations
+    }
+}
+
+impl TryFrom<Vec<SymOp>> for Symmetry {
+    type Error = SymmetryError;
+
+    fn try_from(operations: Vec<SymOp>) -> Result<Self, Self::Error> {
+        Self::new(operations)
+    }
 }
 
 impl Symmetry {

@@ -133,7 +133,9 @@ fn sin_degrees(degrees: f64) -> f64 {
 
 /// The crystal lattice. Only the standard orientation exists so far; an
 /// explicit orientation for POSCAR imports comes with file formats.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Serialized as its cell parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Lattice {
     params: CellParams,
 }
