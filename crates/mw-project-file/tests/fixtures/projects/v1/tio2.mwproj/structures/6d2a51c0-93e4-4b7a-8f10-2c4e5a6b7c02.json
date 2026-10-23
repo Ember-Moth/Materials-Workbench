@@ -1,0 +1,76 @@
+{
+  "structure": {
+    "cell": {
+      "a": {"value": 9.188},
+      "b": {"value": 9.188},
+      "c": {"value": 5.918},
+      "alpha": {"value": 90.0},
+      "beta": {"value": 90.0},
+      "gamma": {"value": 90.0}
+    },
+    "operations": [
+      "x,y,z"
+    ],
+    "space_group": {
+      "hm_symbol": "P 1",
+      "it_number": 1
+    },
+    "sites": [
+      {"id": 1, "position": [0.0, 0.0, 0.0], "occupants": [{"label": "Ti1_1", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 2, "position": [0.25, 0.25, 0.25], "occupants": [{"label": "Ti1_2", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 3, "position": [0.1524, 0.1524, 0.0], "occupants": [{"label": "O1_1", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 4, "position": [0.09759999999999999, 0.4024, 0.25], "occupants": [{"label": "O1_2", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 5, "position": [0.3476, 0.3476, 0.0], "occupants": [{"label": "O1_3", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 6, "position": [0.4024, 0.09759999999999999, 0.25], "occupants": [{"label": "O1_4", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 7, "position": [0.0, 0.0, 0.5], "occupants": [{"label": "Ti1_3", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 8, "position": [0.25, 0.25, 0.75], "occupants": [{"label": "Ti1_4", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 9, "position": [0.1524, 0.1524, 0.5], "occupants": [{"label": "O1_5", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 10, "position": [0.09759999999999999, 0.4024, 0.75], "occupants": [{"label": "O1_6", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 11, "position": [0.3476, 0.3476, 0.5], "occupants": [{"label": "O1_7", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 12, "position": [0.4024, 0.09759999999999999, 0.75], "occupants": [{"label": "O1_8", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 13, "position": [0.0, 0.5, 0.0], "occupants": [{"label": "Ti1_5", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 14, "position": [0.25, 0.75, 0.25], "occupants": [{"label": "Ti1_6", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 15, "position": [0.1524, 0.6524, 0.0], "occupants": [{"label": "O1_9", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 16, "position": [0.09759999999999999, 0.9024, 0.25], "occupants": [{"label": "O1_10", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 17, "position": [0.3476, 0.8476, 0.0], "occupants": [{"label": "O1_11", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 18, "position": [0.4024, 0.5976, 0.25], "occupants": [{"label": "O1_12", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 19, "position": [0.0, 0.5, 0.5], "occupants": [{"label": "Ti1_7", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 20, "position": [0.25, 0.75, 0.75], "occupants": [{"label": "Ti1_8", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 21, "position": [0.1524, 0.6524, 0.5], "occupants": [{"label": "O1_13", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 22, "position": [0.09759999999999999, 0.9024, 0.75], "occupants": [{"label": "O1_14", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 23, "position": [0.3476, 0.8476, 0.5], "occupants": [{"label": "O1_15", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 24, "position": [0.4024, 0.5976, 0.75], "occupants": [{"label": "O1_16", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 25, "position": [0.5, 0.0, 0.0], "occupants": [{"label": "Ti1_9", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 26, "position": [0.75, 0.25, 0.25], "occupants": [{"label": "Ti1_10", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 27, "position": [0.6524, 0.1524, 0.0], "occupants": [{"label": "O1_17", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 28, "position": [0.5976, 0.4024, 0.25], "occupants": [{"label": "O1_18", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 29, "position": [0.8476, 0.3476, 0.0], "occupants": [{"label": "O1_19", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 30, "position": [0.9024, 0.09759999999999999, 0.25], "occupants": [{"label": "O1_20", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 31, "position": [0.5, 0.0, 0.5], "occupants": [{"label": "Ti1_11", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 32, "position": [0.75, 0.25, 0.75], "occupants": [{"label": "Ti1_12", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 33, "position": [0.6524, 0.1524, 0.5], "occupants": [{"label": "O1_21", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 34, "position": [0.5976, 0.4024, 0.75], "occupants": [{"label": "O1_22", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 35, "position": [0.8476, 0.3476, 0.5], "occupants": [{"label": "O1_23", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 36, "position": [0.9024, 0.09759999999999999, 0.75], "occupants": [{"label": "O1_24", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 37, "position": [0.5, 0.5, 0.0], "occupants": [{"label": "Ti1_13", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 38, "position": [0.75, 0.75, 0.25], "occupants": [{"label": "Ti1_14", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 39, "position": [0.6524, 0.6524, 0.0], "occupants": [{"label": "O1_25", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 40, "position": [0.5976, 0.9024, 0.25], "occupants": [{"label": "O1_26", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 41, "position": [0.8476, 0.8476, 0.0], "occupants": [{"label": "O1_27", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 42, "position": [0.9024, 0.5976, 0.25], "occupants": [{"label": "O1_28", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 43, "position": [0.5, 0.5, 0.5], "occupants": [{"label": "Ti1_15", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 44, "position": [0.75, 0.75, 0.75], "occupants": [{"label": "Ti1_16", "species": {"element": "Ti", "oxidation": 4, "symbol": "Ti4+"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.006}}}]},
+      {"id": 45, "position": [0.6524, 0.6524, 0.5], "occupants": [{"label": "O1_29", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 46, "position": [0.5976, 0.9024, 0.75], "occupants": [{"label": "O1_30", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 47, "position": [0.8476, 0.8476, 0.5], "occupants": [{"label": "O1_31", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]},
+      {"id": 48, "position": [0.9024, 0.5976, 0.75], "occupants": [{"label": "O1_32", "species": {"element": "O", "oxidation": -2, "symbol": "O2-"}, "occupancy": {"value": 1.0}, "adp": {"isotropic": {"value": 0.007}}}]}
+    ],
+    "tolerances": {
+      "position": 0.01,
+      "symprec": 0.01,
+      "short_contact": 0.5
+    }
+  },
+  "measurements": [],
+  "edits": []
+}

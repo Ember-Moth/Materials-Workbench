@@ -36,8 +36,9 @@ pub use structure_file::StructureFile;
 pub use time::Timestamp;
 pub use view::{Camera, DisplayModel, EntryView, PanelTab, ViewState};
 
-/// The format version this code reads and writes (design §4).
-pub const VERSION: u32 = 1;
+/// The format version this code writes and the newest it reads (design
+/// §4): 2 since lattices can have an explicit orientation.
+pub const VERSION: u32 = 2;
 
 /// The extension of project directories.
 pub const EXTENSION: &str = "mwproj";

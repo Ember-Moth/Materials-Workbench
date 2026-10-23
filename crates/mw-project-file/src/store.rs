@@ -32,9 +32,14 @@ enum FileKind {
 }
 
 /// Upgrades a file from format version `n + 1` to `n + 2`, in memory
-/// (design §4). Empty while there is only version 1.
+/// (design §4).
 type Upgrade = fn(FileKind, &mut Value);
-const UPGRADES: [Upgrade; VERSION as usize - 1] = [];
+const UPGRADES: [Upgrade; VERSION as usize - 1] = [v1_to_v2];
+
+/// Version 2 adds an optional `orientation` to a structure's `cell`
+/// (crystallography design §4.2). A version 1 cell has none, which reads
+/// as the standard orientation, so nothing needs rewriting.
+fn v1_to_v2(_kind: FileKind, _value: &mut Value) {}
 
 fn migrate(kind: FileKind, mut value: Value, from: u32) -> Value {
     for upgrade in &UPGRADES[from as usize - 1..] {
