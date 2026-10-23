@@ -393,3 +393,242 @@ fn every_fixture_imports_without_panicking() {
         }
     }
 }
+
+/// Each block's diagnostics as (code, line).
+fn codes(report: &ImportReport, block: usize) -> Vec<(&'static str, Option<u32>)> {
+    report.blocks[block]
+        .diagnostics
+        .iter()
+        .map(|d| (d.code(), d.line()))
+        .collect()
+}
+
+#[test]
+fn shelxl_site_symmetry_orders_are_no_mismatch() {
+    let (text, report) = fixture("shelxl_multiplicity.cif");
+    assert_eq!(report.structures().count(), 3);
+    // SHELXL-97 values under the multiplicity tag fit as orders.
+    assert_eq!(codes(&report, 0), []);
+    // An explicit order, and multiplicities as in International Tables:
+    // only O1's wrong value is reported, as the multiplicity it implies.
+    let o1_rows: Vec<u32> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("O1 "))
+        .map(|(i, _)| i as u32 + 1)
+        .collect();
+    for (block, line) in [(1, o1_rows[1]), (2, o1_rows[2])] {
+        assert_eq!(
+            kinds(&report, block),
+            [(
+                DiagnosticKind::MultiplicityMismatch {
+                    label: "O1".into(),
+                    file: 1,
+                    expanded: 2
+                },
+                Some(line)
+            )]
+        );
+    }
+}
+
+#[test]
+fn entries_without_coordinates_have_no_structure() {
+    let (text, report) = fixture("placeholder_entry.cif");
+    assert_eq!(report.structures().count(), 0);
+    assert_eq!(
+        codes(&report, 0),
+        [
+            (
+                "symmetry.missing_operations",
+                Some(line_of(&text, "data_cell_only"))
+            ),
+            ("atom.missing_sites", Some(line_of(&text, "loop_"))),
+        ]
+    );
+    // Without a cell, the all-`?` row is no structure at all.
+    assert_eq!(
+        codes(&report, 1),
+        [("block.no_structure", Some(line_of(&text, "data_no_cell")))]
+    );
+    assert_eq!(report.blocks[1].diagnostics[0].severity(), Severity::Info);
+}
+
+#[test]
+fn dummy_rows_may_leave_out_the_label() {
+    let (text, report) = fixture("dummy_row.cif");
+    let block = &report.blocks[0];
+    assert_eq!(block.structure.as_ref().expect("structure").sites.len(), 3);
+    assert_eq!(
+        codes(&report, 0),
+        [
+            (
+                "symmetry.operations_from_name",
+                Some(line_of(&text, "data_"))
+            ),
+            ("atom.dummy_skipped", Some(line_of(&text, ". . ."))),
+        ]
+    );
+}
+
+#[test]
+fn repeated_labels_are_renamed() {
+    let (text, report) = fixture("duplicate_labels.cif");
+    let block = &report.blocks[0];
+    let structure = block.structure.as_ref().expect("structure");
+    let labels: Vec<_> = structure.sites.iter().map(|s| s.label()).collect();
+    assert_eq!(
+        labels,
+        [
+            "N1", "H1A", "H1B", "C1", "H1A_2", "H1B_2", "C2", "C2_3", "C2_2"
+        ]
+    );
+    let renamed: Vec<_> = block
+        .diagnostics
+        .iter()
+        .map(|d| match d.kind() {
+            DiagnosticKind::DuplicateLabel { label, renamed } => {
+                assert_eq!(d.severity(), Severity::Warning);
+                (label.as_str(), renamed.as_str(), d.line())
+            }
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let row = |prefix: &str, nth: usize| {
+        text.lines()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with(prefix))
+            .nth(nth)
+            .map(|(i, _)| i as u32 + 1)
+    };
+    assert_eq!(
+        renamed,
+        [
+            ("H1A", "H1A_2", row("H1A ", 1)),
+            ("H1B", "H1B_2", row("H1B ", 1)),
+            ("C2", "C2_3", row("C2 C", 1)),
+        ]
+    );
+    // The two anisotropic C2 rows go to the two C2 sites in order.
+    let u11 = |site: usize| match structure.sites[site].occupants[0].adp {
+        Some(Adp::Anisotropic(u)) => u[0].value(),
+        ref other => panic!("{other:?}"),
+    };
+    assert_eq!((u11(6), u11(7)), (0.011, 0.021));
+}
+
+#[test]
+fn atoms_with_zero_occupancy_are_dropped() {
+    let (text, report) = fixture("zero_occupancy.cif");
+    let block = &report.blocks[0];
+    let structure = block.structure.as_ref().expect("structure");
+    let labels: Vec<_> = structure.sites.iter().map(|s| s.label()).collect();
+    assert_eq!(labels, ["C5", "C6", "C5A"]);
+    // Its anisotropic row goes with it: no unknown-label warning.
+    assert_eq!(
+        kinds(&report, 0),
+        [(
+            DiagnosticKind::InvalidOccupancy {
+                label: "C6A".into(),
+                value: 0.0
+            },
+            Some(line_of(&text, "C6A C"))
+        )]
+    );
+    assert_eq!(block.diagnostics[0].severity(), Severity::Warning);
+}
+
+#[test]
+fn damaged_adp_values_do_not_cost_the_structure() {
+    let (text, report) = fixture("truncated_su.cif");
+    let block = &report.blocks[0];
+    let structure = block.structure.as_ref().expect("structure");
+    // `0.0029(18` (U12, the last column) at the end of a cut-off line
+    // reads with its s.u.
+    let Some(Adp::Anisotropic(u)) = &structure.sites[0].occupants[0].adp else {
+        panic!("anisotropic");
+    };
+    assert_eq!(u[3].value(), 0.0029);
+    assert!((u[3].su().unwrap() - 0.0018).abs() < 1e-15);
+    // A typo drops that row's ADPs only: C42 keeps its U_iso.
+    assert_eq!(
+        kinds(&report, 0),
+        [(
+            DiagnosticKind::InvalidAdp {
+                label: "C42".into(),
+                tag: "_atom_site_aniso_u_23".into(),
+                text: "0..0042(15)".into()
+            },
+            Some(line_of(&text, "C42 0.015"))
+        )]
+    );
+    assert_eq!(block.diagnostics[0].severity(), Severity::Warning);
+    let Some(Adp::Isotropic(u)) = &structure.sites[2].occupants[0].adp else {
+        panic!("isotropic");
+    };
+    assert_eq!(u.value(), 0.0141);
+}
+
+#[test]
+fn operations_from_a_hall_symbol_with_a_double_prime() {
+    let (text, report) = fixture("corundum_hall.cif");
+    let block = &report.blocks[0];
+    assert_eq!(
+        kinds(&report, 0),
+        [(
+            DiagnosticKind::SymopsFromName {
+                name: "-R 3 2\"c".into()
+            },
+            Some(line_of(&text, "data_"))
+        )]
+    );
+    let structure = block.structure.as_ref().expect("structure");
+    assert_eq!(structure.symmetry.operations().len(), 36);
+    let derived = Derived::compute(structure);
+    assert_eq!(derived.atoms_in_cell(), 30);
+    assert_eq!(
+        symmetry(&derived, structure),
+        (
+            167,
+            vec!["Al1 12c 0, 0, z".into(), "O1 18e x, 0, 1/4".into()]
+        )
+    );
+}
+
+#[test]
+fn current_and_legacy_names_conflict_only_in_meaning() {
+    let (text, report) = fixture("alias_spellings.cif");
+    assert_eq!(report.structures().count(), 2);
+    assert_eq!(codes(&report, 0), []);
+    let legacy = text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("_symmetry_space_group_name_H-M"))
+        .nth(1)
+        .map(|(i, _)| i as u32 + 1);
+    assert_eq!(
+        kinds(&report, 1),
+        [
+            (
+                DiagnosticKind::SymopsFromName {
+                    name: "F d -3 m".into()
+                },
+                Some(line_of(&text, "data_other_origin"))
+            ),
+            (
+                DiagnosticKind::AliasConflict {
+                    used: "_space_group_name_h-m_alt".into(),
+                    ignored: "_symmetry_space_group_name_h-m".into()
+                },
+                legacy
+            ),
+        ]
+    );
+    // Origin choice 2: Si on 8a at 1/8, 1/8, 1/8.
+    let structure = report.blocks[1].structure.as_ref().expect("structure");
+    let derived = Derived::compute(structure);
+    assert_eq!(
+        symmetry(&derived, structure),
+        (227, vec!["Si1 8a 1/8, 1/8, 1/8".into()])
+    );
+}

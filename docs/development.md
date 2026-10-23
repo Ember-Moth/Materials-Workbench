@@ -29,13 +29,27 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-CIF 导入的语料统计：读取本地一个 COD 目录（不随仓库提交），打印解析失败率和各类诊断的数量。测试默认忽略，用 release 构建跑得快得多：
+CIF 导入的语料统计：读取本地一个 COD 目录（不随仓库提交）。语料从 COD 的官方 rsync 服务器取，数据属于公有领域；`--max-size=1M` 只取不超过 1 MiB 的文件（约 50 万个、37 GB，占全部条目的 94 %，超过的大多嵌着衍射数据），按前缀目录 1–9 分别同步，以后重跑同一条命令只补新增和改动的条目：
+
+```bash
+rsync -rt --max-size=1M rsync://www.crystallography.net/cif/7/ ~/cod/cif/7/
+```
+
+测试默认忽略，用 release 构建跑得快得多，文件分到所有核上读：
 
 ```bash
 MW_COD_DIR=~/cod/cif cargo test -p mw-crystal-io --release --test cod_corpus -- --ignored --nocapture
 ```
 
-`MW_COD_LIMIT=1000` 只读前 1000 个文件。
+| 测试 | 内容 |
+|---|---|
+| `cod_corpus_statistics` | 没有结构的文件数（区分"条目本来没有坐标"和"导入失败"）、每种诊断的次数和文件数、常见细节、示例文件、最慢的文件 |
+| `cod_position_tolerance` | 用几档 `position` 容差各导入一遍，比较吸附、合并、多重度不一致等诊断的次数（晶体学设计稿 4.6 节），全量约 40 分钟 |
+| `cod_short_contacts` | 满占位有序位点之间 1 Å 以内的距离分布，分含氢和不含氢 |
+| `cod_symprec` | 把抽样的结构四舍五入成 P1 文件的样子，看对称性搜索在几档 `symprec` 下能否找回原来的操作集 |
+| `cod_file` | 打印 `MW_COD_FILE` 指定文件（用 `:` 分隔）的全部诊断和行号，用来查看单个条目 |
+
+环境变量：`MW_COD_LIMIT=1000` 只读前 1000 个文件；`MW_COD_LIST=atom.duplicate_label` 额外列出带这个诊断的文件（最多 100 个）；`MW_COD_SAMPLE=20` 是 `cod_symprec` 的抽样间隔。按名字只跑其中一个，例如 `... --test cod_corpus cod_symprec -- --ignored --nocapture`。
 
 不开窗口、只看渲染器输出：
 

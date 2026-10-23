@@ -132,6 +132,7 @@ pub enum DiagnosticKind {
     UnidentifiedSpaceGroup,
 
     // Atom sites
+    /// No atom site with coordinates.
     MissingAtomSites,
     MissingAtomTag {
         tag: String,
@@ -142,8 +143,10 @@ pub enum DiagnosticKind {
         label: String,
         tag: String,
     },
+    /// The label is used again; this row's site is renamed `renamed`.
     DuplicateLabel {
         label: String,
+        renamed: String,
     },
     /// Elements were taken from the labels of this many atoms.
     ElementFromLabel {
@@ -154,6 +157,7 @@ pub enum DiagnosticKind {
         label: String,
         symbol: String,
     },
+    /// An occupancy of 0 or less: the atom is absent and not imported.
     InvalidOccupancy {
         label: String,
         value: f64,
@@ -165,6 +169,13 @@ pub enum DiagnosticKind {
     /// This many atoms have no occupancy and are taken as fully occupied.
     OccupancyAssumed {
         count: usize,
+    },
+    /// A displacement parameter that is no number: the row's ADPs are
+    /// ignored, and the atom keeps its isotropic one, if any.
+    InvalidAdp {
+        label: String,
+        tag: String,
+        text: String,
     },
     /// This many atoms give B, converted to U = B / 8π².
     BisoConverted {
@@ -184,8 +195,10 @@ pub enum DiagnosticKind {
         label: String,
         distance: f64,
     },
-    /// The file's `_atom_site_symmetry_multiplicity` differs from the
-    /// number of atoms the operations generate.
+    /// The multiplicity the file states (`_atom_site_symmetry_multiplicity`)
+    /// or implies by a site-symmetry order (`_atom_site_site_symmetry_order`,
+    /// or the multiplicity tag in SHELXL-97 files) differs from the number of
+    /// atoms the operations generate.
     MultiplicityMismatch {
         label: String,
         file: u32,
@@ -258,9 +271,7 @@ impl DiagnosticKind {
             | MissingAtomSites
             | MissingAtomTag { .. }
             | CartesianOnly
-            | MissingAtomValue { .. }
-            | DuplicateLabel { .. }
-            | InvalidOccupancy { .. } => Severity::Error,
+            | MissingAtomValue { .. } => Severity::Error,
             NotUtf8
             | Cif2
             | ContentOutsideBlock
@@ -273,7 +284,10 @@ impl DiagnosticKind {
             | CellInconsistent { .. }
             | SpaceGroupMismatch { .. }
             | UnidentifiedSpaceGroup
+            | DuplicateLabel { .. }
             | UnknownElement { .. }
+            | InvalidOccupancy { .. }
+            | InvalidAdp { .. }
             | OccupancyAboveOne { .. }
             | OccupancySumAboveOne { .. }
             | AnisoUnknownLabel { .. }
@@ -339,6 +353,7 @@ impl DiagnosticKind {
             InvalidOccupancy { .. } => "atom.invalid_occupancy",
             OccupancyAboveOne { .. } => "atom.occupancy_above_one",
             OccupancyAssumed { .. } => "atom.occupancy_assumed",
+            InvalidAdp { .. } => "atom.invalid_adp",
             BisoConverted { .. } => "atom.biso_converted",
             DummyAtomSkipped { .. } => "atom.dummy_skipped",
             AnisoUnknownLabel { .. } => "atom.aniso_unknown_label",

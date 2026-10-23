@@ -591,8 +591,8 @@ diagnostic:
       zh-CN: "空间群号 %{text} 无效，已忽略。"
   atom:
     missing_sites:
-      en: There are no atom sites (no _atom_site_ loop).
-      zh-CN: 没有原子位点（缺少 _atom_site_ 循环）。
+      en: There are no atom sites with coordinates.
+      zh-CN: 没有带坐标的原子位点。
     missing_tag:
       en: "The atom sites lack %{tag}."
       zh-CN: "原子位点缺少字段 %{tag}。"
@@ -603,8 +603,8 @@ diagnostic:
       en: "%{label} has no %{tag}."
       zh-CN: "%{label} 缺少 %{tag}。"
     duplicate_label:
-      en: "The label %{label} is used more than once."
-      zh-CN: "标签 %{label} 重复。"
+      en: "The label %{label} is used more than once; this atom was renamed %{renamed}."
+      zh-CN: "标签 %{label} 重复，这个原子改名为 %{renamed}。"
     element_from_label:
       en: "%{count} atoms have no type symbol; their elements were taken from their labels."
       zh-CN: "%{count} 个原子没有元素符号，已从标签推断元素。"
@@ -612,8 +612,8 @@ diagnostic:
       en: "%{symbol} (%{label}) is not an element symbol; the atom is kept as unknown element X."
       zh-CN: "%{symbol}（%{label}）不是元素符号，按未知元素 X 保留。"
     invalid_occupancy:
-      en: "%{label} has occupancy %{value}; occupancies must be above 0."
-      zh-CN: "%{label} 的占位率为 %{value}，占位率必须大于 0。"
+      en: "%{label} has occupancy %{value}, so the atom is absent; it was not imported."
+      zh-CN: "%{label} 的占位率为 %{value}，原子并不存在，未导入。"
     occupancy_above_one:
       en: "%{label} has occupancy %{value}, above 1."
       zh-CN: "%{label} 的占位率为 %{value}，大于 1。"
@@ -623,6 +623,9 @@ diagnostic:
     biso_converted:
       en: "%{count} atoms give displacement parameters as B; they were converted to U = B / 8π²."
       zh-CN: "%{count} 个原子的位移参数以 B 给出，已换算为 U = B / 8π²。"
+    invalid_adp:
+      en: "%{tag} of %{label} is %{text}, which is not a number; these displacement parameters were ignored."
+      zh-CN: "%{label} 的 %{tag} 为 %{text}，不是数字，这组位移参数已忽略。"
     dummy_skipped:
       en: "%{label} is a dummy atom and was not imported."
       zh-CN: "%{label} 是虚拟原子，未导入。"

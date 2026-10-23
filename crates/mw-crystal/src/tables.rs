@@ -140,9 +140,15 @@ pub(crate) fn match_operations(symmetry: &Symmetry) -> Option<&'static Setting> 
 
 /// Operations from a Hall symbol such as `-P 2ybc`; `None` if moyo cannot
 /// parse it (it does not read change-of-basis suffixes such as
-/// `(x,y,-x+z)`) or it generates no valid operation set.
+/// `(x,y,-x+z)`) or it generates no valid operation set. moyo writes the
+/// double prime `"` of `-R 3 2"c` as `=`, and asserts rather than failing
+/// on some malformed symbols, such as `-P 6C 2C` in a COD file.
 pub(crate) fn hall_operations(symbol: &str) -> Option<Symmetry> {
-    let hall = HallSymbol::new(symbol.trim())?;
+    let symbol = symbol.trim().replace('"', "=");
+    if symbol.is_empty() {
+        return None;
+    }
+    let hall = std::panic::catch_unwind(|| HallSymbol::new(&symbol)).ok()??;
     Symmetry::new(operations(&hall)?).ok()
 }
 
@@ -335,6 +341,17 @@ mod tests {
         }
         assert_eq!(orders, 7388);
         assert_eq!(TABLES.by_operations.len(), 527);
+    }
+
+    #[test]
+    fn hall_symbols_from_files() {
+        // R -3 c in hexagonal axes, with the double prime as files write it.
+        let corundum = hall_operations("-R 3 2\"c").expect("parsed");
+        assert_eq!(corundum.operations().len(), 36);
+        assert_eq!(Some(&corundum), hall_operations("-R 3 2=c").as_ref());
+        // Malformed: no operations, and no panic.
+        assert_eq!(hall_operations(""), None);
+        assert_eq!(hall_operations("-P 6C 2C"), None);
     }
 
     #[test]

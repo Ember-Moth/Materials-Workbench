@@ -120,7 +120,11 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
         MissingAtomValue { label, tag } => {
             tr!("diagnostic.atom.missing_value", label = label, tag = tag)
         }
-        DuplicateLabel { label } => tr!("diagnostic.atom.duplicate_label", label = label),
+        DuplicateLabel { label, renamed } => tr!(
+            "diagnostic.atom.duplicate_label",
+            label = label,
+            renamed = renamed
+        ),
         ElementFromLabel { count } => tr!("diagnostic.atom.element_from_label", count = count),
         UnknownElement { label, symbol } => {
             tr!(
@@ -145,6 +149,12 @@ pub(crate) fn message(kind: &DiagnosticKind) -> SharedString {
         }
         OccupancyAssumed { count } => tr!("diagnostic.atom.occupancy_assumed", count = count),
         BisoConverted { count } => tr!("diagnostic.atom.biso_converted", count = count),
+        InvalidAdp { label, tag, text } => tr!(
+            "diagnostic.atom.invalid_adp",
+            label = label,
+            tag = tag,
+            text = text
+        ),
         DummyAtomSkipped { label } => tr!("diagnostic.atom.dummy_skipped", label = label),
         AnisoUnknownLabel { label } => tr!("diagnostic.atom.aniso_unknown_label", label = label),
         CloseImages { label, distance: d } => tr!(

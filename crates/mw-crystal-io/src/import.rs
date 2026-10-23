@@ -13,12 +13,13 @@
 //!
 //! Mock: unrecognized fields are not kept for export yet (M5).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::PI;
 
 use mw_crystal::{
     Adp, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId, SpaceGroup,
-    SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, UNKNOWN_ELEMENT, element,
+    SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, Tolerances,
+    UNKNOWN_ELEMENT, element,
 };
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, Severity};
@@ -56,8 +57,10 @@ const ADP_B_TAGS: [&str; 6] = [
 ];
 
 /// Differences between the cell and the nearest cell the operations
-/// preserve below this (Å or degrees) are rounding, not inconsistency.
-const CELL_DEVIATION: f64 = 1e-6;
+/// preserve below this (Å or degrees) are rounding, not inconsistency: in
+/// the COD, a third of the cells that differ at all differ by less, such as
+/// b = 32.246 written for a = 32.2456(13).
+const CELL_DEVIATION: f64 = 1e-3;
 
 /// U = B / 8π².
 fn b_to_u(b: Measured) -> Measured {
@@ -95,6 +98,12 @@ impl<'a> Fields<'a> {
         self.values(tag).is_some()
     }
 
+    /// The tag is present with some value other than `?` and `.`.
+    fn has_value(&self, tag: &str) -> bool {
+        self.values(tag)
+            .is_some_and(|values| values.iter().any(|v| !v.is_missing()))
+    }
+
     /// The values of a tag: one for a pair, a column for a loop.
     fn values(&self, tag: &str) -> Option<Vec<&'a Value>> {
         self.block.items.iter().find_map(|item| match item {
@@ -110,10 +119,12 @@ impl<'a> Fields<'a> {
     }
 
     /// The first of several names for one field that is present. Reports
-    /// another name that is also present with a different value.
+    /// another name that is also present with a value that is not the
+    /// `same`.
     fn alias(
         &self,
         tags: &[&'static str],
+        same: fn(&[&Value], &[&Value]) -> bool,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Option<&'static str> {
         let present: Vec<(&'static str, Vec<&Value>)> = tags
@@ -121,9 +132,8 @@ impl<'a> Fields<'a> {
             .filter_map(|tag| Some((*tag, self.values(tag)?)))
             .collect();
         let (used, used_values) = present.first()?;
-        let texts = |values: &[&Value]| values.iter().map(|v| v.text.clone()).collect::<Vec<_>>();
         for (ignored, values) in &present[1..] {
-            if texts(values) != texts(used_values) {
+            if !same(values, used_values) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticKind::AliasConflict {
                         used: (*used).to_string(),
@@ -179,6 +189,43 @@ impl<'a> Fields<'a> {
     }
 }
 
+/// Two values of one field under different names agree: the same text up
+/// to case and spaces.
+fn same_text(a: &[&Value], b: &[&Value]) -> bool {
+    let normalize = |values: &[&Value]| {
+        values
+            .iter()
+            .map(|v| v.text.split_whitespace().collect::<String>().to_lowercase())
+            .collect::<Vec<_>>()
+    };
+    normalize(a) == normalize(b)
+}
+
+/// Two operation lists agree when they hold the same operations, in any
+/// order and spelling.
+fn same_operations(a: &[&Value], b: &[&Value]) -> bool {
+    let set = |values: &[&Value]| {
+        values
+            .iter()
+            .map(|v| SymOp::parse(&v.text).ok())
+            .collect::<Option<HashSet<_>>>()
+    };
+    match (set(a), set(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => same_text(a, b),
+    }
+}
+
+/// Two Hermann–Mauguin symbols agree when they name the same setting, such
+/// as `P 21/n` and `P 1 21/n 1`; `F d -3 m` and `F d -3 m :1` do not.
+fn same_setting(a: &[&Value], b: &[&Value]) -> bool {
+    let setting = |values: &[&Value]| Symmetry::from_hm_symbol(values.first()?.text.trim());
+    match (setting(a), setting(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => same_text(a, b),
+    }
+}
+
 /// A number field: `Ok(None)` for `?` and `.`, an error diagnostic for text
 /// that is no number.
 fn number(
@@ -204,19 +251,50 @@ fn number(
     }
 }
 
-/// Interprets one data block. The structure is `None` when any diagnostic,
-/// including a syntax error in the block, is an error.
-pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
+/// A displacement parameter: `None` for `?` and `.`, and for text that is
+/// no number, which is only a warning. ADPs are kept for export, not used,
+/// so a typo in one should not cost the structure.
+fn adp_number(
+    value: &Value,
+    tag: &str,
+    label: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Measured> {
+    if value.is_missing() {
+        return None;
+    }
+    let parsed = number::parse(&value.text);
+    if parsed.is_none() {
+        diagnostics.push(Diagnostic::at(
+            DiagnosticKind::InvalidAdp {
+                label: label.to_string(),
+                tag: tag.to_string(),
+                text: value.text.clone(),
+            },
+            value.line,
+        ));
+    }
+    parsed
+}
+
+/// Interprets one data block into a structure with the given tolerances.
+/// The structure is `None` when any diagnostic, including a syntax error in
+/// the block, is an error.
+pub(crate) fn interpret(
+    block: &Block,
+    tolerances: Tolerances,
+) -> (Option<Structure>, Vec<Diagnostic>) {
     let mut diagnostics = block.diagnostics.clone();
     let fields = Fields { block };
-    let has_cell = LENGTH_TAGS.iter().any(|tag| fields.has(tag));
+    // Placeholder entries give the tags with nothing but `?`.
+    let has_cell = LENGTH_TAGS.iter().any(|tag| fields.has_value(tag));
     let has_atoms = [
         "_atom_site_label",
         "_atom_site_fract_x",
         "_atom_site_cartn_x",
     ]
     .iter()
-    .any(|tag| fields.has(tag));
+    .any(|tag| fields.has_value(tag));
     if !has_cell && !has_atoms {
         diagnostics.push(Diagnostic::at(DiagnosticKind::NoStructure, block.line));
         return (None, diagnostics);
@@ -233,11 +311,9 @@ pub(crate) fn interpret(block: &Block) -> (Option<Structure>, Vec<Diagnostic>) {
         {
             let mut structure =
                 Structure::new(lattice, symmetry, sites.sites).with_space_group(space_group);
-            let lines: HashMap<SiteId, u32> = sites
-                .rows
-                .iter()
-                .map(|(id, (line, _))| (*id, *line))
-                .collect();
+            structure.tolerances = tolerances;
+            let lines: HashMap<SiteId, u32> =
+                sites.rows.iter().map(|(id, row)| (*id, row.line)).collect();
             normalize::snap_sites(&mut structure, &lines, &mut diagnostics);
             normalize::merge_sites(&mut structure, &lines, &mut diagnostics);
             check_geometry(&structure, &sites.rows, &mut diagnostics);
@@ -317,12 +393,12 @@ fn read_space_group(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (SpaceGroup, Option<u32>) {
     let hm_value = fields
-        .alias(&HM_TAGS, diagnostics)
+        .alias(&HM_TAGS, same_setting, diagnostics)
         .and_then(|tag| fields.value(tag))
         .filter(|v| !v.is_missing() && !v.text.trim().is_empty());
     let hm_symbol = hm_value.map(|v| v.text.trim().to_string());
     let it_value = fields
-        .alias(&IT_NUMBER_TAGS, diagnostics)
+        .alias(&IT_NUMBER_TAGS, same_text, diagnostics)
         .and_then(|tag| fields.value(tag))
         .filter(|v| !v.is_missing());
     let line = hm_value.or(it_value).map(|v| v.line);
@@ -349,7 +425,7 @@ fn symmetry_from_name(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<(Symmetry, String)> {
     let hall = fields
-        .alias(&HALL_TAGS, diagnostics)
+        .alias(&HALL_TAGS, same_text, diagnostics)
         .and_then(|tag| fields.value(tag))
         .filter(|v| !v.is_missing())
         .map(|v| v.text.trim().to_string());
@@ -373,7 +449,7 @@ fn read_symmetry(
     block_line: u32,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Symmetry> {
-    let Some(tag) = fields.alias(&SYMOP_TAGS, diagnostics) else {
+    let Some(tag) = fields.alias(&SYMOP_TAGS, same_operations, diagnostics) else {
         if let Some((symmetry, name)) = symmetry_from_name(fields, space_group, diagnostics) {
             // P1 needs no operations, so naming it is no fallback.
             if !symmetry.is_p1() {
@@ -504,18 +580,31 @@ fn element_from_letters(letters: &str) -> Option<String> {
     element::is_element(&symbol).then_some(symbol)
 }
 
-/// Sites read from the atom site loop, and per site the source line and
-/// the multiplicity the file states.
+/// Sites read from the atom site loop, and per site its row.
 struct SiteRows {
     sites: Vec<Site>,
-    rows: HashMap<SiteId, (u32, Option<u32>)>,
+    rows: HashMap<SiteId, Row>,
 }
 
-fn read_aniso(
-    fields: &Fields,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> HashMap<String, (Adp, bool, u32)> {
-    let mut adps = HashMap::new();
+/// What a row of the atom site loop states about its site, for the checks
+/// after normalization.
+struct Row {
+    line: u32,
+    /// `_atom_site_symmetry_multiplicity`: the number of equivalent atoms in
+    /// the cell, except in SHELXL-97 files, which give the site-symmetry
+    /// order under this name (see `check_geometry`).
+    multiplicity: Option<u32>,
+    /// `_atom_site_site_symmetry_order`: how many operations leave the site
+    /// in place.
+    order: Option<u32>,
+}
+
+/// Anisotropic ADPs by label, each with whether it was given as B and its
+/// line. A label the file repeats has one entry per row, in file order.
+type AnisoRows = HashMap<String, VecDeque<(Adp, bool, u32)>>;
+
+fn read_aniso(fields: &Fields, diagnostics: &mut Vec<Diagnostic>) -> AnisoRows {
+    let mut adps = AnisoRows::new();
     let Some(table) = fields.table("_atom_site_aniso_label", "_atom_site_aniso_", None) else {
         return adps;
     };
@@ -533,17 +622,21 @@ fn read_aniso(
         let mut components = [Measured::exact(0.0); 6];
         let mut complete = true;
         for (component, tag) in components.iter_mut().zip(tags) {
-            match table.get(row, tag).map(|v| number(v, tag, diagnostics)) {
-                Some(Ok(Some(m))) => *component = if is_b { b_to_u(m) } else { m },
+            match table
+                .get(row, tag)
+                .and_then(|v| adp_number(v, tag, &label.text, diagnostics))
+            {
+                Some(m) => *component = if is_b { b_to_u(m) } else { m },
                 // An unknown component leaves the atom isotropic.
-                _ => complete = false,
+                None => complete = false,
             }
         }
         if complete {
-            adps.insert(
-                label.text.clone(),
-                (Adp::Anisotropic(components), is_b, label.line),
-            );
+            adps.entry(label.text.clone()).or_default().push_back((
+                Adp::Anisotropic(components),
+                is_b,
+                label.line,
+            ));
         }
     }
     adps
@@ -590,15 +683,39 @@ fn read_sites(
     let mut sites = Vec::new();
     let mut rows = HashMap::new();
     let mut labels = HashSet::new();
+    let file_labels: HashSet<&str> = table
+        .rows
+        .iter()
+        .filter_map(|row| table.get(row, "_atom_site_label"))
+        .map(|v| v.text.as_str())
+        .collect();
     let mut from_label = 0;
     let mut occupancy_assumed = 0;
     let mut b_converted = 0;
     let mut valid = true;
 
     for row in &table.rows {
+        // A placeholder row in an entry without coordinates.
+        if row.iter().all(|v| v.is_missing()) {
+            continue;
+        }
         let label_value = table.get(row, "_atom_site_label").expect("required");
         let line = label_value.line;
-        let label = label_value.text.clone();
+        let mut label = label_value.text.clone();
+        // The ADP the file gives this row: a repeated label takes the
+        // anisotropic rows of its label in turn.
+        let adp = aniso.get_mut(&label).and_then(VecDeque::pop_front);
+        // Dummy rows can leave every other value out, the label included.
+        if table
+            .get(row, "_atom_site_calc_flag")
+            .is_some_and(|v| v.text.eq_ignore_ascii_case("dum"))
+        {
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::DummyAtomSkipped { label },
+                line,
+            ));
+            continue;
+        }
         if label_value.is_missing() {
             valid = false;
             diagnostics.push(Diagnostic::at(
@@ -610,23 +727,21 @@ fn read_sites(
             ));
             continue;
         }
-        if table
-            .get(row, "_atom_site_calc_flag")
-            .is_some_and(|v| v.text.eq_ignore_ascii_case("dum"))
-        {
+        if labels.contains(&label) {
+            // Labels name sites, so a repeat is renamed rather than lost:
+            // SHELXL-97 files reuse hydrogen labels such as H1B.
+            let renamed = (2..)
+                .map(|n| format!("{label}_{n}"))
+                .find(|l| !labels.contains(l) && !file_labels.contains(l.as_str()))
+                .expect("a free label");
             diagnostics.push(Diagnostic::at(
-                DiagnosticKind::DummyAtomSkipped { label },
+                DiagnosticKind::DuplicateLabel {
+                    label,
+                    renamed: renamed.clone(),
+                },
                 line,
             ));
-            continue;
-        }
-        if !labels.insert(label.clone()) {
-            valid = false;
-            diagnostics.push(Diagnostic::at(
-                DiagnosticKind::DuplicateLabel { label },
-                line,
-            ));
-            continue;
+            label = renamed;
         }
 
         let mut position = [0.0; 3];
@@ -692,8 +807,9 @@ fn read_sites(
         let occupancy = match table.get(row, "_atom_site_occupancy") {
             None => Measured::exact(1.0),
             Some(value) => match number(value, "_atom_site_occupancy", diagnostics) {
+                // An absent atom, such as a disorder component refined to
+                // 0.00.
                 Ok(Some(m)) if m.value() <= 0.0 => {
-                    valid = false;
                     diagnostics.push(Diagnostic::at(
                         DiagnosticKind::InvalidOccupancy {
                             label: label.clone(),
@@ -701,7 +817,7 @@ fn read_sites(
                         },
                         value.line,
                     ));
-                    m
+                    continue;
                 }
                 Ok(Some(m)) => {
                     if m.value() > 1.0 + OCCUPANCY_TOLERANCE {
@@ -730,9 +846,9 @@ fn read_sites(
         let isotropic = |tag: &str, diagnostics: &mut Vec<Diagnostic>| {
             table
                 .get(row, tag)
-                .and_then(|v| number(v, tag, diagnostics).ok().flatten())
+                .and_then(|v| adp_number(v, tag, &label, diagnostics))
         };
-        if let Some((adp, is_b, _)) = aniso.remove(&label) {
+        if let Some((adp, is_b, _)) = adp {
             b_converted += usize::from(is_b);
             occupant = occupant.with_adp(adp);
         } else if let Some(u) = isotropic("_atom_site_u_iso_or_equiv", diagnostics) {
@@ -742,6 +858,7 @@ fn read_sites(
             occupant = occupant.with_adp(Adp::Isotropic(b_to_u(b)));
         }
 
+        labels.insert(label.clone());
         let id = SiteId(sites.len() as u32 + 1);
         let mut site = Site::new(id, position, vec![occupant]);
         let text = |tag: &str| {
@@ -753,16 +870,31 @@ fn read_sites(
         if let Some(group) = text("_atom_site_disorder_group") {
             site = site.with_disorder(Disorder::new(text("_atom_site_disorder_assembly"), group));
         }
-        let multiplicity = text("_atom_site_symmetry_multiplicity").and_then(|t| t.parse().ok());
-        rows.insert(id, (line, multiplicity));
+        let integer = |tag: &str| text(tag).and_then(|t| t.parse().ok()).filter(|n| *n > 0);
+        rows.insert(
+            id,
+            Row {
+                line,
+                multiplicity: integer("_atom_site_symmetry_multiplicity"),
+                order: integer("_atom_site_site_symmetry_order"),
+            },
+        );
         sites.push(site);
     }
 
-    for (label, (_, _, line)) in aniso {
-        diagnostics.push(Diagnostic::at(
-            DiagnosticKind::AnisoUnknownLabel { label },
-            line,
-        ));
+    for (label, rows) in aniso {
+        for (_, _, line) in rows {
+            diagnostics.push(Diagnostic::at(
+                DiagnosticKind::AnisoUnknownLabel {
+                    label: label.clone(),
+                },
+                line,
+            ));
+        }
+    }
+    if valid && sites.is_empty() {
+        diagnostics.push(Diagnostic::at(DiagnosticKind::MissingAtomSites, table.line));
+        return None;
     }
     for (count, kind) in [
         (
@@ -791,9 +923,14 @@ fn read_sites(
 /// that likely belong on a special position but are too far from it to
 /// snap, multiplicities that disagree with the file, and sites that come
 /// too close. Sites at one position were dealt with by `merge_sites`.
+///
+/// The file states a site's multiplicity m directly, or through its
+/// site-symmetry order k = |operations| / m. SHELXL-97 writes k under the
+/// multiplicity tag (1 on a general position); a block is read in the
+/// convention most of its values fit.
 fn check_geometry(
     structure: &Structure,
-    rows: &HashMap<SiteId, (u32, Option<u32>)>,
+    rows: &HashMap<SiteId, Row>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let orbits = mw_crystal::orbits(structure);
@@ -816,7 +953,18 @@ fn check_geometry(
             .site(id)
             .map_or_else(String::new, |s| s.label().to_string())
     };
-    let line = |id: SiteId| rows.get(&id).map(|(line, _)| *line);
+    let line = |id: SiteId| rows.get(&id).map(|row| row.line);
+    let operations = structure.symmetry.operations().len();
+    let fits_multiplicity = |stated: u32, atoms: usize| stated as usize == atoms;
+    let fits_order = |stated: u32, atoms: usize| stated as usize * atoms == operations;
+    let fitting = |fits: &dyn Fn(u32, usize) -> bool| {
+        orbits
+            .iter()
+            .filter_map(|o| Some((rows.get(&o.site)?.multiplicity?, o.positions.len())))
+            .filter(|&(stated, atoms)| fits(stated, atoms))
+            .count()
+    };
+    let multiplicity_is_order = fitting(&fits_order) > fitting(&fits_multiplicity);
 
     for orbit in &orbits {
         let close = orbit
@@ -832,13 +980,24 @@ fn check_geometry(
             ));
             continue;
         }
-        let stated = rows.get(&orbit.site).and_then(|(_, m)| *m);
-        if let Some(file) = stated.filter(|m| *m as usize != orbit.positions.len()) {
+        let Some(row) = rows.get(&orbit.site) else {
+            continue;
+        };
+        let atoms = orbit.positions.len();
+        // The multiplicity the file states or implies, if it disagrees.
+        let file = match (row.multiplicity, row.order) {
+            (Some(m), _) if !multiplicity_is_order => (!fits_multiplicity(m, atoms)).then_some(m),
+            (Some(k), _) | (None, Some(k)) => {
+                (!fits_order(k, atoms)).then_some(operations as u32 / k)
+            }
+            (None, None) => None,
+        };
+        if let Some(file) = file {
             diagnostics.push(Diagnostic::new(
                 DiagnosticKind::MultiplicityMismatch {
                     label: label(orbit.site),
                     file,
-                    expanded: orbit.positions.len(),
+                    expanded: atoms,
                 },
                 line(orbit.site),
             ));
@@ -1006,8 +1165,9 @@ mod tests {
 
     #[test]
     fn a_cell_the_operations_do_not_preserve_is_reported() {
-        let cell = [3.905, 3.9051, 3.905, 90.0, 90.0, 90.0];
-        let (_, codes) = block("_space_group_IT_number 221", cell, &["Sr1 Sr 0 0 0 1 ."]);
+        let header = "_space_group_IT_number 221";
+        let cell = [3.905, 3.91, 3.905, 90.0, 90.0, 90.0];
+        let (_, codes) = block(header, cell, &["Sr1 Sr 0 0 0 1 ."]);
         // Sorted by line: the block header comes first.
         assert_eq!(
             codes,
@@ -1016,6 +1176,10 @@ mod tests {
                 "cell.inconsistent_with_symmetry"
             ]
         );
+        // A difference in the last printed digit is rounding.
+        let cell = [3.9052, 3.905, 3.905, 90.0, 90.0, 90.0];
+        let (_, codes) = block(header, cell, &["Sr1 Sr 0 0 0 1 ."]);
+        assert_eq!(codes, ["symmetry.operations_from_name"]);
     }
 
     #[test]

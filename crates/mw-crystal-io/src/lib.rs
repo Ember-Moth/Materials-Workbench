@@ -75,16 +75,24 @@ pub mod cif {
 
     use std::borrow::Cow;
 
+    use mw_crystal::Tolerances;
+
     use crate::diagnostic::{Diagnostic, DiagnosticKind};
     use crate::{ImportReport, ImportedBlock, import, syntax};
 
     /// Reads a CIF file's bytes. Invalid UTF-8 is replaced and reported.
     pub fn read(bytes: &[u8]) -> ImportReport {
+        read_with(bytes, Tolerances::default())
+    }
+
+    /// [`read`] with other tolerances than the defaults: the structures are
+    /// normalized with them and keep them.
+    pub fn read_with(bytes: &[u8], tolerances: Tolerances) -> ImportReport {
         let (text, valid) = match std::str::from_utf8(bytes) {
             Ok(text) => (Cow::Borrowed(text), true),
             Err(_) => (String::from_utf8_lossy(bytes), false),
         };
-        let mut report = read_str(&text);
+        let mut report = read_str_with(&text, tolerances);
         if !valid {
             report
                 .diagnostics
@@ -95,6 +103,10 @@ pub mod cif {
 
     /// Reads CIF text.
     pub fn read_str(text: &str) -> ImportReport {
+        read_str_with(text, Tolerances::default())
+    }
+
+    fn read_str_with(text: &str, tolerances: Tolerances) -> ImportReport {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let document = syntax::parse(text);
         let mut diagnostics = document.diagnostics;
@@ -105,7 +117,7 @@ pub mod cif {
             .blocks
             .iter()
             .map(|block| {
-                let (structure, diagnostics) = import::interpret(block);
+                let (structure, diagnostics) = import::interpret(block, tolerances);
                 ImportedBlock {
                     name: block.name.clone(),
                     line: block.line,
