@@ -12,10 +12,14 @@
 //! sites with an exact inverse; [`target_sites`] refuses edits of single
 //! atoms that would break the symmetry. Under symmetry, moved and added
 //! sites keep to their special positions and snap onto ones nearby. A [`CrystalDocument`] keeps a
-//! structure with its derived data, measurements and undo history.
+//! structure with its derived data, measurements and undo history. A
+//! [`CellTransform`] describes the structure in another cell; the
+//! [`CellPreset`]s give the primitive, conventional and Niggli cells and the
+//! other tabulated settings.
 
 mod atom_ref;
 mod bonds;
+mod cell_transform;
 mod constraints;
 mod derived;
 mod document;
@@ -39,6 +43,10 @@ mod transform;
 
 pub use atom_ref::{AtomRef, Measurement, angle, distance};
 pub use bonds::{Bond, BondRules, bonds, covalent_radius, display_bonds};
+pub use cell_transform::{
+    CellPreset, CellTransform, MAX_VOLUME_FACTOR, SettingChoice, TransformError, find_setting,
+    other_settings,
+};
 pub use constraints::cell_deviation;
 pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
@@ -52,7 +60,7 @@ pub use edit::{
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
 pub use formula::Formula;
-pub use id_map::{AtomFate, IdMap, SiteFate};
+pub use id_map::{AtomFate, IdMap, Rebasing, SiteFate};
 pub use lattice::{CellParams, Lattice, Orientation, Rotation};
 pub use measured::Measured;
 pub use neighbors::Neighbor;

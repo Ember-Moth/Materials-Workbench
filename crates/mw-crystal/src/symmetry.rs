@@ -10,7 +10,9 @@ use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// An exact rational number in lowest terms with a positive denominator.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Serialized as text, e.g. `"-1/2"` or `"3"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub struct Rational {
     num: i64,
     den: i64,
@@ -50,6 +52,29 @@ impl Rational {
         let nearest = scaled.round();
         ((scaled - nearest).abs() <= DECIMAL_TOLERANCE * 24.0)
             .then(|| Self::new(nearest as i64, 24))
+    }
+
+    /// Reads an integer or a fraction such as `-1/2` exactly, and a
+    /// decimal such as `0.5` or `0.3333` as the fraction it abbreviates
+    /// ([`Self::from_decimal`]). White space around the parts is ignored.
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if let Some((num, den)) = text.split_once('/') {
+            let num: i64 = num.trim().parse().ok()?;
+            let den: i64 = den.trim().parse().ok()?;
+            return (den != 0).then(|| Self::new(num, den));
+        }
+        if let Ok(value) = text.parse::<i64>() {
+            return Some(Self::integer(value));
+        }
+        // Only plain decimals: `inf` and `NaN` parse as floats too.
+        if !text
+            .chars()
+            .all(|c| c.is_ascii_digit() || "+-.".contains(c))
+        {
+            return None;
+        }
+        Self::from_decimal(text.parse().ok()?)
     }
 
     pub fn numerator(self) -> i64 {
@@ -141,6 +166,20 @@ impl fmt::Display for Rational {
         } else {
             write!(f, "{}/{}", self.num, self.den)
         }
+    }
+}
+
+impl From<Rational> for String {
+    fn from(value: Rational) -> Self {
+        value.to_string()
+    }
+}
+
+impl TryFrom<String> for Rational {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(&text).ok_or_else(|| format!("{text:?} is not a fraction such as 1/2"))
     }
 }
 

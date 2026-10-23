@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::constraints::cell_constraints;
 use crate::placement::{self, Placement};
 use crate::{
-    AtomFate, AtomRef, Axis, CellParam, CellParams, Constraint, CoordinateConstraint, Derived,
-    EditMode, IdMap, Measured, Occupant, Site, SiteFate, SiteId, Species, Structure, element,
-    expand, special_position, transform,
+    AtomFate, AtomRef, Axis, CellParam, CellParams, CellTransform, Constraint,
+    CoordinateConstraint, Derived, EditMode, IdMap, Measured, Occupant, Site, SiteFate, SiteId,
+    Species, Structure, TransformError, element, expand, special_position, transform,
 };
 
 /// How far the occupancies of one site may add up above 1 before an edit
@@ -174,6 +174,22 @@ pub enum Edit {
     /// Puts back a whole structure: the inverse of [`Edit::ExpandToP1`].
     /// References to atoms follow them to the atoms at the same positions.
     RestoreStructure { structure: Box<Structure> },
+    /// Describes the structure in another cell (design §7.8): the new basis
+    /// is `A·P`, the new origin is at p in the old basis, and coordinates
+    /// become `x' = P⁻¹·(x − p)`. The asymmetric unit stays the asymmetric
+    /// unit, with the same sites and labels; a larger cell adds the old
+    /// lattice translations as centering, a smaller one merges operations
+    /// that differ by a new lattice translation. References to atoms follow
+    /// them.
+    TransformCell { transform: CellTransform },
+    /// Puts back the structure a change of cell was applied to, exactly:
+    /// the inverse of [`Edit::TransformCell`]. `transform` is the change of
+    /// cell this undoes, inverted; references to atoms follow them through
+    /// it.
+    RestoreBasis {
+        transform: CellTransform,
+        structure: Box<Structure>,
+    },
 }
 
 /// The result of applying an [`Edit`].
@@ -390,6 +406,8 @@ pub enum EditError {
     RepeatedAtom(AtomRef),
     /// The structure is in P1 already.
     AlreadyP1,
+    /// The change of cell does not fit the structure (design §7.8).
+    Transform(TransformError),
 }
 
 impl EditError {
@@ -429,6 +447,7 @@ impl EditError {
             Self::UnknownMeasurement => "unknown_measurement",
             Self::RepeatedAtom(_) => "repeated_atom",
             Self::AlreadyP1 => "already_p1",
+            Self::Transform(error) => error.code(),
         }
     }
 }
@@ -524,6 +543,7 @@ impl fmt::Display for EditError {
                 atom.member, atom.site.0
             ),
             Self::AlreadyP1 => f.write_str("the structure is in P1 already"),
+            Self::Transform(error) => error.fmt(f),
         }
     }
 }
@@ -874,6 +894,44 @@ impl Edit {
                 let ids = restore_map(structure, restored);
                 let old = std::mem::replace(structure, Structure::clone(restored));
                 let inverse = Self::RestoreStructure {
+                    structure: Box::new(old),
+                };
+                (inverse, ids)
+            }
+            Self::TransformCell { transform } => {
+                // An exact inverse needs the old structure: coordinates
+                // taken through P⁻¹ and back through P differ by rounding.
+                let back = transform
+                    .inverse()
+                    .ok_or(EditError::Transform(TransformError::TooLarge))?;
+                if transform.is_identity() {
+                    let inverse = Self::RestoreBasis {
+                        transform: back,
+                        structure: Box::new(structure.clone()),
+                    };
+                    return Ok((inverse, same));
+                }
+                let changed =
+                    transform::change_basis(structure, transform).map_err(EditError::Transform)?;
+                let ids = transform::rebase_map(structure, &changed, transform);
+                let old = std::mem::replace(structure, changed);
+                let inverse = Self::RestoreBasis {
+                    transform: back,
+                    structure: Box::new(old),
+                };
+                (inverse, ids)
+            }
+            Self::RestoreBasis {
+                transform,
+                structure: restored,
+            } => {
+                let forward = transform
+                    .inverse()
+                    .ok_or(EditError::Transform(TransformError::TooLarge))?;
+                let ids = transform::rebase_map(structure, restored, transform);
+                let old = std::mem::replace(structure, Structure::clone(restored));
+                let inverse = Self::RestoreBasis {
+                    transform: forward,
                     structure: Box::new(old),
                 };
                 (inverse, ids)

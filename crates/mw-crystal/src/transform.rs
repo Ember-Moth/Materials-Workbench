@@ -1,7 +1,8 @@
-//! Describing a structure in another cell (design §7.1, §7.9): the P1
-//! expansion, where every equivalent atom becomes a site of its own, and
-//! supercells. Displacement parameters and coordinate uncertainties follow
-//! the atoms through the operations and the change of basis.
+//! Describing a structure in another cell (design §7.1, §7.8, §7.9): the P1
+//! expansion, where every equivalent atom becomes a site of its own,
+//! changes of cell, and supercells. Displacement parameters and coordinate
+//! uncertainties follow the atoms through the operations and the change of
+//! basis.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
@@ -9,9 +10,12 @@ use std::fmt;
 
 use nalgebra::Matrix3;
 
+use crate::cell_transform::{self, Exact};
+use crate::id_map::Rebasing;
 use crate::{
-    Adp, CellParams, Lattice, Measured, Occupant, Orientation, Rotation, Site, SiteId, SpaceGroup,
-    Structure, SymOp, Symmetry, expand,
+    Adp, CellParam, CellParams, CellTransform, IdMap, Lattice, Measured, Occupant, Orientation,
+    Rotation, Site, SiteFate, SiteId, SpaceGroup, Structure, SymOp, Symmetry, TransformError,
+    expand, tables,
 };
 
 /// Coefficients this close to an integer are that integer, so that values
@@ -341,6 +345,356 @@ pub fn right_handed(structure: &Structure) -> Cow<'_, Structure> {
         });
     }
     Cow::Owned(inverted)
+}
+
+/// The largest operation set a change of cell may make: Fm-3m's in a cell
+/// [`cell_transform::MAX_VOLUME_FACTOR`] times its conventional one.
+const MAX_OPERATIONS: usize = 192 * cell_transform::MAX_VOLUME_FACTOR as usize;
+
+/// The operations in the new cell (design §7.8): `W' = P⁻¹·W·P`, `w' =
+/// P⁻¹·(w + W·p − p)`, with the translations of the old lattice that are
+/// not in the new one added as centering, and operations that differ only
+/// by a translation of the new lattice merged into one.
+///
+/// Refused when a new basis vector is not a lattice translation of the
+/// structure (its translation is not an operation), or when an operation
+/// does not map the new lattice onto itself (`W'` is not an integer
+/// matrix).
+pub(crate) fn transform_operations(
+    symmetry: &Symmetry,
+    transform: &CellTransform,
+) -> Result<Symmetry, TransformError> {
+    let too_large = || TransformError::TooLarge;
+    let p = transform.exact_matrix();
+    let origin = transform.exact_origin();
+    let inverse = cell_transform::mat_inverse(&p).ok_or_else(too_large)?;
+    let rational = |v: Exact| v.to_rational().ok_or_else(too_large);
+
+    // Every new basis vector must be a translation of the crystal.
+    let columns = [0, 1, 2].map(|j| [0, 1, 2].map(|i| p[i][j].fract()));
+    for (vector, t) in columns.iter().enumerate() {
+        if t.iter().all(|v| v.is_zero()) {
+            continue;
+        }
+        let translation = SymOp::new(
+            *SymOp::IDENTITY.rotation(),
+            [rational(t[0])?, rational(t[1])?, rational(t[2])?],
+        );
+        if !symmetry.operations().contains(&translation) {
+            return Err(TransformError::NotATranslation { vector });
+        }
+    }
+
+    let mut transformed = Vec::with_capacity(symmetry.operations().len());
+    for op in symmetry.operations() {
+        let w = op
+            .rotation()
+            .map(|row| row.map(|v| Exact::integer(v.into())));
+        let rotated = cell_transform::mat_mul(&inverse, &w).ok_or_else(too_large)?;
+        let rotation = cell_transform::mat_mul(&rotated, &p).ok_or_else(too_large)?;
+        let mut integer = [[0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                let v = rotation[i][j];
+                if !v.is_integer() {
+                    return Err(TransformError::BreaksSymmetry { operation: *op });
+                }
+                integer[i][j] = i32::try_from(rational(v)?.numerator()).map_err(|_| too_large())?;
+            }
+        }
+        // w + W·p − p, then P⁻¹.
+        let wp = cell_transform::mat_apply(&w, &origin).ok_or_else(too_large)?;
+        let mut shift = [Exact::ZERO; 3];
+        for i in 0..3 {
+            shift[i] = Exact::of(op.translation()[i])
+                .add(wp[i])
+                .and_then(|v| v.sub(origin[i]))
+                .ok_or_else(too_large)?;
+        }
+        let translation = cell_transform::mat_apply(&inverse, &shift).ok_or_else(too_large)?;
+        transformed.push((integer, translation));
+    }
+
+    // The old lattice in the new basis, modulo the new lattice: the
+    // translations a larger cell adds as centering.
+    let generators: Vec<[Exact; 3]> = (0..3)
+        .map(|j| [0, 1, 2].map(|i| inverse[i][j].fract()))
+        .collect();
+    let mut centering = vec![[Exact::ZERO; 3]];
+    let mut next = 0;
+    while next < centering.len() {
+        let t = centering[next];
+        for g in &generators {
+            let mut sum = [Exact::ZERO; 3];
+            for i in 0..3 {
+                sum[i] = t[i].add(g[i]).ok_or_else(too_large)?.fract();
+            }
+            if !centering.contains(&sum) {
+                if centering.len() * transformed.len() >= MAX_OPERATIONS {
+                    return Err(TransformError::Volume {
+                        determinant: transform.determinant(),
+                    });
+                }
+                centering.push(sum);
+            }
+        }
+        next += 1;
+    }
+
+    let mut seen = HashSet::new();
+    let mut operations = Vec::new();
+    for t in &centering {
+        for (rotation, translation) in &transformed {
+            let mut shifted = [Exact::ZERO; 3];
+            for i in 0..3 {
+                shifted[i] = translation[i].add(t[i]).ok_or_else(too_large)?;
+            }
+            let op = SymOp::new(
+                *rotation,
+                [
+                    rational(shifted[0])?,
+                    rational(shifted[1])?,
+                    rational(shifted[2])?,
+                ],
+            );
+            if seen.insert(op) {
+                operations.push(op);
+            }
+        }
+    }
+    // The checks above make it a group modulo the new lattice: the new
+    // lattice consists of translations of the crystal, and every operation
+    // maps it onto itself.
+    let symmetry = Symmetry::from_group(operations);
+    // Which of the operations that differ by a centering translation comes
+    // first depends on the cell the structure came from; a tabulated
+    // setting is given in the order of the tables, so that a change of cell
+    // and its inverse give back the operations in their order.
+    Ok(match tables::match_operations(&symmetry) {
+        Some(setting) => setting.symmetry.clone(),
+        None => symmetry,
+    })
+}
+
+/// Puts a value computed through a change of cell back on the number it is
+/// within rounding of, as the source most likely wrote it: a fraction with
+/// a denominator up to 24, or a decimal with up to 10 places. Values read
+/// from a file then come back exactly after a change of cell and its
+/// inverse.
+fn tidy(value: f64) -> f64 {
+    const ROUNDING: f64 = 8e-15;
+    let tolerance = ROUNDING * value.abs().max(1.0);
+    let near = |scale: f64| {
+        let candidate = (value * scale).round() / scale;
+        ((candidate - value).abs() <= tolerance).then_some(candidate + 0.0)
+    };
+    (1..=24)
+        .map(f64::from)
+        .find_map(near)
+        .or_else(|| (1..=10).find_map(|places| near(10f64.powi(places))))
+        .unwrap_or(value)
+}
+
+/// The cell parameters of `A·P`. A new basis vector that is a multiple of
+/// one old one keeps that length, scaled, uncertainty included, and the
+/// angle between two such vectors is the old angle (or 180° minus it);
+/// the other lengths and angles come from the metric tensor `Pᵀ·G·P`, with
+/// exact right and 60°/120° angles, and have no uncertainty: the
+/// correlations it would need are not known.
+pub(crate) fn transformed_params(old: &CellParams, transform: &CellTransform) -> CellParams {
+    let p = transform
+        .matrix()
+        .map(|row| row.map(crate::Rational::to_f64));
+    // For each new axis j, the old axis it lies along and the factor.
+    let along: [Option<(usize, f64)>; 3] = [0, 1, 2].map(|j| {
+        let nonzero: Vec<usize> = (0..3).filter(|&i| p[i][j] != 0.0).collect();
+        match nonzero[..] {
+            [i] => Some((i, p[i][j])),
+            _ => None,
+        }
+    });
+    let from_metric = along.iter().any(Option::is_none).then(|| {
+        let g = Matrix3::from(old.metric()).transpose();
+        let pm = Matrix3::from_fn(|i, j| p[i][j]);
+        let g2 = pm.transpose() * g * pm;
+        CellParams::from_metric([0, 1, 2].map(|i| [0, 1, 2].map(|j| g2[(i, j)])))
+    });
+    let computed = |param: CellParam| {
+        let value = from_metric
+            .expect("computed when an axis needs it")
+            .get(param);
+        Measured::exact(tidy(value.value()))
+    };
+    let lengths = [old.a, old.b, old.c];
+    let angles = [old.alpha, old.beta, old.gamma];
+    let length_param = [CellParam::A, CellParam::B, CellParam::C];
+    // The angle between axes i and k is the (3 − i − k)-th.
+    let angle_param = [CellParam::Alpha, CellParam::Beta, CellParam::Gamma];
+    let length = |j: usize| {
+        let Some((i, factor)) = along[j] else {
+            return computed(length_param[j]);
+        };
+        let value = lengths[i];
+        let factor = factor.abs();
+        if factor == 1.0 {
+            return value;
+        }
+        let scaled = tidy(value.value() * factor);
+        match value.su() {
+            Some(su) => Measured::with_su(scaled, su * factor),
+            None => Measured::exact(scaled),
+        }
+    };
+    let angle = |j: usize, k: usize| {
+        let (Some((i, fi)), Some((l, fl))) = (along[j], along[k]) else {
+            return computed(angle_param[3 - j - k]);
+        };
+        let value = angles[3 - i - l];
+        if fi.signum() == fl.signum() {
+            return value;
+        }
+        let supplement = tidy(180.0 - value.value());
+        match value.su() {
+            Some(su) => Measured::with_su(supplement, su),
+            None => Measured::exact(supplement),
+        }
+    };
+    CellParams {
+        a: length(0),
+        b: length(1),
+        c: length(2),
+        alpha: angle(1, 2),
+        beta: angle(0, 2),
+        gamma: angle(0, 1),
+    }
+}
+
+/// Describes the structure in the cell `(P, p)` (design §7.8): new basis
+/// `A·P`, coordinates `x' = P⁻¹·(x − p)`, the operations of
+/// [`transform_operations`]. The asymmetric unit stays the asymmetric unit:
+/// the same sites with the same ids, labels and occupants, displacement
+/// parameters and uncertainties carried through `P⁻¹`. Every atom keeps its
+/// place relative to the new origin, so the lattice is oriented to put the
+/// new basis vectors where `A·P` is (design §4.2).
+pub(crate) fn change_basis(
+    structure: &Structure,
+    transform: &CellTransform,
+) -> Result<Structure, TransformError> {
+    let symmetry = transform_operations(&structure.symmetry, transform)?;
+    let old = &structure.lattice;
+    let params = transformed_params(old.params(), transform);
+    let lattice = if is_diagonal_rational(transform) {
+        let mut lattice = *old;
+        lattice.set_params(params);
+        lattice
+    } else {
+        let basis = old.matrix();
+        let p = transform
+            .matrix()
+            .map(|row| row.map(crate::Rational::to_f64));
+        let new_basis =
+            [0, 1, 2].map(|j| [0, 1, 2].map(|k| (0..3).map(|i| p[i][j] * basis[i][k]).sum()));
+        Lattice::oriented_as(params, new_basis).ok_or(TransformError::TooLarge)?
+    };
+    if !lattice.params().is_valid() {
+        return Err(TransformError::TooLarge);
+    }
+
+    let inverse = cell_transform::mat_inverse(&transform.exact_matrix())
+        .ok_or(TransformError::TooLarge)?
+        .map(|row| row.map(Exact::to_f64));
+    let origin = transform.origin().map(crate::Rational::to_f64);
+    let old_reciprocal = old.params().reciprocal_lengths();
+    let new_reciprocal = lattice.params().reciprocal_lengths();
+    let sites = structure
+        .sites
+        .iter()
+        .map(|site| {
+            let d = [0, 1, 2].map(|i| site.position[i] - origin[i]);
+            let position =
+                [0, 1, 2].map(|i| tidy((0..3).map(|j| inverse[i][j] * d[j]).sum::<f64>()));
+            let occupants = site
+                .occupants
+                .iter()
+                .map(|occupant| Occupant {
+                    adp: occupant.adp.map(|adp| {
+                        tidy_adp(transform_adp(
+                            adp,
+                            &inverse,
+                            &old_reciprocal,
+                            &new_reciprocal,
+                        ))
+                    }),
+                    ..occupant.clone()
+                })
+                .collect();
+            Site {
+                position,
+                position_su: transform_su(site.position_su, &inverse),
+                occupants,
+                ..site.clone()
+            }
+        })
+        .collect();
+
+    // The type stays the same; the name the source gave stays as the
+    // record of what the source wrote.
+    Ok(Structure {
+        lattice,
+        symmetry,
+        space_group: structure.space_group.clone(),
+        sites,
+        tolerances: structure.tolerances,
+    })
+}
+
+fn is_diagonal_rational(transform: &CellTransform) -> bool {
+    let m = transform.matrix();
+    (0..3).all(|i| (0..3).all(|j| i == j || m[i][j].is_zero()))
+}
+
+fn tidy_adp(adp: Adp) -> Adp {
+    let tidied = |m: Measured| match m.su() {
+        Some(su) => Measured::with_su(tidy(m.value()), su),
+        None => Measured::exact(tidy(m.value())),
+    };
+    match adp {
+        Adp::Isotropic(u) => Adp::Isotropic(u),
+        Adp::Anisotropic(u) => Adp::Anisotropic(u.map(tidied)),
+    }
+}
+
+/// Where the atoms of each site went through the change of cell that turned
+/// `before` into `after` (design §7.11): the same atom, under its member
+/// number and cell in the new cell.
+pub(crate) fn rebase_map(
+    before: &Structure,
+    after: &Structure,
+    transform: &CellTransform,
+) -> IdMap {
+    let inverse = cell_transform::mat_inverse(&transform.exact_matrix())
+        .map(|m| m.map(|row| row.map(Exact::to_f64)));
+    let Some(linear) = inverse else {
+        return IdMap::reshaped(before.sites.iter().map(|s| s.id));
+    };
+    let origin = transform.origin().map(crate::Rational::to_f64);
+    let shift = [0, 1, 2].map(|i| -(0..3).map(|j| linear[i][j] * origin[j]).sum::<f64>());
+    let positions = |structure: &Structure, site: &Site| -> Vec<[f64; 3]> {
+        expand::members(structure, site)
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect()
+    };
+    IdMap::with_fates(before.sites.iter().filter_map(|site| {
+        let new = after.site(site.id)?;
+        let rebasing = Rebasing::new(
+            linear,
+            shift,
+            positions(before, site),
+            positions(after, new),
+        );
+        Some((site.id, SiteFate::Rebased(Box::new(rebasing))))
+    }))
 }
 
 /// The lattice `A·M`, oriented so that every atom stays where it was in

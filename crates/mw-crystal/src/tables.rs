@@ -322,6 +322,36 @@ pub(crate) fn search_operations(
     symmetry: &Symmetry,
     metric: [[f64; 3]; 3],
 ) -> Option<(&'static Setting, Transform)> {
+    let dataset = probe_dataset(symmetry, metric, MoyoSetting::Standard)?;
+    let transform = Transform::new(dataset.std_linear, dataset.std_origin_shift_as_array())?;
+    Some((setting(dataset.hall_number as u16), transform))
+}
+
+impl Transform {
+    fn new(linear: Matrix3<f64>, origin: [f64; 3]) -> Option<Self> {
+        let inverse = linear.try_inverse()?;
+        Some(Self {
+            linear: array(linear),
+            inverse: array(inverse),
+            origin,
+        })
+    }
+}
+
+fn array(m: Matrix3<f64>) -> [[f64; 3]; 3] {
+    [0, 1, 2].map(|i| [0, 1, 2].map(|j| m[(i, j)]))
+}
+
+/// moyo's dataset for probe atoms that the operations place, in a cell
+/// with the metric `metric` (Å²) that they preserve: the symmetry is
+/// exactly the operation set's, and `setting` picks the setting moyo
+/// standardizes into. `None` when moyo finds more operations than the set
+/// has, or none of `setting`.
+fn probe_dataset(
+    symmetry: &Symmetry,
+    metric: [[f64; 3]; 3],
+    setting: MoyoSetting,
+) -> Option<MoyoDataset> {
     let metric = Matrix3::from_fn(|i, j| metric[i][j]);
     // G = L·Lᵀ: the rows of L are basis vectors with that metric.
     let l = metric.cholesky()?.l();
@@ -334,19 +364,69 @@ pub(crate) fn search_operations(
             species.push(number);
         }
     }
-    let dataset = dataset(basis, &positions, &species, 1e-4)?;
-    if dataset.operations.len() != symmetry.operations().len() {
-        return None;
-    }
-    let linear = dataset.std_linear;
-    let inverse = linear.try_inverse()?;
-    let array = |m: Matrix3<f64>| [0, 1, 2].map(|i| [0, 1, 2].map(|j| m[(i, j)]));
-    let transform = Transform {
-        linear: array(linear),
-        inverse: array(inverse),
-        origin: dataset.std_origin_shift_as_array(),
+    let dataset = MoyoDataset::new(
+        &Cell::new(
+            Lattice::from_basis(basis),
+            positions.iter().map(|p| Vector3::from(*p)).collect(),
+            species,
+        ),
+        1e-4,
+        AngleTolerance::Default,
+        setting,
+        false,
+    )
+    .ok()?;
+    (dataset.operations.len() == symmetry.operations().len()).then_some(dataset)
+}
+
+/// Where moyo puts an operation set (design §7.8): the change of cell
+/// `(P, p)` to its conventional cell in the tabulated setting `hall_number`
+/// (the standard setting when `None`), and to the primitive cell of that
+/// conventional cell. Neither is unique: composed with any operation of
+/// the set, a change of cell gives the same new operations.
+pub(crate) fn standardize(
+    symmetry: &Symmetry,
+    metric: [[f64; 3]; 3],
+    hall_number: Option<u16>,
+) -> Option<(Transform, Transform)> {
+    let setting = match hall_number {
+        Some(hall_number) => MoyoSetting::HallNumber(i32::from(hall_number)),
+        None => MoyoSetting::Standard,
     };
-    Some((setting(dataset.hall_number as u16), transform))
+    let dataset = probe_dataset(symmetry, metric, setting)?;
+    let conventional = Transform::new(dataset.std_linear, dataset.std_origin_shift_as_array())?;
+    let origin = dataset.prim_std_origin_shift;
+    let primitive = Transform::new(dataset.prim_std_linear, [origin[0], origin[1], origin[2]])?;
+    Some((conventional, primitive))
+}
+
+/// The change of basis from the conventional cell of a tabulated setting
+/// to its primitive cell, as the International Tables give it for the
+/// setting's centering: for F, a′ = ½(b + c), b′ = ½(a + c), c′ = ½(a + b);
+/// the identity for a primitive setting.
+pub(crate) fn primitive_basis(hall_number: u16) -> [[f64; 3]; 3] {
+    let entry = hall_symbol_entry(i32::from(hall_number)).expect("Hall numbers are 1–530");
+    let hall = HallSymbol::new(entry.hall_symbol).expect("tabulated Hall symbol");
+    array(hall.centering.inverse())
+}
+
+/// The number of lattice points in the conventional cell of a tabulated
+/// setting: 4 for F, 1 for P.
+#[cfg(test)]
+pub(crate) fn primitive_order(hall_number: u16) -> usize {
+    let entry = hall_symbol_entry(i32::from(hall_number)).expect("Hall numbers are 1–530");
+    HallSymbol::new(entry.hall_symbol)
+        .expect("tabulated Hall symbol")
+        .centering
+        .order()
+}
+
+/// The integer matrix T that takes the basis `basis` (rows, Å) to its
+/// Niggli-reduced cell `A·T` (design §7.8). The basis must be right-handed;
+/// T then has determinant +1. `None` when the reduction fails.
+pub(crate) fn niggli(basis: [[f64; 3]; 3]) -> Option<[[i32; 3]; 3]> {
+    let (_, t) = Lattice::from_basis(basis).niggli_reduce().ok()?;
+    Some([0, 1, 2].map(|i| [0, 1, 2].map(|j| t[(i, j)])))
 }
 
 /// The symmetry moyo finds for atoms.
@@ -394,6 +474,16 @@ fn dataset(
         false,
     )
     .ok()
+}
+
+/// The tabulated settings of a type, e.g. the nine of P2₁/c (No. 14).
+pub(crate) fn settings_of(number: u16) -> impl Iterator<Item = &'static Setting> {
+    TABLES.settings.iter().filter(move |s| s.number == number)
+}
+
+/// Whether two operation sets hold the same operations, in any order.
+pub(crate) fn same_operations(a: &Symmetry, b: &Symmetry) -> bool {
+    sorted(a.operations()) == sorted(b.operations())
 }
 
 #[cfg(test)]

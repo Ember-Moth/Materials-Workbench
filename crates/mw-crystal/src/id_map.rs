@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::{AtomRef, SiteId};
 
 /// How an edit changed one site, as far as references to it are concerned.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SiteFate {
     Removed,
     /// The orbit changed size, so its member numbers may name other atoms
@@ -21,6 +21,54 @@ pub enum SiteFate {
         site: SiteId,
         member: u16,
     },
+    /// The cell changed (`TransformCell`): the site's atoms are the same,
+    /// with new member numbers and cells.
+    Rebased(Box<Rebasing>),
+}
+
+/// How the atoms of one site are numbered after a change of cell: an atom
+/// at fractional `x` in the old cell is at `linear·x + shift` in the new
+/// one (design §7.8, §7.11).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rebasing {
+    linear: [[f64; 3]; 3],
+    shift: [f64; 3],
+    /// The orbit members' positions in [0, 1), before and after.
+    before: Vec<[f64; 3]>,
+    after: Vec<[f64; 3]>,
+}
+
+impl Rebasing {
+    pub(crate) fn new(
+        linear: [[f64; 3]; 3],
+        shift: [f64; 3],
+        before: Vec<[f64; 3]>,
+        after: Vec<[f64; 3]>,
+    ) -> Self {
+        Self {
+            linear,
+            shift,
+            before,
+            after,
+        }
+    }
+
+    /// The same atom in the new cell, if it is found there.
+    fn atom(&self, atom: AtomRef) -> Option<AtomRef> {
+        // Members are at least the position tolerance apart, far more than
+        // this in fractional coordinates.
+        const SAME: f64 = 1e-6;
+        let base = self.before.get(usize::from(atom.member))?;
+        let x = [0, 1, 2].map(|i| base[i] + f64::from(atom.cell[i]));
+        let moved = [0, 1, 2]
+            .map(|i| (0..3).map(|j| self.linear[i][j] * x[j]).sum::<f64>() + self.shift[i]);
+        self.after.iter().enumerate().find_map(|(member, p)| {
+            let d = [0, 1, 2].map(|i| moved[i] - p[i]);
+            d.iter()
+                .all(|v| (v - v.round()).abs() < SAME)
+                .then(|| AtomRef::new(atom.site, member as u16, d.map(|v| v.round() as i32)))
+        })
+    }
 }
 
 /// What became of an atom reference.
@@ -81,7 +129,7 @@ impl IdMap {
             current = current
                 .into_iter()
                 .flat_map(|site| match step.get(&site) {
-                    None | Some(SiteFate::Reshaped) => vec![site],
+                    None | Some(SiteFate::Reshaped | SiteFate::Rebased(_)) => vec![site],
                     Some(SiteFate::Removed) => Vec::new(),
                     Some(SiteFate::Split(sites)) => sites.clone(),
                     Some(SiteFate::Merged { site, .. }) => vec![*site],
@@ -109,11 +157,15 @@ impl IdMap {
                         AtomFate::Kept(AtomRef::new(*site, *member, atom.cell))
                     }
                     Some(SiteFate::Merged { site, .. }) => AtomFate::Site(*site),
+                    Some(SiteFate::Rebased(rebasing)) => match rebasing.atom(atom) {
+                        Some(atom) => AtomFate::Kept(atom),
+                        None => AtomFate::Site(atom.site),
+                    },
                 },
                 // A reference already reduced to its site follows the site;
                 // of a split site it keeps the first part.
                 AtomFate::Site(site) => match step.get(&site) {
-                    None | Some(SiteFate::Reshaped) => AtomFate::Site(site),
+                    None | Some(SiteFate::Reshaped | SiteFate::Rebased(_)) => AtomFate::Site(site),
                     Some(SiteFate::Removed) => AtomFate::Removed,
                     Some(SiteFate::Split(sites)) => sites
                         .first()
