@@ -9,6 +9,7 @@ license.workspace = true
 mw-automation.workspace = true
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
+mw-project-file.workspace = true
 rmcp = { workspace = true, features = ["server", "transport-io"] }
 tokio = { workspace = true, features = ["io-std"] }
 serde.workspace = true
@@ -17,6 +18,7 @@ log.workspace = true
 env_logger.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 # The integration tests drive the server binary as an MCP client would.
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 # Only to check that every tool schema is in the strict subset

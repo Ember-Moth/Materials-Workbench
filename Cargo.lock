@@ -4143,6 +4143,7 @@ dependencies = [
  "mw-crystal",
  "mw-crystal-io",
  "mw-llm",
+ "mw-project-file",
  "serde",
  "serde_json",
 ]
@@ -4200,9 +4201,11 @@ dependencies = [
  "mw-crystal",
  "mw-crystal-io",
  "mw-llm",
+ "mw-project-file",
  "rmcp",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -8806,13 +8809,16 @@ dependencies = [
  "log",
  "mw-crystal",
  "mw-crystal-io",
+ "mw-mcp",
  "mw-project",
  "mw-project-file",
  "mw-structure",
+ "rmcp",
  "rust-i18n",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

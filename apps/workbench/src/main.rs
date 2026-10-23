@@ -13,6 +13,7 @@ macro_rules! tr {
 mod actions;
 mod assets;
 mod config;
+mod mcp;
 mod palette;
 mod projects;
 #[cfg(feature = "screenshot")]
@@ -22,13 +23,21 @@ mod settings;
 mod ui_tests;
 mod workbench;
 
+use std::process::ExitCode;
+
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 use config::AppPaths;
 use workbench::Workbench;
 
-fn main() {
+fn main() -> ExitCode {
+    // `materials-workbench mcp` serves MCP clients on stdio and opens no
+    // window, so it starts before GPUI does.
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some(mcp::COMMAND) {
+        return mcp::run(args);
+    }
     env_logger::init();
     gpui_kit::application()
         .with_assets(assets::AppAssets)
@@ -92,4 +101,5 @@ fn main() {
             #[cfg(feature = "screenshot")]
             screenshot::start(window, workbench, cx);
         });
+    ExitCode::SUCCESS
 }

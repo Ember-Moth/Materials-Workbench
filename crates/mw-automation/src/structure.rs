@@ -21,28 +21,9 @@ const MAX_CUTOFF: f64 = 10.0;
 const MAX_SITES: u32 = 500;
 
 schema_struct! {
-    pub struct NoInput {}
-}
-
-schema_struct! {
     pub struct StructureInput {
         /// The structure's id, from structure.list.
         pub structure: StructureEntryId,
-    }
-}
-
-schema_struct! {
-    pub struct ListOutput {
-        pub structures: Vec<ListEntry>,
-    }
-}
-
-schema_struct! {
-    pub struct ListEntry {
-        /// Id to name the structure by in other calls.
-        pub structure: StructureEntryId,
-        pub name: String,
-        pub project: String,
     }
 }
 
@@ -478,21 +459,30 @@ pub(crate) fn document(
     host: &dyn Host,
     id: StructureEntryId,
 ) -> Result<&CrystalDocument, CallError> {
-    host.document(id).ok_or_else(|| unknown_structure(id))
+    host.document(id).ok_or_else(|| missing(host, id))
 }
 
 pub(crate) fn document_mut(
     host: &mut dyn Host,
     id: StructureEntryId,
 ) -> Result<&mut CrystalDocument, CallError> {
-    host.document_mut(id).ok_or_else(|| unknown_structure(id))
+    // Checked first: the borrow checker does not let the error branch use
+    // `host` once `document_mut` has borrowed it for the result.
+    if host.document(id).is_none() {
+        return Err(missing(host, id));
+    }
+    Ok(host.document_mut(id).expect("the document is there"))
 }
 
-fn unknown_structure(id: StructureEntryId) -> CallError {
-    CallError::new(
-        "unknown_structure",
-        format!("no structure with id {}; {STRUCTURE_ID_HINT}", id.0),
-    )
+/// Why there is no document: a structure of a project that is not open
+/// yet, or no structure at all.
+fn missing(host: &dyn Host, id: StructureEntryId) -> CallError {
+    crate::project::not_open(host, id).unwrap_or_else(|| {
+        CallError::new(
+            "unknown_structure",
+            format!("no structure with id {}; {STRUCTURE_ID_HINT}", id.0),
+        )
+    })
 }
 
 pub(crate) fn invalid(message: impl Into<String>) -> CallError {
@@ -700,27 +690,6 @@ pub(crate) fn register(registry: &mut Registry) {
         effect: Effect::Undoable,
         availability: Availability::Both,
     };
-
-    registry.register(
-        query(
-            "structure.list",
-            "List the structures that can be named by id, with their names and projects. \
-             Call this first: other structure tools take these ids.",
-        ),
-        |host: &mut dyn Host, _: NoInput| {
-            let structures: Vec<ListEntry> = host
-                .structures()
-                .into_iter()
-                .map(|info| ListEntry {
-                    structure: info.id,
-                    name: info.name,
-                    project: info.project,
-                })
-                .collect();
-            let summary = format!("{} structures.", structures.len());
-            Ok(Output::new(ListOutput { structures }, summary))
-        },
-    );
 
     registry.register(
         query(
