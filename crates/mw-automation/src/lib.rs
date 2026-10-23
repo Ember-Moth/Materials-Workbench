@@ -4,7 +4,8 @@
 //! JSON Schemas for its input and output, and what it can change.
 //!
 //! Capabilities run on documents a [`Host`] provides: the running
-//! application, or [`Documents`] held in memory. They call the same domain
+//! application, the MCP server reading project files ([`Projects`]), or
+//! [`Documents`] held in memory. They call the same domain
 //! commands as the interface (`mw_crystal::Edit`), name things by stable
 //! ids ([`StructureEntryId`], `SiteId`, `AtomRef`), and fail with
 //! recoverable errors that say what to do instead.
@@ -14,11 +15,16 @@
 
 mod files;
 mod history;
+mod project;
 mod registry;
 pub mod schema;
 mod structure;
 
 pub use files::{MAX_EXPORT_BYTES, diagnostic_message};
+pub use project::{
+    EntryInfo, OpenedFile, Opening, ProjectInfo, Projects, RecentProject, RecentProjects,
+    SkippedBlock, resource_uri,
+};
 pub use registry::{
     Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output, Registry,
     Spec, StructureEntryId, StructureInfo,

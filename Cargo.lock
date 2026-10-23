@@ -4143,6 +4143,7 @@ dependencies = [
  "mw-crystal",
  "mw-crystal-io",
  "mw-llm",
+ "mw-project-file",
  "serde",
  "serde_json",
 ]

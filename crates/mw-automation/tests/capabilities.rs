@@ -89,14 +89,26 @@ fn schemas_are_in_the_strict_subset() {
         let stats = check_schema(&capability.input_schema).unwrap();
         assert_eq!(stats.union_parameters, 0, "{name}");
         // Tool names cannot contain dots; the assistant maps them.
-        tools.push(ToolDefinition::new(
+        let tool = ToolDefinition::new(
             name.replace('.', "__"),
             capability.description,
             capability.input_schema.clone(),
-        ));
+        );
+        tools.push((capability.effect, tool));
     }
-    // All of them fit in one strict request.
-    check_tools(&tools, true).unwrap();
+    // A strict request holds at most 20 tools, fewer than there are
+    // capabilities, so the assistant picks them by task (design §4). The
+    // read-only ones, which the MCP server offers, fit in one request.
+    let read_only: Vec<ToolDefinition> = tools
+        .iter()
+        .filter(|(effect, _)| *effect == Effect::ReadOnly)
+        .map(|(_, tool)| tool.clone())
+        .collect();
+    check_tools(&read_only, true).unwrap();
+    let tools: Vec<ToolDefinition> = tools.into_iter().map(|(_, tool)| tool).collect();
+    for request in tools.chunks(20) {
+        check_tools(request, true).unwrap();
+    }
 }
 
 #[test]

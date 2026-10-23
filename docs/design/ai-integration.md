@@ -89,8 +89,9 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 19 个能力：
-  - 结构查询：`structure.list`、`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
+- `Registry::standard()` 注册了 23 个能力：
+  - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
+  - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
   - 结构编辑：`structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`，以及 P1 下的 `structure.set_position`；
   - `history.undo`、`history.redo`。
@@ -98,8 +99,8 @@ Capability
   MCP Server 按 5.2 节的版本逐步暴露它们。
 - `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。
 - **Schema 由 Rust 类型生成**：输入输出都是用 `schema_struct!` 声明的结构体，同一份字段列表同时生成 serde 类型和 Schema，字段的文档注释就是给模型看的说明，两者不会不一致。没有用 schemars：它生成的 Schema 带有严格子集之外的关键字（`format`、`minimum`、`$schema` 等），还得再改写一遍。
-- **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部 19 个能力放进一个严格请求也合规；输出 Schema 同样在子集内，可以有可空字段。
-- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`。`Documents` 是放在内存里的实现，供测试和以后的无界面模式使用；连接运行中的应用时由界面实现（v0.2）。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部只读能力（MCP Server 暴露的那些）放进一个严格请求也合规；能力总数已超过一个严格请求的 20 个工具，所以测试按每 20 个一组检查其余的。输出 Schema 同样在子集内，可以有可空字段。
+- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11）。`Documents` 是放在内存里、没有项目的实现，供测试使用；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时由界面实现（M12）。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
 - **参数先按类型反序列化**（拒绝多余字段），类型不对时返回 `invalid_arguments`；范围和单位由处理函数检查。元素符号不区分大小写（`zr` 即 Zr）。
 - **错误可恢复**：`CallError` 有稳定的 `code`、英文的 `message` 和引导 `guidance`。例如对称模式下只给 Ti1 的一个等效原子换元素，返回 `breaks_symmetry`，引导为"改整个位点"或"转为 P1"（晶体学设计稿 7.1 节）。
 - **结果双份**：`CallResult` 是符合输出 Schema 的 JSON 加一句英文摘要。
@@ -108,7 +109,7 @@ Capability
   - `structure.diagnostics`：结构导入时的诊断，分页；每条有严重程度、稳定代码（如 `atom.snapped`）、源文件行号和英文说明。英文说明由 `diagnostic_message` 生成，写在 `mw-automation` 里，因为它是给模型看的；界面仍用 `mw-structure/src/diagnostics.rs` 的本地化文案。不是从文件来的结构（例如示例）没有诊断。
   - `structure.export`：把结构写成 CIF、POSCAR 或扩展 XYZ 文本并返回，不写文件，所以副作用等级是只读（第 5.2 节）。写法与界面的导出对话框相同：导入的结构写 CIF 时写回源文件的字段，POSCAR 的注释行是"结构名 · 项目名"；部分占位、未知元素被拒绝时返回 `partial_occupancy`、`unknown_element`，前者提示改用 CIF。文本超过 1 MiB 时拒绝（`too_large`），这已远超模型一次能读的量，写大文件属于 v0.3 的写文件能力。
   - 为此新增的接口都是只加不改：`mw-automation` 依赖 `mw-crystal-io`；`Host` 新增带默认实现（返回 `None`）的 `source`，给出结构导入自的数据块；`Documents` 新增 `add_imported`；`CallResult` 新增 `new`（它是 `#[non_exhaustive]`，给注册表之外的入口构造结果用）。
-  - 注册表现在有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。内置助手以后要按任务挑选工具子集，不能总是把全部能力放进一个请求。
+  - 当时注册表有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）；M11 加上项目能力后是 23 个，已经超过。内置助手要按任务挑选工具子集，不能把全部能力放进一个请求。
 
 ## 5. MCP Server（`mw-mcp`）
 
@@ -127,12 +128,14 @@ Capability
   - 远程访问必须由用户显式开启。
 - **实现**：用官方的 MCP Rust SDK `rmcp`（3.7，2026-10-22 核对，见附录）。协议适配都在 `mw-mcp` 里。
 
-**v0.2 原型（2026-10-22，`crates/mw-mcp`）**：
+**v0.2 的无界面模式（M11，2026-10-23，`crates/mw-mcp`）**：
 
-- **只有无界面模式**，入口是独立的可执行文件 `mw-mcp`（`cargo run -p mw-mcp -- --allow 目录`），只走 stdio。没有并进 `materials-workbench mcp`，是为了不和同时进行的 M6 冲突：M6 在改 `apps/workbench` 和 `mw-project`。
-- **还没有项目文件**（M6），所以"加载项目文件"暂时换成"打开 CIF 文件"：客户端用 `file_open` 打开文件，结构放在进程内的会话里，ID 在进程存活期间稳定；什么都不写回文件。2026-07-28 版规范去掉了协议层会话，要求跨调用的状态用服务器发出的句柄放在工具参数里，结构 ID 正是这样用的。
-- **以后并入 `materials-workbench mcp`**：`mw-mcp` 不依赖 GPUI，给出一个运行 stdio 服务器的库函数；`apps/workbench` 的 `main` 在初始化 GPUI 之前看第一个参数，是 `mcp` 就不开窗口，直接调用它。独立的 `mw-mcp` 可执行文件之后去掉或只留给开发用。M6 之后无界面模式加载项目文件，`file_open` 由注册表里的 `project.open` / `file.import` 取代。
-- **以后连接运行中的应用**：
+- **入口是 `materials-workbench mcp [--allow 目录]…`**，只走 stdio。`mw-mcp` 不依赖 GPUI，库函数 `mw_mcp::main` 解析参数并运行服务器；`apps/workbench` 的 `main` 在初始化 GPUI 之前看第一个参数，是 `mcp` 就不开窗口、直接调用它，并把读配置目录里最近项目的函数交给它。独立的 `mw-mcp` 可执行文件（`cargo run -p mw-mcp -- --allow 目录`）留给开发和协议测试用；它不读应用的配置目录，所以没有最近项目，其余与 `materials-workbench mcp` 相同。
+- **读项目文件，只读**：客户端用 `project_open` 按路径打开 `.mwproj` 目录。打开时只读清单、给每个结构分配会话里的结构 ID，结构文件等 `structure_open` 时再读（与界面相同，项目文件设计稿第 5 节）。服务器不写任何文件：项目文件、视图状态、配置目录里的最近项目都不动，所以不用加锁（项目文件设计稿第 1 节：写项目文件时再加锁，v0.3）。读到的是打开那一刻的内容；应用之后保存的改动，要重新启动服务器才能看到。
+- **项目之外的 CIF 文件**仍可以用 `file_open` 打开：结构放进进程里的一个未命名项目，与界面里没有项目时打开文件一样（项目文件设计稿第 9 节），只是永远不保存。它不是导入，理由见 5.2 节"项目工具"。
+- **结构 ID 是句柄**：工具参数里的结构 ID 是打开项目或文件时分配的整数，在进程存活期间稳定。2026-07-28 版规范去掉了协议层会话，要求跨调用的状态用服务器发出的句柄放在工具参数里，结构 ID 正是这样用的。资源 URI 则用项目文件里的 UUID，跨进程稳定（5.2 节）。
+- **为连接应用留的接口**：`Server<H: Host>` 对 `Host` 泛型，协议处理不知道结构从哪里来。无界面的实现是 `mw_mcp::Headless`，它同时实现 `mw_automation::Projects`（项目的列出与打开，见第 4 节）。每次能力调用在阻塞线程池里拿着 `Host` 的锁执行，读文件和对称性分析不占协议处理的线程。工具列表按 `Host::has_window` 取可用的能力，所以同一个 `Server` 跑在应用里时自动去掉只在无界面时可用的 `file_open`。
+- **以后连接运行中的应用（M12）**：
   - 应用启动时在本机进程间通道上监听：macOS 和 Linux 用当前用户运行目录里的 Unix 域套接字（权限 0600），Windows 用命名管道；每次启动生成随机令牌，写进只有当前用户能读的文件。
   - `materials-workbench mcp` 先找这个通道：找到就只在 stdio 和通道之间原样转发 JSON-RPC，找不到才自己无界面运行。
   - 协议仍由 `mw-mcp` 的同一个 `Server` 处理，只是跑在应用进程里。为此 `Server` 要从"自己持有 `Documents`"改成对 `Host` 泛型；应用实现 `Host`，把调用派发到 GPUI 主线程，写操作进入同一个撤销栈，确认弹窗出现在应用里。这样协议处理只有一份，转发进程不需要懂 MCP。
@@ -155,9 +158,21 @@ Capability
 
 每个工具都带 MCP 的工具注解（只读、破坏性、幂等等提示）和输出 Schema，客户端可以据此决定是否需要人工确认。
 
-**v0.2 原型暴露的工具**（`mw-mcp`）：
+**项目工具（M11，`mw-automation/src/project.rs`）**：
 
-- 共 10 个，`tools/list` 的顺序固定（规范建议如此，便于客户端缓存）：服务器自己的 `file_open`，加上注册表里副作用等级为只读、无界面可用的 9 个能力：`structure_list`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。
+- `project.list`：打开着的项目（ID、名称、路径、结构数），加上应用记住的最近项目（ID、名称、路径、上次打开的时间、现在是否打开着）。无界面模式下最近项目来自配置目录的 `state.json`（项目文件设计稿第 10 节），**只列访问范围内的**（见下面的 `--allow`）；范围外的只给出个数，不给路径，因为路径本身就会透露用户名和项目名。
+- `project.open`：按路径打开 `.mwproj` 目录，返回项目 ID、名称和其中的结构（结构 ID、名称、来源、是否已打开、资源 URI）。已经打开的项目再打开一次返回原来的 ID，所以是幂等的；另一个路径上有同一个项目 ID 的目录（项目被复制过）拒绝打开（`duplicate_project`），否则资源 URI 会重复。更新版本格式的项目按项目文件设计稿第 4 节拒绝；旧格式在内存里迁移，不写回。
+- `structure.list`：所有打开的项目里的结构，打开了的和没打开的都列，带是否已打开和资源 URI。原来在 `structure.rs` 里，移到这里；没有项目的 `Host`（`Documents`）照旧列出它的文档。
+- `structure.open`：读结构文件；导入的结构再重新解析项目里的源文件副本，得到导入诊断和 CIF 要写回的字段。副本缺失或被改动时结构照常打开，结果里说明这一点（与界面的诊断标签页相同）。之后其他结构工具才能用它；对没打开的结构调用它们返回 `structure_not_open`，引导先调用 `structure.open`。连接应用时它在界面里打开这个结构。
+- `file.open`：打开项目之外的 CIF 文件，见 5.1 节；只在无界面时可用（`Availability::Headless`）。结构的命名和文件级诊断的归属与界面打开文件时相同。
+- 以上都是只读：打开是把文件读进服务器，不改磁盘上的任何东西。
+- **`file.import` 的评估**：不在本里程碑实现，留到 v0.3 与编辑工具一起做。导入是往项目里加条目，第 7.1 节定为可撤销写入；只读的服务器里"导入"只能留在内存里、永远不写回，结果工具说结构已加入某个项目，项目文件里却没有它，客户端和用户看到的项目就与磁盘不一致。把同一个能力在无界面时降为只读也不行：副作用等级是能力的属性，客户端据它决定是否要确认，不能因模式而变。所以无界面模式保留只读的 `file.open`：结构放进明确标为未命名、不会保存的项目，不冒充导入。v0.3 无界面模式能写项目文件（加锁、先备份）后再加 `file.import`；连接应用时（M12）导入走界面的"打开文件"，那时 `file.open` 不可用。
+- **为什么 `Host` 只加一个钩子**：项目相关的方法放在单独的 `Projects` trait 里，`Host` 只新增带默认实现（返回 `None`）的 `projects` / `projects_mut`。只有文档、没有项目的 `Host`（测试用的 `Documents`）不用改；项目能力在这样的 `Host` 上返回 `unavailable`。
+- **资源 URI** 由 `mw_automation::resource_uri` 生成：`mw://project/{项目 ID}/structure/{条目 ID}.cif`，两段都是项目文件里的 UUID（项目文件设计稿第 5 节），同一个项目换了进程、换了机器也不变。未命名项目的 ID 每次启动新生成。结构 ID（整数句柄）只在工具参数里用，结果里同时给出两者。
+
+**M11 暴露的工具**（`mw-mcp`）：
+
+- 共 13 个，`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。
 - **工具名**把注册表名称里的 `.` 换成 `_`（`structure.summary` → `structure_summary`）。MCP 允许点号，但不少客户端把工具名原样交给模型 API，而两家都不允许点号（6.2.6 节）。测试确认换名后互不重复。说明、Schema 描述、摘要和错误消息里提到的注册表名称（如"structure.list gives the ids"）一并换成工具名。
 - **注解**：`readOnlyHint: true`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`。`outputSchema` 就是注册表的输出 Schema，输入、输出都在 6.2.6 节的严格子集内（集成测试再查一遍）。
 - **结果**：第一块文本是英文摘要，第二块是输出的 JSON 文本，`structuredContent` 是同一份 JSON（规范要求带结构化内容的工具同时给出序列化的 JSON 文本）。失败时返回 `isError: true` 的工具结果，文本是 `{"code", "message", "guidance"}`，模型可以据此修正调用；只有调用不存在的工具才是协议错误。处理函数 panic 时返回 `internal_error`，不让请求悬空。

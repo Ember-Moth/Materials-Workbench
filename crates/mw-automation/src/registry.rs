@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::project::Projects;
 use crate::schema::Schema;
 
 /// A structure in the open project. The project catalog assigns these, and
@@ -82,6 +83,16 @@ pub trait Host {
     /// Whether the application's window is there.
     fn has_window(&self) -> bool {
         false
+    }
+    /// The projects the structures belong to, for hosts that have them: the
+    /// application, and the MCP server without a window. Documents held on
+    /// their own ([`Documents`]) have none; project capabilities are
+    /// unavailable there.
+    fn projects(&self) -> Option<&dyn Projects> {
+        None
+    }
+    fn projects_mut(&mut self) -> Option<&mut dyn Projects> {
+        None
     }
 }
 
@@ -307,6 +318,7 @@ impl Registry {
     /// Every capability this crate provides.
     pub fn standard() -> Self {
         let mut registry = Self::new();
+        crate::project::register(&mut registry);
         crate::structure::register(&mut registry);
         crate::files::register(&mut registry);
         crate::history::register(&mut registry);

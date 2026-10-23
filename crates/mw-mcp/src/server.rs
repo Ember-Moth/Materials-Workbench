@@ -50,9 +50,15 @@ pub fn tool_name(capability: &str) -> String {
 }
 
 /// Capabilities the server offers: read-only ones that run without a
-/// window (design §5.2, v0.2).
+/// window (design §5.2, v0.2), apart from those that need projects, which
+/// the session does not have yet.
 fn exposed(capability: &Capability) -> bool {
-    capability.effect == Effect::ReadOnly && capability.availability != Availability::Gui
+    capability.effect == Effect::ReadOnly
+        && capability.availability == Availability::Both
+        && !matches!(
+            capability.name,
+            "project.list" | "project.open" | "structure.open"
+        )
 }
 
 fn schema_object(schema: &Value) -> Arc<JsonObject> {
@@ -429,12 +435,8 @@ mod tests {
     #[test]
     fn tool_names_are_distinct_and_texts_use_them() {
         let registry = Registry::standard();
-        let mut tools: Vec<String> = registry
-            .capabilities()
-            .iter()
-            .map(|c| tool_name(c.name))
-            .collect();
-        tools.push(OPEN_TOOL.into());
+        let server = Server::new(Access::default());
+        let mut tools: Vec<String> = server.tools().iter().map(|t| t.name.to_string()).collect();
         let count = tools.len();
         tools.sort();
         tools.dedup();
@@ -445,7 +447,6 @@ mod tests {
             wire.text("ids from structure.list; see structure.site_symmetry and structure.sites"),
             "ids from structure_list; see structure_site_symmetry and structure_sites"
         );
-        let server = Server::new(Access::default());
         for tool in server.tools() {
             let text = serde_json::to_string(&tool).unwrap();
             for capability in registry.capabilities() {
