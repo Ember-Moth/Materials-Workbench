@@ -169,31 +169,33 @@ MW_LLM_PROVIDER=ollama MW_LLM_MODEL=qwen3 MW_LLM_TOOLS=1 cargo run -p mw-llm --e
 
 加上 `RUST_LOG=mw_llm=debug` 可以看到请求地址和重试；日志里没有请求内容和密钥。
 
-实验性 MCP Server（`mw-mcp`，[AI 集成设计稿](design/ai-integration.md)第 5 节）是独立的可执行文件，由 MCP 客户端启动，经 stdio 通信；日志写到标准错误，用 `RUST_LOG` 调整级别。`--allow 目录` 给出客户端可以打开 CIF 文件的目录，可以重复；不给时用工作目录，工作目录是 `/` 时不允许任何目录。客户端的配置里用绝对路径。先构建：
+实验性 MCP Server（[AI 集成设计稿](design/ai-integration.md)第 5 节）是应用的子命令 `materials-workbench mcp`，由 MCP 客户端启动，经 stdio 通信，不开窗口；日志写到标准错误，用 `RUST_LOG` 调整级别。它只读：打开项目和 CIF 文件，不写任何文件。`--allow 目录` 给出客户端可以打开项目和 CIF 文件的目录，可以重复；不给时用工作目录，工作目录是 `/` 时不允许任何目录。最近项目来自应用的配置目录（`MW_CONFIG_DIR` 可以改位置），只列 `--allow` 范围内的。客户端的配置里用绝对路径。先构建：
 
 ```bash
-cargo build --release -p mw-mcp
+cargo build --release --bin materials-workbench
 ```
 
-用 MCP Inspector 检查。它要从 npm 下载，需要 Node 22.19 或更新。下面的命令行和 `mcpdo` 命令 2026-10-22 用 Inspector 2.12.0 跑过；网页界面的命令按它的文档写，没有打开过。网页界面默认在 `http://localhost:6274`，`--` 之后的参数交给服务器：
+`crates/mw-mcp` 另有独立的可执行文件 `mw-mcp`（`cargo run -p mw-mcp -- --allow 目录`），参数相同，但不读配置目录、没有最近项目，留给开发和协议测试用。
+
+用 MCP Inspector 检查。它要从 npm 下载，需要 Node 22.19 或更新，运行前先问用户。下面的命令按 Inspector 2.12.0 的用法写：2026-10-22 用它对原型（独立的 `mw-mcp`、只能打开 CIF 文件）跑过命令行和 `mcpdo` 的写法；改成 `materials-workbench mcp` 和项目工具之后还没有重跑。网页界面的命令按它的文档写，没有打开过。网页界面默认在 `http://localhost:6274`，`--` 之后的参数交给服务器。例子里允许的是仓库里的示例项目，服务器只读，不会改动它们：
 
 ```bash
-npx @modelcontextprotocol/inspector target/release/mw-mcp -- --allow "$PWD/crates/mw-mcp/tests/fixtures"
+npx @modelcontextprotocol/inspector target/release/materials-workbench -- mcp --allow "$PWD/crates/mw-project-file/samples"
 ```
 
-命令行模式下，目标命令在前，`--` 之后是 Inspector 自己的选项。每条命令启动一个新的服务器进程，打开的文件不会留到下一条，所以只适合列工具或调用一次工具：
+命令行模式下，目标命令在前，`--` 之后是 Inspector 自己的选项。每条命令启动一个新的服务器进程，打开的项目不会留到下一条，所以只适合列工具或调用一次工具：
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/release/mw-mcp --allow "$PWD/crates/mw-mcp/tests/fixtures" -- --method tools/list
+npx @modelcontextprotocol/inspector --cli target/release/materials-workbench mcp --allow "$PWD/crates/mw-project-file/samples" -- --method tools/list
 ```
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/release/mw-mcp --allow "$PWD/crates/mw-mcp/tests/fixtures" -- --method tools/call --tool-name file_open --tool-arg path="$PWD/crates/mw-mcp/tests/fixtures/rutile.cif"
+npx @modelcontextprotocol/inspector --cli target/release/materials-workbench mcp --allow "$PWD/crates/mw-project-file/samples" -- --method tools/call --tool-name project_open --tool-arg path="$PWD/crates/mw-project-file/samples/tio2.mwproj"
 ```
 
 `tools/list` 后面加 `--strict` 会逐条列出 Schema 的可移植性提示（AI 集成设计稿 5.2 节）。
 
-要在同一个连接上连续调用（先打开文件，再查询），用 Inspector 自带的 `mcpdo`。先在当前 shell 里起一个只属于它的守护进程：
+要在同一个连接上连续调用（先打开项目和结构，再查询），用 Inspector 自带的 `mcpdo`。先在当前 shell 里起一个只属于它的守护进程：
 
 ```bash
 eval "$(npx -p @modelcontextprotocol/inspector mcpdo private)"
@@ -202,20 +204,24 @@ eval "$(npx -p @modelcontextprotocol/inspector mcpdo private)"
 连接服务器。`--era legacy` 走 `initialize` 握手，`--era modern` 走 2026-07-28 的无状态生命周期：
 
 ```bash
-npx -p @modelcontextprotocol/inspector mcpdo connect --era legacy --connection mw "$PWD/target/release/mw-mcp" -- --allow "$PWD/crates/mw-mcp/tests/fixtures"
+npx -p @modelcontextprotocol/inspector mcpdo connect --era legacy --connection mw "$PWD/target/release/materials-workbench" -- mcp --allow "$PWD/crates/mw-project-file/samples"
 ```
 
-然后逐条调用，例如打开文件再看摘要：
+然后逐条调用，例如打开示例项目、打开其中的金红石，再看摘要（结构 ID 以 `project_open` 的结果为准）：
 
 ```bash
-npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name file_open --tool-args-json "{\"path\":\"$PWD/crates/mw-mcp/tests/fixtures/rutile.cif\"}"
+npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name project_open --tool-args-json "{\"path\":\"$PWD/crates/mw-project-file/samples/tio2.mwproj\"}"
+```
+
+```bash
+npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name structure_open --tool-args-json '{"structure":1}'
 ```
 
 ```bash
 npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name structure_summary --tool-args-json '{"structure":1}'
 ```
 
-`resources/list`、`resources/read mw://project/session/structure/1.cif` 的用法相同。用完停掉守护进程：
+`resources/list`、`resources/read mw://project/6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c00/structure/6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c01.cif`（示例项目和金红石的 ID）的用法相同。用完停掉守护进程：
 
 ```bash
 npx -p @modelcontextprotocol/inspector mcpdo daemon stop
@@ -224,7 +230,7 @@ npx -p @modelcontextprotocol/inspector mcpdo daemon stop
 接到 Claude Code（按 2026-10-22 的官方文档）：`--` 之后的内容原样作为启动服务器的命令。默认写进本机的本地配置，加 `--scope project` 则写进项目根目录的 `.mcp.json`：
 
 ```bash
-claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/mw-mcp" --allow "$HOME/cif"
+claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/materials-workbench" mcp --allow "$HOME/projects"
 ```
 
 也可以直接写 `.mcp.json`（路径换成本机的绝对路径；含本机路径的文件不要提交）：
@@ -233,14 +239,14 @@ claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/mw-
 {
   "mcpServers": {
     "materials-workbench": {
-      "command": "/Users/me/materials-workbench/target/release/mw-mcp",
-      "args": ["--allow", "/Users/me/cif"]
+      "command": "/Users/me/materials-workbench/target/release/materials-workbench",
+      "args": ["mcp", "--allow", "/Users/me/projects"]
     }
   }
 }
 ```
 
-用 `claude mcp get materials-workbench` 或会话里的 `/mcp` 确认已连接。工具在 Claude Code 里叫 `mcp__materials-workbench__structure_summary` 这样的名字；打开文件后，结构的 CIF 文本可以用 `@materials-workbench:mw://project/session/structure/1.cif` 引用。Claude Desktop 的 `claude_desktop_config.json` 也是同样的 `mcpServers` 写法，但它可能在 `/` 启动服务器，所以必须给 `--allow`；这一点还没有按 Claude Desktop 当前的文档核对。
+用 `claude mcp get materials-workbench` 或会话里的 `/mcp` 确认已连接。工具在 Claude Code 里叫 `mcp__materials-workbench__project_open` 这样的名字；打开结构后，它的 CIF 文本可以用 `@materials-workbench:mw://project/{项目 ID}/structure/{条目 ID}.cif` 引用，URI 在 `project_open` 和 `structure_open` 的结果里。Claude Desktop 的 `claude_desktop_config.json` 也是同样的 `mcpServers` 写法，但它可能在 `/` 启动服务器，所以必须给 `--allow`；这一点还没有按 Claude Desktop 当前的文档核对。
 
 debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
 

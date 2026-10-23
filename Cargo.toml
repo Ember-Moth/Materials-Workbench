@@ -12,6 +12,7 @@ mw-automation = { path = "crates/mw-automation" }
 mw-crystal = { path = "crates/mw-crystal" }
 mw-crystal-io = { path = "crates/mw-crystal-io" }
 mw-crystal-render = { path = "crates/mw-crystal-render" }
+mw-mcp = { path = "crates/mw-mcp" }
 mw-project = { path = "crates/mw-project" }
 mw-project-file = { path = "crates/mw-project-file" }
 mw-structure = { path = "crates/mw-structure" }

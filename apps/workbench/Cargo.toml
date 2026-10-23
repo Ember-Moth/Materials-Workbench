@@ -19,6 +19,7 @@ screenshot = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image"]
 [dependencies]
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
+mw-mcp.workspace = true
 mw-project.workspace = true
 mw-project-file.workspace = true
 mw-structure.workspace = true
@@ -37,6 +38,9 @@ gpui-pre-macos = { version = "=0.3.9", optional = true, features = ["test-suppor
 
 [dev-dependencies]
 tempfile.workspace = true
+# `tests/mcp.rs` drives `materials-workbench mcp` as an MCP client would.
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+tokio.workspace = true
 # UI integration tests (`src/ui_tests.rs`), as in mw-structure: GPUI's test
 # support directly, not Kit's.
 gpui-pre = { version = "=0.3.9", features = ["test-support"] }

@@ -8809,13 +8809,16 @@ dependencies = [
  "log",
  "mw-crystal",
  "mw-crystal-io",
+ "mw-mcp",
  "mw-project",
  "mw-project-file",
  "mw-structure",
+ "rmcp",
  "rust-i18n",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
