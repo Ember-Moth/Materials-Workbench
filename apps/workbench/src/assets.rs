@@ -11,8 +11,8 @@ gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
         Atom, Box, Circle, Clock, Download, Folder, FolderOpen, FolderX, Grid3x3, Languages, Link,
-        Lock, Maximize, Moon, PanelLeft, PanelRight, Plus, Redo2, Ruler, Save, Settings, Trash,
-        Undo2, X,
+        Lock, Maximize, Moon, Move, PanelLeft, PanelRight, Plus, Redo2, Ruler, Save, Settings,
+        Trash, Undo2, X,
     ]
 );
 

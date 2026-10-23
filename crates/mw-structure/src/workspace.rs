@@ -23,6 +23,7 @@ use mw_viewport::{CameraPose, Viewport};
 
 use crate::actions::*;
 use crate::document::StructureDocument;
+use crate::moving::AtomDrag;
 use crate::scene::{self, DisplayModel, LineColors};
 use crate::selection::Selection;
 use crate::{dialogs, editing, format};
@@ -111,6 +112,9 @@ pub struct StructureWorkspace {
     pub(crate) measuring: bool,
     /// Atoms clicked for the measurement in progress.
     pub(crate) measure_picks: Vec<AtomRef>,
+    /// Move mode: dragging an atom moves its site (`moving.rs`).
+    pub(crate) moving: bool,
+    pub(crate) drag: Option<AtomDrag>,
     pub(crate) selection: Selection,
     pub(crate) cell_inputs: Vec<(CellParam, Entity<InputState>)>,
     pub(crate) coordinate_inputs: [Entity<InputState>; 3],
@@ -196,6 +200,8 @@ impl StructureWorkspace {
             display_model: DisplayModel::BallAndStick,
             measuring: false,
             measure_picks: Vec::new(),
+            moving: false,
+            drag: None,
             selection,
             cell_inputs,
             coordinate_inputs,
@@ -449,15 +455,19 @@ impl StructureWorkspace {
     /// Rebuilds what the viewport draws, after the display model or the
     /// measurements change.
     pub(crate) fn refresh_scene(&mut self, cx: &mut Context<Self>) {
-        let theme = cx.theme();
-        let colors = LineColors {
-            cell: theme.muted_foreground,
-            measurement: theme.foreground,
-        };
+        let colors = self.line_colors(cx);
         let scene = scene::scene(&self.document, self.display_model, colors);
         self.viewport
             .update(cx, |viewport, cx| viewport.set_scene(scene, cx));
         self.sync_viewport_selection(cx);
+    }
+
+    pub(crate) fn line_colors(&self, cx: &App) -> LineColors {
+        let theme = cx.theme();
+        LineColors {
+            cell: theme.muted_foreground,
+            measurement: theme.foreground,
+        }
     }
 
     // MARK: Actions
@@ -473,7 +483,11 @@ impl StructureWorkspace {
     }
 
     fn toggle_measure(&mut self, _: &ToggleMeasure, _: &mut Window, cx: &mut Context<Self>) {
-        self.measuring = !self.measuring;
+        let measuring = !self.measuring;
+        if measuring && self.moving {
+            self.set_moving(false, cx);
+        }
+        self.measuring = measuring;
         self.measure_picks.clear();
         if self.measuring {
             self.set_panel(PanelTab::Measurements, cx);
@@ -482,9 +496,12 @@ impl StructureWorkspace {
         cx.notify();
     }
 
-    /// Esc: drops the atoms picked for a measurement first, then the
-    /// selection.
+    /// Esc: puts a dragged atom back, or drops the atoms picked for a
+    /// measurement, or else the selection.
     fn clear_selection(&mut self, _: &ClearSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cancel_drag(cx) {
+            return;
+        }
         if self.measuring && !self.measure_picks.is_empty() {
             self.measure_pick(None, window, cx);
         } else {
@@ -753,11 +770,18 @@ impl Render for StructureWorkspace {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .size_full()
+            // Modifier keys reach the focused workspace, not the viewport
+            // inside it: ⌥ during a drag leaves the special position.
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                this.set_drag_leaving(event.modifiers.alt, cx)
+            }))
             .on_action(cx.listener(Self::toggle_panel))
             .on_action(cx.listener(Self::reset_view))
             .on_action(cx.listener(Self::toggle_measure))
+            .on_action(cx.listener(Self::toggle_move_atoms))
             .on_action(cx.listener(Self::clear_selection))
             .on_action(cx.listener(Self::delete_selection))
+            .on_action(cx.listener(Self::add_site))
             .on_action(cx.listener(Self::add_mixed_occupant))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))

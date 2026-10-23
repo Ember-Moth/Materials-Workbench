@@ -108,12 +108,29 @@ impl FrameView {
     }
 }
 
+/// What dragging after a left-button press moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PressTarget {
+    Camera,
+    /// The sphere pressed on, while spheres can be dragged.
+    Sphere(usize),
+    /// Waiting for the pick at the press position to tell whether a sphere
+    /// is there.
+    Undecided,
+    /// A sphere drag the host cancelled; the press does nothing more.
+    Cancelled,
+}
+
 /// A left-button press that may become a click or a drag.
 struct Press {
     origin: Point<Pixels>,
     last: Point<Pixels>,
     dragging: bool,
     modifiers: Modifiers,
+    target: PressTarget,
+    /// Where and with which modifiers the button went up, if it did while
+    /// the target was undecided.
+    released: Option<(Point<Pixels>, Modifiers)>,
 }
 
 /// Why a pick was requested.
@@ -121,6 +138,8 @@ struct Press {
 enum PickPurpose {
     Hover,
     Click(Modifiers),
+    /// What a press landed on, while spheres can be dragged.
+    Press,
 }
 
 /// What the viewport reports to its host.
@@ -134,6 +153,21 @@ pub enum ViewportEvent {
     },
     /// The object under the pointer changed.
     Hovered(Option<Pick>),
+    /// A sphere is being dragged, while spheres can be dragged
+    /// ([`Viewport::set_sphere_dragging`]): `offset` is the pointer's
+    /// travel since the press, in Å in the scene's coordinates, in the
+    /// plane of the screen. The scene stays as it is; the host previews.
+    SphereDragged {
+        sphere: usize,
+        offset: [f64; 3],
+        modifiers: Modifiers,
+    },
+    /// The button went up after dragging a sphere: the final offset.
+    SphereDropped {
+        sphere: usize,
+        offset: [f64; 3],
+        modifiers: Modifiers,
+    },
 }
 
 /// Owns the renderer, the camera and the frame pipeline. Changes made in
@@ -179,6 +213,10 @@ pub struct Viewport {
     /// sprite atlas so it does not grow by one image per frame.
     retired: Rc<RefCell<Vec<Arc<RenderImage>>>>,
     press: Option<Press>,
+    /// Whether a press on a sphere drags it rather than the camera.
+    drags_spheres: bool,
+    /// A press position waiting for its pick, to decide what it drags.
+    press_pick: Option<Point<Pixels>>,
     /// The pointer relative to the viewport, while it is over the 3D view.
     pointer: Option<Point<Pixels>>,
     hovered: Option<Pick>,
@@ -217,6 +255,8 @@ impl Viewport {
             image: None,
             retired: Rc::default(),
             press: None,
+            drags_spheres: false,
+            press_pick: None,
             pointer: None,
             hovered: None,
             selected: Vec::new(),
@@ -227,9 +267,9 @@ impl Viewport {
     }
 
     /// Replaces what is drawn (positions in Å) and clears the selection
-    /// rings. The first scene is framed; later ones keep the current angle
-    /// and zoom.
-    pub fn set_scene(&mut self, mut scene: Scene, cx: &mut Context<Self>) {
+    /// rings. The camera orbits the new scene's center. The first scene is
+    /// framed; later ones keep the current angle and zoom.
+    pub fn set_scene(&mut self, scene: Scene, cx: &mut Context<Self>) {
         let points = scene
             .spheres
             .iter()
@@ -246,6 +286,17 @@ impl Viewport {
         } else {
             Vec3::ZERO
         };
+        self.replace_scene(scene, center, cx);
+    }
+
+    /// Replaces what is drawn like [`Self::set_scene`], but keeps the
+    /// center the camera orbits: for previews of an edit in progress, so
+    /// that the view does not shift while the scene's extent changes.
+    pub fn preview_scene(&mut self, scene: Scene, cx: &mut Context<Self>) {
+        self.replace_scene(scene, self.scene_center, cx);
+    }
+
+    fn replace_scene(&mut self, mut scene: Scene, center: Vec3, cx: &mut Context<Self>) {
         scene.translate(-center);
         self.scene_center = center;
         if let Ok(renderer) = &mut self.renderer {
@@ -298,6 +349,38 @@ impl Viewport {
     /// What is under the pointer, as of the last hover pick.
     pub fn hovered(&self) -> Option<Pick> {
         self.hovered
+    }
+
+    /// Lets a press on a sphere drag it instead of turning the camera; a
+    /// press elsewhere still turns it. The host hears of the drag through
+    /// [`ViewportEvent::SphereDragged`] and [`ViewportEvent::SphereDropped`].
+    pub fn set_sphere_dragging(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.drags_spheres != on {
+            self.drags_spheres = on;
+            // The cursor over spheres changes.
+            cx.notify();
+        }
+    }
+
+    /// Whether a sphere is being dragged.
+    pub fn is_dragging_sphere(&self) -> bool {
+        self.press
+            .as_ref()
+            .is_some_and(|press| press.dragging && matches!(press.target, PressTarget::Sphere(_)))
+    }
+
+    /// Ends the sphere drag in progress without dropping it: until the
+    /// button goes up, the press does nothing more.
+    pub fn cancel_sphere_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(press) = &mut self.press
+            && matches!(
+                press.target,
+                PressTarget::Sphere(_) | PressTarget::Undecided
+            )
+        {
+            press.target = PressTarget::Cancelled;
+            cx.notify();
+        }
     }
 
     /// The camera's angle and zoom, to save the view.
@@ -437,20 +520,46 @@ impl Viewport {
 
     // MARK: Pointer
 
-    fn press(&mut self, event: &MouseDownEvent) {
+    /// A press drags the camera, or, while spheres can be dragged, the
+    /// sphere under it. The hover pick tells which sphere that is when it
+    /// is up to date; otherwise a pick at the press position decides.
+    fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let target = match self.geometry {
+            // Without a picture or a way to pick, nothing can be dragged.
+            Some(geometry) if self.drags_spheres && self.renderer.is_ok() => {
+                let at = event.position - geometry.bounds.origin;
+                if !self.hover_stale && !self.pick_in_flight && self.pointer == Some(at) {
+                    match self.hovered {
+                        Some(Pick::Sphere(sphere)) => PressTarget::Sphere(sphere),
+                        _ => PressTarget::Camera,
+                    }
+                } else {
+                    self.press_pick = Some(at);
+                    PressTarget::Undecided
+                }
+            }
+            _ => PressTarget::Camera,
+        };
         self.press = Some(Press {
             origin: event.position,
             last: event.position,
             dragging: false,
             modifiers: event.modifiers,
+            target,
+            released: None,
         });
+        self.pump_picks(cx);
     }
 
-    /// Any pointer move in the window: rotates while dragging.
-    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    /// Any pointer move in the window: drags the camera or the pressed
+    /// sphere.
+    fn drag_to(&mut self, position: Point<Pixels>, modifiers: Modifiers, cx: &mut Context<Self>) {
         let Some(press) = &mut self.press else {
             return;
         };
+        if press.released.is_some() {
+            return;
+        }
         if !press.dragging {
             let moved = position - press.origin;
             if moved.x.abs().max(moved.y.abs()) < CLICK_SLOP {
@@ -463,7 +572,24 @@ impl Viewport {
         let Some(press) = &mut self.press else {
             return;
         };
+        let (origin, target) = (press.origin, press.target);
         let delta = position - std::mem::replace(&mut press.last, position);
+        match target {
+            PressTarget::Camera => self.rotate_by(delta, cx),
+            PressTarget::Sphere(sphere) => {
+                let offset = self.drag_offset(position - origin);
+                self.mark_interactive(cx);
+                cx.emit(ViewportEvent::SphereDragged {
+                    sphere,
+                    offset,
+                    modifiers,
+                });
+            }
+            PressTarget::Undecided | PressTarget::Cancelled => {}
+        }
+    }
+
+    fn rotate_by(&mut self, delta: Point<Pixels>, cx: &mut Context<Self>) {
         self.camera.rotate(
             -f32::from(delta.x) * DRAG_RADIANS_PER_PIXEL,
             f32::from(delta.y) * DRAG_RADIANS_PER_PIXEL,
@@ -471,19 +597,97 @@ impl Viewport {
         self.camera_moved(cx);
     }
 
-    /// A left-button release anywhere in the window.
-    fn release(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(press) = self.press.take() else {
+    /// A pointer travel on screen as a displacement in the scene, in Å: in
+    /// the plane of the screen, with the camera of the image on screen.
+    fn drag_offset(&self, travel: Point<Pixels>) -> [f64; 3] {
+        let Some(geometry) = self.geometry else {
+            return [0.0; 3];
+        };
+        let view = self.view_on_screen(geometry);
+        let per_angstrom = view.pixels_per_angstrom(geometry.bounds.size.height);
+        // The inverse view matrix's axes are the screen's right and up.
+        let camera = view.camera.view.inverse();
+        let (right, up) = (camera.x_axis.truncate(), camera.y_axis.truncate());
+        let offset = (right * f32::from(travel.x) - up * f32::from(travel.y))
+            / per_angstrom.max(f32::EPSILON);
+        offset.to_array().map(f64::from)
+    }
+
+    /// A left-button release anywhere in the window. Waits for the press's
+    /// pick if it has not decided what the press drags yet.
+    fn release(&mut self, position: Point<Pixels>, modifiers: Modifiers, cx: &mut Context<Self>) {
+        let Some(press) = &mut self.press else {
             return;
         };
-        if !press.dragging
-            && let Some(geometry) = self.geometry
-        {
-            self.queued_clicks
-                .push_back((position - geometry.bounds.origin, press.modifiers));
+        if press.target == PressTarget::Undecided {
+            press.released = Some((position, modifiers));
+            return;
+        }
+        let press = self.press.take().expect("a press");
+        self.finish_press(press, position, modifiers, cx);
+    }
+
+    fn finish_press(
+        &mut self,
+        press: Press,
+        position: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        match (press.dragging, press.target) {
+            (false, _) => {
+                if let Some(geometry) = self.geometry {
+                    self.queued_clicks
+                        .push_back((position - geometry.bounds.origin, press.modifiers));
+                }
+            }
+            (true, PressTarget::Sphere(sphere)) => {
+                let offset = self.drag_offset(position - press.origin);
+                cx.emit(ViewportEvent::SphereDropped {
+                    sphere,
+                    offset,
+                    modifiers,
+                });
+                // The cursor changes back.
+                cx.notify();
+            }
+            (true, _) => {}
         }
         self.hover_stale = true;
         self.pump_picks(cx);
+    }
+
+    /// The pick at the press position landed: the press drags that sphere,
+    /// or the camera. A drag that began meanwhile catches up, and a press
+    /// already released finishes.
+    fn decide_press(&mut self, pick: Option<Pick>, cx: &mut Context<Self>) {
+        let Some(press) = &mut self.press else {
+            return;
+        };
+        if press.target != PressTarget::Undecided {
+            return;
+        }
+        press.target = match pick {
+            Some(Pick::Sphere(sphere)) => PressTarget::Sphere(sphere),
+            _ => PressTarget::Camera,
+        };
+        if let Some((position, modifiers)) = press.released {
+            let press = self.press.take().expect("a press");
+            self.finish_press(press, position, modifiers, cx);
+        } else if press.dragging {
+            let (origin, last, modifiers) = (press.origin, press.last, press.modifiers);
+            match press.target {
+                PressTarget::Sphere(sphere) => {
+                    let offset = self.drag_offset(last - origin);
+                    cx.emit(ViewportEvent::SphereDragged {
+                        sphere,
+                        offset,
+                        modifiers,
+                    });
+                }
+                _ => self.rotate_by(last - origin, cx),
+            }
+        }
     }
 
     /// Pointer moves over the 3D view itself, not over overlays on it.
@@ -521,6 +725,13 @@ impl Viewport {
     /// until the camera has rested for [`SETTLE_DELAY`], then once more at
     /// full resolution.
     fn camera_moved(&mut self, cx: &mut Context<Self>) {
+        self.mark_interactive(cx);
+        self.request_frame(cx);
+    }
+
+    /// Renders at the interactive scale until the pointer has rested for
+    /// [`SETTLE_DELAY`], while the camera or a dragged sphere moves.
+    fn mark_interactive(&mut self, cx: &mut Context<Self>) {
         self.interactive = true;
         self.settle = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SETTLE_DELAY).await;
@@ -530,7 +741,6 @@ impl Viewport {
             })
             .ok();
         });
-        self.request_frame(cx);
     }
 
     /// Submits the next pick if none is in flight: a queued click first,
@@ -539,18 +749,19 @@ impl Viewport {
         if self.pick_in_flight {
             return;
         }
-        let (purpose, position) =
-            if let Some((position, modifiers)) = self.queued_clicks.pop_front() {
-                (PickPurpose::Click(modifiers), position)
-            } else if self.hover_stale
-                && self.press.is_none()
-                && let Some(pointer) = self.pointer
-            {
-                self.hover_stale = false;
-                (PickPurpose::Hover, pointer)
-            } else {
-                return;
-            };
+        let (purpose, position) = if let Some(position) = self.press_pick.take() {
+            (PickPurpose::Press, position)
+        } else if let Some((position, modifiers)) = self.queued_clicks.pop_front() {
+            (PickPurpose::Click(modifiers), position)
+        } else if self.hover_stale
+            && self.press.is_none()
+            && let Some(pointer) = self.pointer
+        {
+            self.hover_stale = false;
+            (PickPurpose::Hover, pointer)
+        } else {
+            return;
+        };
         let Some(geometry) = self.geometry else {
             return;
         };
@@ -583,11 +794,13 @@ impl Viewport {
                 if !matches!(e, RenderError::EmptyViewport) {
                     log::error!("viewport pick failed: {e}");
                 }
-                if let PickPurpose::Click(modifiers) = purpose {
-                    cx.emit(ViewportEvent::Clicked {
+                match purpose {
+                    PickPurpose::Click(modifiers) => cx.emit(ViewportEvent::Clicked {
                         pick: None,
                         modifiers,
-                    });
+                    }),
+                    PickPurpose::Press => self.decide_press(None, cx),
+                    PickPurpose::Hover => {}
                 }
             }
         }
@@ -606,6 +819,7 @@ impl Viewport {
         });
         match purpose {
             PickPurpose::Click(modifiers) => cx.emit(ViewportEvent::Clicked { pick, modifiers }),
+            PickPurpose::Press => self.decide_press(pick, cx),
             // The pointer may have left or started a drag meanwhile.
             PickPurpose::Hover if self.pointer.is_some() && self.press.is_none() => {
                 self.set_hovered(pick, cx)
@@ -773,18 +987,22 @@ impl Render for Viewport {
                         BorderStyle::Solid,
                     ));
                 }
-                // Drags keep rotating when the pointer leaves the viewport.
+                // Drags go on when the pointer leaves the viewport.
                 window.on_mouse_event({
                     let view = view.clone();
                     move |event: &MouseMoveEvent, phase, _, cx| {
                         if phase == DispatchPhase::Bubble {
-                            view.update(cx, |viewport, cx| viewport.drag_to(event.position, cx));
+                            view.update(cx, |viewport, cx| {
+                                viewport.drag_to(event.position, event.modifiers, cx)
+                            });
                         }
                     }
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                        view.update(cx, |viewport, cx| viewport.release(event.position, cx));
+                        view.update(cx, |viewport, cx| {
+                            viewport.release(event.position, event.modifiers, cx)
+                        });
                     }
                 });
             },
@@ -797,12 +1015,21 @@ impl Render for Viewport {
             .size_full()
             .overflow_hidden()
             .bg(theme.muted)
-            .when(matches!(self.hovered, Some(Pick::Sphere(_))), |this| {
-                this.cursor_pointer()
+            .map(|this| {
+                let over_sphere = matches!(self.hovered, Some(Pick::Sphere(_)));
+                if self.is_dragging_sphere() {
+                    this.cursor_grabbing()
+                } else if over_sphere && self.drags_spheres {
+                    this.cursor_grab()
+                } else if over_sphere {
+                    this.cursor_pointer()
+                } else {
+                    this
+                }
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, _| this.press(event)),
+                cx.listener(|this, event: &MouseDownEvent, _, cx| this.press(event, cx)),
             )
             .on_mouse_move(
                 cx.listener(|this, event: &MouseMoveEvent, _, cx| {

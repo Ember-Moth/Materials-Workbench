@@ -7,11 +7,12 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomFate, CellParam, CellValues, Command, Edit, EditError, EditWarning, Measured, Outcome,
-    SiteId, Species, Structure, Target, expand_and_remove,
+    AtomFate, Axis, CellParam, CellValues, Command, Edit, EditError, EditInfo, EditWarning,
+    Measured, Outcome, SiteId, Species, Structure, Target, expand_and_remove,
 };
 
-use crate::actions::{AddMixedOccupant, DeleteSelection, Redo, Undo};
+use crate::actions::{AddMixedOccupant, AddSite, DeleteSelection, Redo, Undo};
+use crate::selection::Selection;
 use crate::workspace::StructureWorkspace;
 use crate::{dialogs, format};
 
@@ -101,6 +102,19 @@ pub(crate) fn error_text(error: &EditError, structure: &Structure) -> SharedStri
             tr!("edit.error.duplicate_label", label = label)
         }
         EditError::AlreadyP1 => tr!("dialog.convert.already_p1"),
+        EditError::FixedCoordinate { site, axis } => tr!(
+            "edit.error.fixed_coordinate",
+            axis = axis.name(),
+            label = label(*site)
+        ),
+        EditError::CombinedCoordinate { site, axis } => tr!(
+            "edit.error.combined_coordinate",
+            axis = axis.name(),
+            label = label(*site)
+        ),
+        EditError::CoincidentSite { site } => {
+            tr!("edit.error.coincident_site", label = label(*site))
+        }
         // The rest name sites, atoms or measurements that the interface
         // only offers while they exist.
         other => tr!("edit.error.other", reason = other.to_string()),
@@ -124,6 +138,33 @@ pub(crate) fn warning_text(warning: &EditWarning, structure: &Structure) -> Shar
             a = site_label(structure, *site),
             b = site_label(structure, *other),
             distance = format::distance(*distance)
+        ),
+        EditWarning::CloseImages { site, distance } => tr!(
+            "edit.warning.close_images",
+            label = site_label(structure, *site),
+            distance = format::distance(*distance)
+        ),
+        other => SharedString::from(other.to_string()),
+    }
+}
+
+/// What an edit did besides what was asked, in the interface language.
+pub(crate) fn info_text(info: &EditInfo, structure: &Structure) -> SharedString {
+    match info {
+        EditInfo::Snapped { site, displacement } => tr!(
+            "edit.info.snapped",
+            label = site_label(structure, *site),
+            distance = format::distance(*displacement)
+        ),
+        EditInfo::Multiplicity {
+            site,
+            before,
+            after,
+        } => tr!(
+            "edit.info.multiplicity",
+            label = site_label(structure, *site),
+            before = before,
+            after = after
         ),
         other => SharedString::from(other.to_string()),
     }
@@ -182,6 +223,18 @@ impl StructureWorkspace {
         for warning in &outcome.warnings {
             window.push_notification(Notification::warning(warning_text(warning, structure)), cx);
         }
+        // Last, so on top: what the edit did to the site answers the action
+        // directly, e.g. a multiplicity that changed (design §7.4). Each is
+        // a sentence of its own; one notification tells them all, a line
+        // each.
+        if !outcome.info.is_empty() {
+            let text: Vec<String> = outcome
+                .info
+                .iter()
+                .map(|info| info_text(info, structure).to_string())
+                .collect();
+            window.push_notification(Notification::info(text.join("\n")), cx);
+        }
         let ids = &outcome.ids;
         self.measure_picks.retain_mut(|atom| match ids.atom(*atom) {
             AtomFate::Kept(kept) => {
@@ -201,6 +254,7 @@ impl StructureWorkspace {
         if let Some(mut outcome) = self.document.crystal.undo() {
             // What the edit warned about was shown when it was made.
             outcome.warnings.clear();
+            outcome.info.clear();
             self.after_change(&outcome, window, cx);
         }
     }
@@ -209,8 +263,53 @@ impl StructureWorkspace {
         if let Some(mut outcome) = self.document.crystal.redo() {
             // What the edit warned about was shown when it was made.
             outcome.warnings.clear();
+            outcome.info.clear();
             self.after_change(&outcome, window, cx);
         }
+    }
+
+    /// Opens the dialog that adds a site.
+    pub(crate) fn add_site(&mut self, _: &AddSite, window: &mut Window, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        dialogs::open_add_site(self, entity, window, cx);
+    }
+
+    /// Adds a site at typed coordinates (design §7.6) and selects it. One
+    /// that would coincide with atoms of an existing site is not added: a
+    /// dialog offers the element as a mixed occupant there instead, once
+    /// the current dialog has closed. `false` when the site was refused and
+    /// the typed values need correcting.
+    pub fn add_site_at(
+        &mut self,
+        position: [f64; 3],
+        element: &'static str,
+        occupancy: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let edit = Edit::AddSite {
+            position,
+            species: Species::element(element),
+            occupancy: Measured::exact(occupancy),
+            label: None,
+        };
+        if let Err(EditError::CoincidentSite { site }) = edit.apply(self.document.structure()) {
+            let entity = cx.entity();
+            window.defer(cx, move |window, cx| {
+                dialogs::open_coincident_site(entity, site, element, occupancy, window, cx)
+            });
+            return true;
+        }
+        if self.edit(edit, window, cx).is_err() {
+            return false;
+        }
+        // A new site goes to the end of the asymmetric unit. Selected, it
+        // shows in the list and the 3D view, which is feedback enough.
+        if let Some(site) = self.document.structure().sites.last() {
+            let id = site.id;
+            self.set_selection(Selection::site(id), window, cx);
+        }
+        true
     }
 
     /// Opens the dialog that adds an element to the selected site.
@@ -349,7 +448,9 @@ impl StructureWorkspace {
         }
     }
 
-    /// Commits a typed fractional coordinate of the edited site.
+    /// Commits a typed fractional coordinate of the edited site. Under
+    /// symmetry the site stays on its special position: the coordinates
+    /// that follow the typed one change with it (design §7.5).
     pub(crate) fn commit_coordinate(
         &mut self,
         axis: usize,
@@ -362,7 +463,7 @@ impl StructureWorkspace {
         else {
             return;
         };
-        let (id, mut position) = (site.id, site.position);
+        let (id, position) = (site.id, site.position);
         let text = self.coordinate_inputs[axis].read(cx).value();
         if text.trim() == format::coordinate(position[axis]) {
             return;
@@ -371,17 +472,17 @@ impl StructureWorkspace {
             self.sync_site_inputs(window, cx);
             return;
         };
-        if self.document.crystal.edit_mode() == mw_crystal::EditMode::Symmetric {
-            // Mock: moving sites under symmetry, along their special
-            // position, comes with v0.2 (design §7.4–7.5).
-            dialogs::not_implemented(tr!("feature.move_site"), window, cx);
-            self.sync_site_inputs(window, cx);
-            return;
-        }
-        position[axis] = value;
-        let edit = Edit::SetPosition { site: id, position };
-        if self.edit(edit, window, cx).is_err() {
-            self.sync_site_inputs(window, cx);
+        let edit = Edit::SetCoordinate {
+            site: id,
+            axis: Axis::ALL[axis],
+            value,
+        };
+        match self.edit(edit, window, cx) {
+            // A value that rounds to what is shown changes nothing; the
+            // field shows it as it was.
+            Ok(outcome) if !outcome.changed => self.sync_site_inputs(window, cx),
+            Ok(_) => {}
+            Err(_) => self.sync_site_inputs(window, cx),
         }
     }
 

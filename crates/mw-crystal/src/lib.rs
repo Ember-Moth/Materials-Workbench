@@ -38,7 +38,7 @@ mod tables;
 mod transform;
 
 pub use atom_ref::{AtomRef, Measurement, angle, distance};
-pub use bonds::{Bond, BondRules, covalent_radius, display_bonds};
+pub use bonds::{Bond, BondRules, bonds, covalent_radius, display_bonds};
 pub use constraints::cell_deviation;
 pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,

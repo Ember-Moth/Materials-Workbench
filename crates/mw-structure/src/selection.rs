@@ -189,8 +189,19 @@ impl StructureWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let ViewportEvent::Clicked { pick, modifiers } = *event else {
-            return;
+        let (pick, modifiers) = match *event {
+            ViewportEvent::Clicked { pick, modifiers } => (pick, modifiers),
+            ViewportEvent::SphereDragged {
+                sphere,
+                offset,
+                modifiers,
+            } => return self.drag_atom(sphere, offset, modifiers, cx),
+            ViewportEvent::SphereDropped {
+                sphere,
+                offset,
+                modifiers,
+            } => return self.drop_atom(sphere, offset, modifiers, window, cx),
+            ViewportEvent::Hovered(_) => return,
         };
         let atom = self.picked_atom(pick);
         if self.measuring {

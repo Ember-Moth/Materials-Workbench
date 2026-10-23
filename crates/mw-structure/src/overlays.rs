@@ -1,6 +1,6 @@
 //! Everything GPUI draws over the 3D image: the info chip, the hovered
-//! atom, the measuring prompt, measurement labels and the floating view
-//! toolbar (`docs/design/ui-shell.md` §4.2). Only the toolbar takes the
+//! atom, the measuring or moving prompt, measurement labels and the
+//! floating view toolbar (`docs/design/ui-shell.md` §4.2). Only the toolbar takes the
 //! pointer; the chips and labels let clicks through to the atoms.
 
 use gpui_kit::assets::IconName as Lucide;
@@ -9,10 +9,9 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
 };
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::actions::{KEY_CONTEXT, ResetView, ToggleMeasure};
+use crate::actions::{KEY_CONTEXT, ResetView, ToggleMeasure, ToggleMoveAtoms};
 use crate::format;
 use crate::scene::DisplayModel;
 use crate::workspace::StructureWorkspace;
@@ -31,7 +30,13 @@ impl StructureWorkspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let labels = self.measurement_labels(cx);
+        // Labels give values for the document's positions; while an atom
+        // is dragged they would be stale, so they wait for the drop.
+        let labels = if self.drag.is_some() {
+            Vec::new()
+        } else {
+            self.measurement_labels(cx)
+        };
         let hovered = self.render_hovered_atom(cx);
         let atom_count = self.document.derived().atoms.len();
         let chip = || {
@@ -46,6 +51,14 @@ impl StructureWorkspace {
                 .text_xs()
         };
 
+        let prompt = if self.measuring {
+            Some(self.measure_prompt())
+        } else if self.moving {
+            Some(self.move_prompt())
+        } else {
+            None
+        };
+
         div()
             .id("structure-viewport")
             .relative()
@@ -55,24 +68,31 @@ impl StructureWorkspace {
             // Clicking the 3D view moves keyboard focus into the workspace.
             .on_any_mouse_down(cx.listener(|this, _, window, cx| this.focus(window, cx)))
             .child(self.viewport.clone())
+            // The info chip, then the prompt centered in the room beside
+            // it, so that a long prompt wraps rather than covers the chip.
             .child(
-                chip()
+                h_flex()
+                    .absolute()
                     .top_3()
                     .left_3()
-                    .text_color(theme.muted_foreground)
-                    .child(tr!("viewport.info", atoms = atom_count)),
+                    .right_3()
+                    .items_start()
+                    .gap_2()
+                    .child(
+                        chip()
+                            .relative()
+                            .flex_none()
+                            .text_color(theme.muted_foreground)
+                            .child(tr!("viewport.info", atoms = atom_count)),
+                    )
+                    .children(prompt.map(|prompt| {
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .justify_center()
+                            .child(chip().relative().min_w_0().child(prompt))
+                    })),
             )
-            .when(self.measuring, |this| {
-                this.child(
-                    h_flex()
-                        .absolute()
-                        .top_3()
-                        .left_0()
-                        .right_0()
-                        .justify_center()
-                        .child(chip().relative().child(self.measure_prompt())),
-                )
-            })
             .children(hovered)
             .children(labels.into_iter().map(|(position, text)| {
                 div()
@@ -184,6 +204,22 @@ impl StructureWorkspace {
                     )
                     .on_click(cx.listener(|_, _, window, cx| {
                         window.dispatch_action(Box::new(ToggleMeasure), cx)
+                    })),
+            )
+            .child(
+                Button::new("toggle-move-atoms")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(Lucide::Move))
+                    .label(tr!("toolbar.move"))
+                    .selected(self.moving)
+                    .tooltip_with_action(
+                        tr!("toolbar.move_tooltip"),
+                        &ToggleMoveAtoms,
+                        Some(KEY_CONTEXT),
+                    )
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(ToggleMoveAtoms), cx)
                     })),
             )
             .child(

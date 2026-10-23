@@ -10,7 +10,7 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomRef, CellParam, CellValues, Command, Edit, Measured, SiteId, Species, Target,
+    AtomRef, Axis, CellParam, CellValues, Command, Edit, Measured, SiteId, Species, Target,
 };
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
@@ -42,6 +42,11 @@ enum Pointer {
     Hover([f64; 3]),
     /// Press on the atom and drag by this many logical pixels.
     Drag([f64; 3], f32, f32),
+    /// Press on the atom and drag by this many logical pixels, holding ⌥
+    /// if asked, without letting go: a screenshot shows the drag.
+    Hold([f64; 3], f32, f32, bool),
+    /// Let go where the `Hold` with the same values left the pointer.
+    Release([f64; 3], f32, f32, bool),
 }
 
 /// Sends real mouse events to the atoms' positions in the window, so picking
@@ -57,17 +62,55 @@ fn point_at(workbench: &Workbench, actions: &'static [Pointer], window: &Window,
             let (Pointer::Click(at)
             | Pointer::ShiftClick(at)
             | Pointer::Hover(at)
-            | Pointer::Drag(at, _, _)) = *action;
+            | Pointer::Drag(at, _, _)
+            | Pointer::Hold(at, ..)
+            | Pointer::Release(at, ..)) = *action;
             let Some(position) = workspace.read(cx).displayed_atom_position(at, cx) else {
                 log::warn!("screenshot tour: no atom displayed at {at:?}");
                 continue;
             };
             let modifiers = Modifiers {
                 shift: matches!(action, Pointer::ShiftClick(_)),
+                alt: matches!(action, Pointer::Hold(.., true) | Pointer::Release(.., true)),
                 ..Modifiers::default()
             };
             let mut release_at = position;
             match *action {
+                // The atom has not moved in the document while held, so
+                // its position finds the same point again.
+                Pointer::Release(_, dx, dy, _) => {
+                    window.dispatch_event(
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: position + point(px(dx), px(dy)),
+                            modifiers,
+                            click_count: 1,
+                        }),
+                        cx,
+                    );
+                    continue;
+                }
+                Pointer::Hold(_, dx, dy, _) => {
+                    window.dispatch_event(
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers,
+                            click_count: 1,
+                            first_mouse: false,
+                        }),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        PlatformInput::MouseMove(MouseMoveEvent {
+                            position: position + point(px(dx), px(dy)),
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers,
+                        }),
+                        cx,
+                    );
+                    continue;
+                }
                 Pointer::Hover(_) => {
                     window.dispatch_event(
                         PlatformInput::MouseMove(MouseMoveEvent {
@@ -129,6 +172,21 @@ fn execute(workbench: &Workbench, command: Command, window: &mut Window, cx: &mu
     if let Some(workspace) = workbench.workspace().cloned() {
         workspace.update(cx, |workspace, cx| {
             let _ = workspace.execute(command, window, cx);
+        });
+    }
+}
+
+/// Adds a site to the open structure, as the add-site dialog does.
+fn add_site(
+    workbench: &Workbench,
+    position: [f64; 3],
+    element: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| {
+            workspace.add_site_at(position, element, 1.0, window, cx);
         });
     }
 }
@@ -317,24 +375,97 @@ const TOUR: &[(&str, Step)] = &[
         window.close_dialog(cx);
         workbench.open_structure(StructureEntryId(1), window, cx);
     }),
-    ("29-convert-dialog", |workbench, window, cx| {
+    // Move mode: dragging an O moves O1 along its line x, x, 0 with all
+    // four of its atoms; the prompt says where it goes.
+    ("29-move-mode", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+        window.dispatch_action(Box::new(mw_structure::ToggleMoveAtoms), cx);
+        point_at(workbench, &[Pointer::Hover(O_EQUATORIAL)], window, cx);
+    }),
+    ("30-move-drag", |workbench, window, cx| {
+        const HOLD: &[Pointer] = &[Pointer::Hold(O_EQUATORIAL, 40., -30., false)];
+        point_at(workbench, HOLD, window, cx);
+    }),
+    // Let go: one step, and the panel shows O1 with x = y moved.
+    ("31-moved", |workbench, window, cx| {
+        const RELEASE: &[Pointer] = &[Pointer::Release(O_EQUATORIAL, 40., -30., false)];
+        point_at(workbench, RELEASE, window, cx);
+    }),
+    ("_undo-move", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::Undo), cx);
+    }),
+    // ⌥ leaves the special position: O1 gets more equivalent atoms, and
+    // the prompt says how many.
+    ("32-move-leave", |workbench, window, cx| {
+        point_at(
+            workbench,
+            &[Pointer::Hold(O_APICAL, 0., -40., true)],
+            window,
+            cx,
+        );
+    }),
+    ("33-left", |workbench, window, cx| {
+        point_at(
+            workbench,
+            &[Pointer::Release(O_APICAL, 0., -40., true)],
+            window,
+            cx,
+        );
+    }),
+    // Dispatched actions run after the step, so the undo goes first on its
+    // own.
+    ("_undo-leave", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::Undo), cx);
+        window.dispatch_action(Box::new(mw_structure::ToggleMoveAtoms), cx);
+    }),
+    // Typed instead: y of x, x, 0 follows x, so setting it sets x.
+    ("34-coordinate-follows", |workbench, window, cx| {
+        let edit = Edit::SetCoordinate {
+            site: SiteId(2),
+            axis: Axis::Y,
+            value: 0.32,
+        };
+        execute(workbench, Command::Edit(edit), window, cx);
+    }),
+    ("35-add-site-dialog", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::Undo), cx);
+        window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
+        window.dispatch_action(Box::new(mw_structure::AddSite), cx);
+    }),
+    // On an atom of O1: nothing is added, and F is offered as a mixed
+    // occupant of O1 instead.
+    ("36-add-site-coincident", |workbench, window, cx| {
+        window.close_dialog(cx);
+        add_site(workbench, [0.6952, 0.6952, 0.0], "F", window, cx);
+    }),
+    // Typed near 2b, 0, 0, 1/2: snapped onto it, with a note.
+    ("37-site-added", |workbench, window, cx| {
+        window.close_dialog(cx);
+        add_site(workbench, [0.0003, 0.0002, 0.5003], "F", window, cx);
+    }),
+    ("_undo-add", |_, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::Undo), cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+    }),
+    ("38-convert-dialog", |workbench, window, cx| {
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
         window.dispatch_action(Box::new(mw_structure::ConvertToP1), cx);
     }),
-    ("30-converted", |workbench, window, cx| {
+    ("39-converted", |workbench, window, cx| {
         window.close_dialog(cx);
         execute(workbench, Command::Edit(Edit::ExpandToP1), window, cx);
         window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
     }),
     // Back to P4₂/mnm in one undo, then the supercell dialog.
-    ("31-supercell-dialog", |_, window, cx| {
+    ("40-supercell-dialog", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::Undo), cx);
         window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
         window.dispatch_action(Box::new(mw_structure::MakeSupercell), cx);
     }),
     // A new derived structure after rutile's other supercell, opened.
-    ("32-supercell-made", |workbench, window, cx| {
+    ("41-supercell-made", |workbench, window, cx| {
         window.close_dialog(cx);
         if let Some(workspace) = workbench.workspace().cloned() {
             workspace.update(cx, |workspace, cx| {
@@ -344,15 +475,15 @@ const TOUR: &[(&str, Step)] = &[
     }),
     // The imports and the supercell are not saved yet: closing their
     // project asks first.
-    ("33-unsaved-dialog", |workbench, window, cx| {
+    ("42-unsaved-dialog", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_active_project(&crate::actions::CloseProject, window, cx);
     }),
-    ("34-settings", |_, window, cx| {
+    ("43-settings", |_, window, cx| {
         window.close_dialog(cx);
         settings::open(window, cx)
     }),
-    ("35-no-sidebar", |workbench, window, cx| {
+    ("44-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
@@ -362,17 +493,17 @@ const TOUR: &[(&str, Step)] = &[
         workbench.set_sidebar_open(true, cx);
         workbench.open_structure(StructureEntryId(10), window, cx);
     }),
-    ("36-export-dialog", |workbench, window, cx| {
+    ("45-export-dialog", |workbench, window, cx| {
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::ExportStructure), cx);
     }),
     // The empty state lists the recent projects.
-    ("37-empty", |workbench, window, cx| {
+    ("46-empty", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_structure(window, cx);
     }),
     // A new project is untitled and empty until files are opened into it.
-    ("38-new-project", |workbench, window, cx| {
+    ("47-new-project", |workbench, window, cx| {
         workbench.new_project(&crate::actions::NewProject, window, cx);
     }),
 ];

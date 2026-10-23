@@ -2,9 +2,10 @@
 //! side panels, commands and dialogs (`docs/design/ui-shell.md` §4–§5).
 //!
 //! Viewing, selecting, measuring, editing and exporting are real: the
-//! fields, the element pickers and the delete command run the domain
-//! commands of `mw_crystal` on the open document, with undo and redo, and
-//! the export dialog writes CIF, POSCAR or extended XYZ. Documents come
+//! fields, the element pickers, dragging atoms in the 3D view, adding and
+//! deleting sites run the domain commands of `mw_crystal` on the open
+//! document, with undo and redo, and the export dialog writes CIF, POSCAR
+//! or extended XYZ. Documents come
 //! from project files and give back what to save, with their view state.
 //! Converting to P1 is a command on the document; a supercell is a new
 //! structure the host adds to the project. What is still mocked says so
@@ -28,6 +29,7 @@ mod export;
 mod format;
 pub mod import;
 mod measure;
+mod moving;
 mod overlays;
 mod panel;
 mod scene;
@@ -37,10 +39,11 @@ mod ui_tests;
 mod workspace;
 
 pub use actions::{
-    AddMixedOccupant, ClearSelection, ConvertToP1, DeleteSelection, ExportStructure, KEY_CONTEXT,
-    MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick, ShowDiagnosticsPanel,
-    ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling,
-    ToggleMeasure, TogglePanel, Undo, bind_keys, palette_commands,
+    AddMixedOccupant, AddSite, ClearSelection, ConvertToP1, DeleteSelection, ExportStructure,
+    KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
+    ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel,
+    ShowSitesPanel, ShowSpaceFilling, ToggleMeasure, ToggleMoveAtoms, TogglePanel, Undo, bind_keys,
+    palette_commands,
 };
 pub use document::StructureDocument;
 pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell};

@@ -1,6 +1,6 @@
 //! Dialogs for structure commands: the choices when a deletion would break
-//! the symmetry (design §7.1), adding a mixed occupant, converting to P1
-//! and making a supercell (design §7.9).
+//! the symmetry (design §7.1), adding a site or a mixed occupant (design
+//! §7.6–7.7), converting to P1 and making a supercell (design §7.9).
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
@@ -8,10 +8,15 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
-use mw_crystal::{EditError, EditMode, SiteId, Target};
+use mw_crystal::{EditError, EditMode, SiteId, Target, special_position};
 
 use crate::workspace::{StructureWorkspace, element_picker};
 use crate::{editing, format};
+
+/// Å. A typed position this close to its special position counts as on
+/// it; farther, the dialog says it will snap. The importer and the edit
+/// commands report snapping from the same distance.
+const REPORTED_SNAP: f64 = 1e-4;
 
 /// Mock: tells the user a command exists but does nothing yet.
 pub(crate) fn not_implemented(feature: SharedString, window: &mut Window, cx: &mut App) {
@@ -205,6 +210,171 @@ pub(crate) fn open_add_occupant(
                 };
                 entity.update(cx, |workspace, cx| {
                     workspace.add_occupant(site_id, symbol, value, window, cx)
+                })
+            })
+    });
+}
+
+/// Adds a site at typed fractional coordinates (design §7.6). The dialog
+/// tells as they are typed where the site will snap and how many atoms it
+/// will have. A position on an existing site's atoms offers a mixed
+/// occupant there instead.
+pub(crate) fn open_add_site(
+    workspace: &StructureWorkspace,
+    entity: Entity<StructureWorkspace>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let structure = workspace.document.crystal.snapshot();
+    let element = element_picker("", window, cx);
+    let coordinates: [Entity<InputState>; 3] =
+        [0, 1, 2].map(|_| cx.new(|cx| InputState::new(window, cx).placeholder("0")));
+    let occupancy = cx.new(|cx| InputState::new(window, cx).default_value("1"));
+    window.open_alert_dialog(cx, move |dialog, _, cx| {
+        let muted = cx.theme().muted_foreground;
+        let field = |text: SharedString, input: AnyElement| {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(div().text_xs().text_color(muted).child(text))
+                .child(input)
+        };
+        let typed = || -> Option<[f64; 3]> {
+            let mut position = [0.0_f64; 3];
+            for (value, input) in position.iter_mut().zip(&coordinates) {
+                *value = input.read(cx).value().trim().parse().ok()?;
+            }
+            position.iter().all(|v| v.is_finite()).then_some(position)
+        };
+        let summary = match typed() {
+            Some(position) => {
+                let special = special_position(&structure, position);
+                let count = structure.symmetry.operations().len() / special.order.max(1);
+                let form = special.form.to_string();
+                if special.displacement >= REPORTED_SNAP {
+                    tr!(
+                        "dialog.add_site.snaps",
+                        form = form,
+                        distance = format::distance(special.displacement),
+                        count = count
+                    )
+                } else {
+                    tr!("dialog.add_site.atoms", form = form, count = count)
+                }
+            }
+            None => tr!("dialog.add_site.hint"),
+        };
+        let coordinate = |axis: usize| {
+            let name = ["x", "y", "z"][axis];
+            field(
+                name.into(),
+                Input::new(&coordinates[axis])
+                    .id(SharedString::from(format!("add-site-{name}")))
+                    .into_any_element(),
+            )
+        };
+        let (element, coordinates, occupancy, entity) = (
+            element.clone(),
+            coordinates.clone(),
+            occupancy.clone(),
+            entity.clone(),
+        );
+        dialog
+            .title(tr!("dialog.add_site.title"))
+            .child(
+                v_flex()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(field(
+                                tr!("panel.site.element"),
+                                Select::new(&element)
+                                    .id("add-site-element")
+                                    .placeholder(tr!("dialog.add_occupant.choose_element"))
+                                    .menu_max_h(rems(16.))
+                                    .into_any_element(),
+                            ))
+                            .child(
+                                div().w_32().child(field(
+                                    tr!("panel.site.occupancy"),
+                                    Input::new(&occupancy)
+                                        .id("add-site-occupancy")
+                                        .into_any_element(),
+                                )),
+                            ),
+                    )
+                    .child(h_flex().gap_2().children([0, 1, 2].map(coordinate)))
+                    .child(div().text_xs().text_color(muted).child(summary)),
+            )
+            .ok_text(tr!("dialog.add_site.ok"))
+            .cancel_text(tr!("dialog.cancel"))
+            .show_cancel(true)
+            .on_ok(move |_, window, cx| {
+                let Some(symbol) = element.read(cx).selected_value().copied() else {
+                    window.push_notification(
+                        Notification::error(tr!("dialog.add_occupant.no_element")),
+                        cx,
+                    );
+                    return false;
+                };
+                let mut position = [0.0; 3];
+                for (value, input) in position.iter_mut().zip(&coordinates) {
+                    let text = input.read(cx).value();
+                    let Some(number) = editing::parse_number(&text, window, cx) else {
+                        return false;
+                    };
+                    *value = number;
+                }
+                let text = occupancy.read(cx).value();
+                let Some(value) = editing::parse_number(&text, window, cx) else {
+                    return false;
+                };
+                // On another site's atoms, the offer of a mixed occupant
+                // opens once this dialog has closed: one dialog at a time.
+                entity.update(cx, |workspace, cx| {
+                    workspace.add_site_at(position, symbol, value, window, cx)
+                })
+            })
+    });
+}
+
+/// A new site would coincide with atoms of `site`: offers adding the
+/// element to that site as a mixed occupant instead (design §7.6).
+pub(crate) fn open_coincident_site(
+    entity: Entity<StructureWorkspace>,
+    site: SiteId,
+    element: &'static str,
+    occupancy: f64,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let label = entity
+        .read(cx)
+        .document
+        .structure()
+        .site(site)
+        .map_or_else(String::new, |s| s.label().to_string());
+    window.open_alert_dialog(cx, move |dialog, _, _| {
+        let entity = entity.clone();
+        dialog
+            .title(tr!("dialog.coincident_site.title", label = label.clone()))
+            .description(tr!(
+                "dialog.coincident_site.description",
+                label = label.clone(),
+                element = element
+            ))
+            .ok_text(tr!("dialog.coincident_site.ok"))
+            .cancel_text(tr!("dialog.cancel"))
+            .show_cancel(true)
+            .on_ok(move |_, window, cx| {
+                entity.update(cx, |workspace, cx| {
+                    let added = workspace.add_occupant(site, element, occupancy, window, cx);
+                    if added {
+                        workspace.select_site(site, window, cx);
+                    }
+                    added
                 })
             })
     });

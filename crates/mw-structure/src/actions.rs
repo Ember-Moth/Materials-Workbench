@@ -8,8 +8,10 @@ gpui_kit::actions!(
         TogglePanel,
         ResetView,
         ToggleMeasure,
+        ToggleMoveAtoms,
         ClearSelection,
         DeleteSelection,
+        AddSite,
         AddMixedOccupant,
         Undo,
         Redo,
@@ -43,6 +45,8 @@ pub fn bind_keys(cx: &mut App) {
         // Text fields bind these keys in their own, deeper context, so typing
         // still edits text.
         KeyBinding::new("m", ToggleMeasure, context),
+        // V for the move tool, as in drawing and design applications.
+        KeyBinding::new("v", ToggleMoveAtoms, context),
         KeyBinding::new("escape", ClearSelection, context),
         KeyBinding::new("backspace", DeleteSelection, context),
         KeyBinding::new("delete", DeleteSelection, context),
@@ -105,6 +109,18 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             Box::new(ExportStructure),
         ),
         command(
+            tr!("command.add_site"),
+            &[
+                "add site",
+                "add atom",
+                "new site",
+                "tianjia weidian",
+                "tianjia yuanzi",
+            ],
+            Lucide::Plus,
+            Box::new(AddSite),
+        ),
+        command(
             tr!("command.add_mixed_occupant"),
             &[
                 "mixed occupancy",
@@ -126,6 +142,12 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             &["measure", "distance", "celiang"],
             Lucide::Ruler,
             Box::new(ToggleMeasure),
+        ),
+        command(
+            tr!("command.toggle_move_atoms"),
+            &["move atoms", "drag", "yidong yuanzi", "tuodong"],
+            Lucide::Move,
+            Box::new(ToggleMoveAtoms),
         ),
         command(
             tr!("command.clear_selection"),

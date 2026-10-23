@@ -17,7 +17,7 @@ use mw_crystal::{
 
 use mw_project_file::{Operation, Provenance};
 
-use crate::actions::{AddMixedOccupant, ConvertToP1};
+use crate::actions::{AddMixedOccupant, AddSite, ConvertToP1};
 use crate::workspace::{PanelTab, StructureWorkspace};
 use crate::{dialogs, format};
 
@@ -73,16 +73,19 @@ pub(crate) fn field_id(kind: &str, name: &str) -> ElementId {
 /// How a field's constraint is shown next to its label.
 enum FieldNote {
     None,
-    /// Linked to other fields, e.g. `= a` or `= 2x`.
+    /// Follows another field and can be typed into, which changes that one
+    /// too, e.g. `= 2x` (design §7.5).
+    Follows(SharedString),
+    /// Linked to other fields and set through them, e.g. `= a`.
     Linked(SharedString),
     Fixed,
 }
 
 /// A labelled field: the label row carries the constraint icon, and a
-/// constrained field is disabled.
+/// field set through others, or fixed, is disabled.
 fn field(label: SharedString, note: FieldNote, input: Input, cx: &App) -> impl IntoElement + use<> {
     let theme = cx.theme();
-    let disabled = !matches!(note, FieldNote::None);
+    let disabled = matches!(note, FieldNote::Linked(_) | FieldNote::Fixed);
     v_flex()
         .flex_1()
         .min_w_0()
@@ -96,7 +99,7 @@ fn field(label: SharedString, note: FieldNote, input: Input, cx: &App) -> impl I
                 .child(label)
                 .map(|row| match note {
                     FieldNote::None => row,
-                    FieldNote::Linked(to) => row
+                    FieldNote::Follows(to) | FieldNote::Linked(to) => row
                         .child(Icon::new(Lucide::Link).xsmall())
                         .child(format!("= {to}")),
                     FieldNote::Fixed => row.child(Icon::new(Lucide::Lock).xsmall()),
@@ -443,7 +446,10 @@ impl StructureWorkspace {
         let coordinate = |axis: usize| {
             let note = match symmetry.map(|s| (s, s.coordinates[axis])) {
                 None | Some((_, CoordinateConstraint::Free)) => FieldNote::None,
-                Some((s, CoordinateConstraint::Follows(_) | CoordinateConstraint::Combination)) => {
+                Some((s, CoordinateConstraint::Follows(_))) => {
+                    FieldNote::Follows(s.form.expression(Axis::ALL[axis]).into())
+                }
+                Some((s, CoordinateConstraint::Combination)) => {
                     FieldNote::Linked(s.form.expression(Axis::ALL[axis]).into())
                 }
                 Some((_, CoordinateConstraint::Fixed)) => FieldNote::Fixed,
@@ -644,15 +650,13 @@ impl StructureWorkspace {
                             .child(tr!("panel.sites.count", count = structure.sites.len())),
                     )
                     .child(
-                        // Mock: adding sites, with snapping to special
-                        // positions, is v0.2 (crystallography design §7.6).
                         Button::new("add-site")
                             .outline()
                             .xsmall()
                             .icon(IconName::Plus)
                             .label(tr!("panel.sites.add"))
                             .on_click(cx.listener(|_, _, window, cx| {
-                                dialogs::not_implemented(tr!("feature.add_site"), window, cx)
+                                window.dispatch_action(Box::new(AddSite), cx)
                             })),
                     ),
             )

@@ -13,8 +13,9 @@ use gpui_kit::component::input::InputState;
 use std::time::Duration;
 
 use gpui_kit::{
-    AppContext as _, Bounds, Entity, Focusable as _, Modifiers, MouseButton, TestAppContext,
-    VisualTestContext, WindowBounds, WindowOptions, point, px, size,
+    AppContext as _, Bounds, Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PlatformInput, TestAppContext, VisualTestContext, WindowBounds,
+    WindowOptions, point, px, size,
 };
 use mw_crystal::sample::SampleKey;
 use mw_crystal::{AtomRef, CellParam, Command, EditMode, Measurement, SiteId, Target};
@@ -442,15 +443,327 @@ fn coordinates_move_atoms_in_p1(cx: &mut TestAppContext) {
     assert_eq!(position(&mut cx)[0], 0.1);
 }
 
+fn position(
+    workspace: &Entity<StructureWorkspace>,
+    site: SiteId,
+    cx: &mut VisualTestContext,
+) -> [f64; 3] {
+    workspace.read_with(cx, |workspace, _| {
+        workspace.document.structure().site(site).unwrap().position
+    })
+}
+
+fn multiplicity(
+    workspace: &Entity<StructureWorkspace>,
+    site: SiteId,
+    cx: &mut VisualTestContext,
+) -> usize {
+    workspace.read_with(cx, |workspace, _| {
+        workspace.document.derived().multiplicity(site).unwrap()
+    })
+}
+
 #[gpui_kit::test]
-fn coordinates_under_symmetry_stay_for_now(cx: &mut TestAppContext) {
-    // Moving sites under symmetry is v0.2: the field shows the coordinate
-    // again and nothing changes.
+fn typed_coordinates_keep_the_special_position(cx: &mut TestAppContext) {
+    // Rutile opens on O1, on 4f: x, x, 0.
     let (rutile, mut cx) = open(cx, SampleKey::Rutile);
-    let x = rutile.read_with(&cx, |workspace, _| workspace.coordinate_inputs[0].clone());
-    type_into(&mut cx, &x, "0.31");
-    assert_eq!(text(&x, &mut cx), "0.3048");
+    let o1 = SiteId(2);
+    let [x, y, _] = rutile.read_with(&cx, |workspace, _| {
+        assert_eq!(workspace.selected_site(), Some(o1));
+        workspace.coordinate_inputs.clone()
+    });
+    // y follows x and can be typed: x changes with it (design §7.5).
+    type_into(&mut cx, &y, "0.31");
+    assert_eq!(position(&rutile, o1, &mut cx), [0.31, 0.31, 0.0]);
+    assert_eq!(text(&x, &mut cx), "0.31");
+    assert_eq!(steps(&rutile, &mut cx), 1);
+
+    // x close to 0 puts O1 on 2a, onto Ti1: snapped, half the atoms, and
+    // a warning that it sits on Ti1.
+    let before = notifications(&mut cx);
+    type_into(&mut cx, &x, "0.0001");
+    assert_eq!(position(&rutile, o1, &mut cx), [0.0, 0.0, 0.0]);
+    assert_eq!(multiplicity(&rutile, o1, &mut cx), 2);
+    assert_eq!(notifications(&mut cx), before + 2);
+
+    focus_workspace(&rutile, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(position(&rutile, o1, &mut cx), [0.31, 0.31, 0.0]);
+    assert_eq!(text(&x, &mut cx), "0.31");
+}
+
+/// Points at the atoms of `site` in turn until one is not hidden behind
+/// another, and returns where it is in the window, hovered.
+fn hover_atom_of(
+    workspace: &Entity<StructureWorkspace>,
+    site: SiteId,
+    cx: &mut VisualTestContext,
+) -> (AtomRef, gpui_kit::Point<gpui_kit::Pixels>) {
+    let candidates: Vec<(AtomRef, gpui_kit::Point<gpui_kit::Pixels>)> =
+        workspace.read_with(cx, |workspace, cx| {
+            let viewport = workspace.viewport.read(cx);
+            let origin = viewport.bounds().expect("laid out").origin;
+            workspace
+                .document
+                .derived()
+                .atoms
+                .iter()
+                .filter(|atom| atom.atom.site == site)
+                .filter_map(|atom| Some((atom.atom, origin + viewport.project(atom.position)?)))
+                .collect()
+        });
+    for (atom, at) in candidates {
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        let hovered = workspace.read_with(cx, |workspace, cx| {
+            workspace.picked_atom(workspace.viewport.read(cx).hovered())
+        });
+        if hovered == Some(atom) {
+            return (atom, at);
+        }
+    }
+    panic!("no atom of site {} is visible", site.0);
+}
+
+fn alt() -> Modifiers {
+    Modifiers {
+        alt: true,
+        ..Modifiers::default()
+    }
+}
+
+#[gpui_kit::test]
+fn dragging_an_atom_moves_its_site_along_its_special_position(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let o1 = SiteId(2);
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |workspace, _| workspace.moving));
+    let (atom, at) = hover_atom_of(&rutile, o1, &mut cx);
+
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let to = at + point(px(40.), px(25.));
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    // A preview: the document is as it was, the prompt says where O1 goes.
     assert_eq!(steps(&rutile, &mut cx), 0);
+    let prompt = rutile.read_with(&cx, |workspace, _| workspace.move_prompt().to_string());
+    assert!(prompt.starts_with("O1 "), "{prompt}");
+    assert!(!prompt.contains('→'), "{prompt}");
+
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    let [x, y, z] = position(&rutile, o1, &mut cx);
+    assert!((x - y).abs() < 1e-12 && z == 0.0, "{:?}", [x, y, z]);
+    assert!((x - 0.3048).abs() > 1e-3, "moved: {x}");
+    assert_eq!(multiplicity(&rutile, o1, &mut cx), 4);
+    // The dragged atom is selected, so the panel shows O1.
+    let selected = rutile.read_with(&cx, |workspace, _| workspace.selection.targets());
+    assert_eq!(selected, [Target::Atom(atom)]);
+
+    focus_workspace(&rutile, &mut cx);
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(position(&rutile, o1, &mut cx), [0.3048, 0.3048, 0.0]);
+}
+
+#[gpui_kit::test]
+fn holding_alt_leaves_the_special_position(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let o1 = SiteId(2);
+    // A distance to an O1 atom outside the cell: its line makes the scene
+    // larger than the cell.
+    let ti = AtomRef::new(SiteId(1), 0, [0; 3]);
+    let far = AtomRef::new(o1, 0, [1, 1, 1]);
+    cx.update(|window, cx| {
+        rutile.update(cx, |workspace, cx| {
+            workspace.execute(
+                Command::AddMeasurement(Measurement::Distance([ti, far])),
+                window,
+                cx,
+            )
+        })
+    })
+    .expect("add the distance");
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let ti_on_screen = |cx: &mut VisualTestContext| {
+        rutile.read_with(cx, |workspace, cx| {
+            workspace.viewport.read(cx).project([0.0; 3]).unwrap()
+        })
+    };
+    let before = ti_on_screen(&mut cx);
+    let (_, at) = hover_atom_of(&rutile, o1, &mut cx);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let to = at + point(px(40.), px(25.));
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    // ⌥ alone, without moving, changes the preview.
+    cx.simulate_modifiers_change(alt());
+    draw(&mut cx);
+    let prompt = rutile.read_with(&cx, |workspace, _| workspace.move_prompt().to_string());
+    assert!(prompt.contains("→"), "{prompt}");
+    // O1's member numbers change, so the distance's line goes; the view
+    // stays where it was all the same.
+    assert_eq!(ti_on_screen(&mut cx), before);
+
+    let before = notifications(&mut cx);
+    cx.simulate_mouse_up(to, MouseButton::Left, alt());
+    draw(&mut cx);
+    // The distance, then the move.
+    assert_eq!(steps(&rutile, &mut cx), 2);
+    assert!(multiplicity(&rutile, o1, &mut cx) > 4);
+    // "O1 多重度 4 → …", and a warning if its atoms came close to each
+    // other.
+    assert!(notifications(&mut cx) > before);
+}
+
+#[gpui_kit::test]
+fn escape_puts_a_dragged_atom_back(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let o1 = SiteId(2);
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let (_, at) = hover_atom_of(&rutile, o1, &mut cx);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let to = at + point(px(40.), px(25.));
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |workspace, _| workspace.drag.is_some()));
+    cx.simulate_keystrokes("escape");
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |workspace, _| workspace.drag.is_none()));
+    assert_eq!(steps(&rutile, &mut cx), 0);
+    assert_eq!(position(&rutile, o1, &mut cx), [0.3048, 0.3048, 0.0]);
+}
+
+// Press, move and release arrive together, before any pick at the press
+// position: the viewport waits for that pick to tell what was pressed, and
+// the release then drops the atom.
+#[gpui_kit::test]
+fn a_drag_faster_than_the_pick_still_moves_the_atom(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let o1 = SiteId(2);
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let (_, at) = hover_atom_of(&rutile, o1, &mut cx);
+    // Away from the atom, so the last hover pick says nothing about it.
+    let away = rutile.read_with(&cx, |workspace, cx| {
+        workspace.viewport.read(cx).bounds().unwrap().origin + point(px(8.), px(80.))
+    });
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    let to = at + point(px(40.), px(25.));
+    cx.update(|window, cx| {
+        let left = MouseButton::Left;
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: at,
+                pressed_button: None,
+                modifiers: Modifiers::none(),
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent {
+                button: left,
+                position: at,
+                modifiers: Modifiers::none(),
+                click_count: 1,
+                first_mouse: false,
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: to,
+                pressed_button: Some(left),
+                modifiers: Modifiers::none(),
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::MouseUp(MouseUpEvent {
+                button: left,
+                position: to,
+                modifiers: Modifiers::none(),
+                click_count: 1,
+            }),
+            cx,
+        );
+    });
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    assert_ne!(position(&rutile, o1, &mut cx), [0.3048, 0.3048, 0.0]);
+}
+
+#[gpui_kit::test]
+fn outside_move_mode_dragging_turns_the_view(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let (_, at) = hover_atom_of(&rutile, SiteId(2), &mut cx);
+    let pose = rutile.read_with(&cx, |workspace, cx| {
+        workspace.viewport.read(cx).camera_pose().yaw
+    });
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        at + point(px(40.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        at + point(px(40.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 0);
+    let turned = rutile.read_with(&cx, |workspace, cx| {
+        workspace.viewport.read(cx).camera_pose().yaw
+    });
+    assert_ne!(turned, pose);
+}
+
+#[gpui_kit::test]
+fn adding_sites(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    // The dialog opens from the action, and Esc closes it.
+    focus_workspace(&rutile, &mut cx);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::AddSite), cx));
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+
+    // Typed near 2b, at 0, 0, 1/2: snapped there, and selected.
+    let added = cx.update(|window, cx| {
+        rutile.update(cx, |workspace, cx| {
+            workspace.add_site_at([0.0003, 0.9998, 0.5001], "F", 1.0, window, cx)
+        })
+    });
+    assert!(added);
+    draw(&mut cx);
+    assert_eq!(sites(&rutile, &mut cx), [SiteId(1), SiteId(2), SiteId(3)]);
+    assert_eq!(position(&rutile, SiteId(3), &mut cx), [0.0, 1.0, 0.5]);
+    assert_eq!(multiplicity(&rutile, SiteId(3), &mut cx), 2);
+    let selected = rutile.read_with(&cx, |workspace, _| workspace.selected_site());
+    assert_eq!(selected, Some(SiteId(3)));
+
+    // On an atom of O1: nothing is added, and a dialog offers F as a mixed
+    // occupant of O1 instead; Enter accepts.
+    let offered = cx.update(|window, cx| {
+        rutile.update(cx, |workspace, cx| {
+            workspace.add_site_at([0.6952, 0.6952, 0.0], "F", 0.25, window, cx)
+        })
+    });
+    assert!(offered);
+    draw(&mut cx);
+    assert_eq!(sites(&rutile, &mut cx).len(), 3);
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    assert_eq!(labels(&rutile, SiteId(2), &mut cx), ["O1", "F2"]);
+    assert_eq!(steps(&rutile, &mut cx), 2);
 }
 
 #[gpui_kit::test]

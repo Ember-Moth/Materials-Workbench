@@ -65,6 +65,12 @@ toolbar:
   measure_tooltip:
     en: Measure distances and angles
     zh-CN: 测量距离和键角
+  move:
+    en: Move
+    zh-CN: 移动
+  move_tooltip:
+    en: Drag atoms to move their sites
+    zh-CN: 拖动原子来移动位点
   display_range:
     en: Display range…
     zh-CN: 显示范围…
@@ -315,6 +321,32 @@ dialog:
     already_p1:
       en: This structure is already in P1 mode.
       zh-CN: 这个结构已经是 P1 模式。
+  add_site:
+    title:
+      en: Add site
+      zh-CN: 添加位点
+    hint:
+      en: Enter fractional coordinates. A site near a special position snaps onto it.
+      zh-CN: 输入分数坐标。靠近特殊位置的位点会吸附过去。
+    atoms:
+      en: "%{form}: %{count} equivalent atoms in the cell."
+      zh-CN: "%{form}：晶胞内 %{count} 个等效原子。"
+    snaps:
+      en: "Snaps onto %{form}, %{distance} away: %{count} equivalent atoms in the cell."
+      zh-CN: "将吸附到 %{distance} 外的 %{form}：晶胞内 %{count} 个等效原子。"
+    ok:
+      en: Add
+      zh-CN: 添加
+  coincident_site:
+    title:
+      en: "%{label} is already at this position"
+      zh-CN: "这个位置已有 %{label}"
+    description:
+      en: "The new site would coincide with atoms of %{label}. You can add %{element} to %{label} instead, sharing the position as a mixed occupant."
+      zh-CN: "新位点会与 %{label} 的原子重合。可以改为把 %{element} 加到 %{label} 上，与原有元素共占这个位置。"
+    ok:
+      en: Add as mixed occupant
+      zh-CN: 添加混合占位
   add_occupant:
     title:
       en: "Add a mixed occupant to %{label}"
@@ -372,6 +404,12 @@ command:
   delete_selection:
     en: Delete selection
     zh-CN: 删除所选
+  add_site:
+    en: Add site…
+    zh-CN: 添加位点…
+  toggle_move_atoms:
+    en: Move atoms
+    zh-CN: 移动原子
   toggle_measure:
     en: Measure
     zh-CN: 测量
@@ -400,12 +438,16 @@ feature:
   symmetrize:
     en: Symmetrizing
     zh-CN: 对称化
-  add_site:
-    en: Adding sites
-    zh-CN: 添加位点
-  move_site:
-    en: Moving sites in symmetry mode
-    zh-CN: 对称模式下移动位点
+move:
+  prompt:
+    en: "Drag an atom to move its site with all equivalent atoms; hold %{key} to leave its special position"
+    zh-CN: "拖动原子，它的位点连同全部等效原子一起移动；按住 %{key} 可脱离特殊位置"
+  dragging:
+    en: "%{label} to (%{position})"
+    zh-CN: "%{label} 移到 (%{position})"
+  dragging_multiplicity:
+    en: "%{label} to (%{position}), multiplicity %{before} → %{after}"
+    zh-CN: "%{label} 移到 (%{position})，多重度 %{before} → %{after}"
 edit:
   expanded_and_deleted:
     en: "Converted to P1 and deleted %{count} atoms. You can undo both at once."
@@ -460,6 +502,15 @@ edit:
       en: Remove measurement
       zh-CN: 删除测量
   error:
+    fixed_coordinate:
+      en: "%{axis} of %{label} is fixed by its special position."
+      zh-CN: "%{label} 的 %{axis} 由特殊位置固定，不能修改。"
+    combined_coordinate:
+      en: "%{axis} of %{label} follows the other coordinates; change those instead."
+      zh-CN: "%{label} 的 %{axis} 由其他坐标决定，请修改那些坐标。"
+    coincident_site:
+      en: "The new site would coincide with atoms of %{label}."
+      zh-CN: "新位点会与 %{label} 的原子重合。"
     breaks_symmetry:
       en: "Changing only some of the %{count} equivalent atoms of %{label} would break the symmetry. Edit the whole site, or convert the structure to P1 first."
       zh-CN: "只改 %{label} 的 %{count} 个等效原子中的一部分会破坏对称性。请编辑整个位点，或先把结构转为 P1。"
@@ -503,6 +554,16 @@ edit:
     short_contact:
       en: "Atoms of %{a} and %{b} are only %{distance} apart."
       zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance}。"
+    close_images:
+      en: "Equivalent atoms of %{label} are only %{distance} apart."
+      zh-CN: "%{label} 的等效原子之间相距仅 %{distance}。"
+  info:
+    snapped:
+      en: "%{label} snapped onto a special position %{distance} away."
+      zh-CN: "%{label} 已吸附到 %{distance} 外的特殊位置。"
+    multiplicity:
+      en: "%{label}: multiplicity %{before} → %{after}."
+      zh-CN: "%{label} 多重度 %{before} → %{after}。"
 mock:
   not_implemented:
     en: "%{feature} is not implemented yet."

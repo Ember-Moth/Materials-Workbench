@@ -1,5 +1,8 @@
 use gpui_kit::{Hsla, Rgba};
-use mw_crystal::covalent_radius;
+use mw_crystal::{
+    AtomFate, AtomRef, BondRules, DisplayAtom, IdMap, Orbit, Structure, covalent_radius,
+    display_atoms, display_bonds,
+};
 use mw_viewport::{BondInstance, LineInstance, Scene, SphereInstance, srgb_to_linear};
 
 use crate::document::StructureDocument;
@@ -181,6 +184,83 @@ pub(crate) struct LineColors {
     pub measurement: Hsla,
 }
 
+/// The atoms of a structure as drawn: its orbits, the atoms displayed and
+/// the bonds between them, as index pairs into the atoms.
+pub(crate) struct Atoms<'a> {
+    pub structure: &'a Structure,
+    pub orbits: &'a [Orbit],
+    pub atoms: &'a [DisplayAtom],
+    pub display_bonds: &'a [[usize; 2]],
+    /// How references in the document's measurements map to these atoms;
+    /// `None` for the document's own.
+    pub ids: Option<&'a IdMap>,
+}
+
+impl<'a> Atoms<'a> {
+    pub fn of(document: &'a StructureDocument) -> Self {
+        let derived = document.derived();
+        Self {
+            structure: document.structure(),
+            orbits: &derived.orbits,
+            atoms: &derived.atoms,
+            display_bonds: &derived.display_bonds,
+            ids: None,
+        }
+    }
+
+    /// Fractional coordinates of an atom the document refers to, as
+    /// `Derived::fractional` gives; `None` for an atom these atoms do not
+    /// have, or no longer name the same way.
+    fn fractional(&self, atom: AtomRef) -> Option<[f64; 3]> {
+        let atom = match self.ids.map(|ids| ids.atom(atom)) {
+            None => atom,
+            Some(AtomFate::Kept(atom)) => atom,
+            Some(AtomFate::Site(_) | AtomFate::Removed) => return None,
+        };
+        let orbit = self.orbits.iter().find(|orbit| orbit.site == atom.site)?;
+        let position = orbit.positions.get(usize::from(atom.member))?;
+        Some([0, 1, 2].map(|i| position[i] + f64::from(atom.cell[i])))
+    }
+}
+
+/// The document's structure after an edit not yet made, such as an atom
+/// being dragged, with what drawing it needs. Its symmetry is not analyzed,
+/// which keeps it quick enough to remake on every pointer move.
+pub(crate) struct Preview {
+    pub structure: Structure,
+    /// What the edit would do to references into the document.
+    pub ids: IdMap,
+    pub orbits: Vec<Orbit>,
+    pub atoms: Vec<DisplayAtom>,
+    pub display_bonds: Vec<[usize; 2]>,
+}
+
+impl Preview {
+    pub fn new(structure: Structure, ids: IdMap) -> Self {
+        let orbits = mw_crystal::orbits(&structure);
+        let atoms = display_atoms(&structure, &orbits);
+        let bonds = mw_crystal::bonds(&structure, &orbits, &BondRules::default());
+        let display_bonds = display_bonds(&atoms, &bonds);
+        Self {
+            structure,
+            ids,
+            orbits,
+            atoms,
+            display_bonds,
+        }
+    }
+
+    pub fn atoms(&self) -> Atoms<'_> {
+        Atoms {
+            structure: &self.structure,
+            orbits: &self.orbits,
+            atoms: &self.atoms,
+            display_bonds: &self.display_bonds,
+            ids: Some(&self.ids),
+        }
+    }
+}
+
 /// What the viewport draws for a document: one sphere per displayed atom,
 /// in the order of `derived.atoms`, so a picked sphere's index is the
 /// atom's index; the bonds between displayed atoms; the unit-cell edges;
@@ -190,9 +270,19 @@ pub(crate) fn scene(
     model: DisplayModel,
     colors: LineColors,
 ) -> Scene {
-    let derived = document.derived();
-    let lattice = &document.structure().lattice;
-    let spheres: Vec<SphereInstance> = derived
+    draw(&Atoms::of(document), document, model, colors)
+}
+
+/// The scene for `atoms`, with the document's measurements drawn between
+/// them where their atoms still exist.
+pub(crate) fn draw(
+    shown: &Atoms,
+    document: &StructureDocument,
+    model: DisplayModel,
+    colors: LineColors,
+) -> Scene {
+    let lattice = &shown.structure.lattice;
+    let spheres: Vec<SphereInstance> = shown
         .atoms
         .iter()
         .map(|atom| {
@@ -207,7 +297,7 @@ pub(crate) fn scene(
         .collect();
 
     let bonds = if model.shows_bonds() {
-        derived
+        shown
             .display_bonds
             .iter()
             .map(|&[i, j]| {
@@ -248,7 +338,7 @@ pub(crate) fn scene(
         let points: Option<Vec<[f64; 3]>> = measurement
             .atoms()
             .iter()
-            .map(|atom| derived.cartesian(lattice, *atom))
+            .map(|atom| shown.fractional(*atom).map(|p| lattice.to_cartesian(p)))
             .collect();
         let Some(points) = points else {
             continue;
