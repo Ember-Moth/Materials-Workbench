@@ -470,12 +470,11 @@ impl StructureWorkspace {
             h_flex()
                 .gap_2()
                 .child(
-                    div()
-                        .w_12()
-                        .flex_none()
-                        .truncate()
-                        .text_sm()
-                        .child(label.clone()),
+                    div().w_20().flex_none().child(
+                        Input::new(&editor.label_input)
+                            .id(field_id("label", &label))
+                            .small(),
+                    ),
                 )
                 .child(
                     div().flex_1().min_w_0().child(
@@ -537,7 +536,7 @@ impl StructureWorkspace {
                         .gap_2()
                         .child(
                             div()
-                                .w_12()
+                                .w_20()
                                 .flex_none()
                                 .child(column(tr!("panel.site.label"))),
                         )

@@ -214,23 +214,43 @@ const TOUR: &[(&str, Step)] = &[
         };
         execute(workbench, Command::Edit(edit), window, cx);
     }),
+    // The shared site is the perovskite's A site: its label field shows the
+    // new name, and so do the panel's title and the sites list.
+    ("13-rename-label", |workbench, window, cx| {
+        let edit = Edit::RenameLabel {
+            site: SiteId(1),
+            occupant: "Sr1".into(),
+            label: "A1".into(),
+        };
+        execute(workbench, Command::Edit(edit), window, cx);
+    }),
+    // Ti1 is taken: refused with a notification, Ba1 keeps its label.
+    ("14-rename-refused", |workbench, window, cx| {
+        let edit = Edit::RenameLabel {
+            site: SiteId(1),
+            occupant: "Ba1".into(),
+            label: "Ti1".into(),
+        };
+        execute(workbench, Command::Edit(edit), window, cx);
+    }),
     // Ti1 has one atom in the cell, so deleting it deletes the site
     // without asking; a notification names what went.
-    ("13-select-ti", |workbench, window, cx| {
+    ("15-select-ti", |workbench, window, cx| {
         point_at(workbench, &[Pointer::Click([0.5, 0.5, 0.5])], window, cx);
     }),
-    ("14-delete-site", |_, window, cx| {
+    ("16-delete-site", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::DeleteSelection), cx)
     }),
-    // Undo the deletion, the occupant and the cell: SrTiO₃ as it was.
-    ("15-undo", |_, window, cx| {
-        for _ in 0..3 {
+    // Undo the deletion, the rename, the occupant and the cell: SrTiO₃ as
+    // it was.
+    ("17-undo", |_, window, cx| {
+        for _ in 0..4 {
             window.dispatch_action(Box::new(mw_structure::Undo), cx);
         }
     }),
     // The delete dialog's default for one O of SrTiO₃: convert to P1, then
     // delete that atom alone, as one step.
-    ("16-p1-delete", |workbench, window, cx| {
+    ("18-p1-delete", |workbench, window, cx| {
         let Some(workspace) = workbench.workspace().cloned() else {
             return;
         };
@@ -241,17 +261,17 @@ const TOUR: &[(&str, Step)] = &[
         }
         window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
     }),
-    ("17-supercell", |workbench, window, cx| {
+    ("19-supercell", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(2), window, cx);
     }),
     // ⌘S: the measurements made on rutile are saved, its unsaved mark goes.
-    ("18-saved", |workbench, window, cx| {
+    ("20-saved", |workbench, window, cx| {
         workbench.save_active_project(&crate::actions::SaveProject, window, cx);
     }),
     // Opening files goes through the same path as the file dialog and drops.
     // Several at once, as when dropping a selection: the first opens, the
     // rest join the open structure's project, unsaved until ⌘S.
-    ("19-import-files", |workbench, window, cx| {
+    ("21-import-files", |workbench, window, cx| {
         let files = [
             "bst_su_aniso.cif",
             "rutile.cif",
@@ -261,26 +281,26 @@ const TOUR: &[(&str, Step)] = &[
         workbench.import_paths(files.map(fixture).to_vec(), window, cx);
     }),
     // Entry 5 is the imported rutile, after the three samples and BST.
-    ("20-imported-rutile", |workbench, window, cx| {
+    ("22-imported-rutile", |workbench, window, cx| {
         workbench.open_structure(StructureEntryId(5), window, cx);
     }),
-    ("21-import-zincite", |workbench, window, cx| {
+    ("23-import-zincite", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
     }),
-    ("22-import-diagnostics", |_, window, cx| {
+    ("24-import-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
     // Sites snapped onto special positions, rows merged and dropped.
-    ("23-import-snapped", |workbench, window, cx| {
+    ("25-import-snapped", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("rutile_near_special.cif")], window, cx);
     }),
-    ("24-snapped-diagnostics", |_, window, cx| {
+    ("26-snapped-diagnostics", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::ShowDiagnosticsPanel), cx)
     }),
-    ("25-import-failed", |workbench, window, cx| {
+    ("27-import-failed", |workbench, window, cx| {
         workbench.import_paths(vec![fixture("malformed.cif")], window, cx);
     }),
-    ("26-import-errors", |_, window, cx| {
+    ("28-import-errors", |_, window, cx| {
         OpenedFile::read(fixture("malformed.cif")).show_errors(window, cx);
     }),
     // Converting rutile to P1: the dialog, then the six sites it gives.
@@ -288,24 +308,24 @@ const TOUR: &[(&str, Step)] = &[
         window.close_dialog(cx);
         workbench.open_structure(StructureEntryId(1), window, cx);
     }),
-    ("27-convert-dialog", |workbench, window, cx| {
+    ("29-convert-dialog", |workbench, window, cx| {
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
         window.dispatch_action(Box::new(mw_structure::ConvertToP1), cx);
     }),
-    ("28-converted", |workbench, window, cx| {
+    ("30-converted", |workbench, window, cx| {
         window.close_dialog(cx);
         execute(workbench, Command::Edit(Edit::ExpandToP1), window, cx);
         window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
     }),
     // Back to P4₂/mnm in one undo, then the supercell dialog.
-    ("29-supercell-dialog", |_, window, cx| {
+    ("31-supercell-dialog", |_, window, cx| {
         window.dispatch_action(Box::new(mw_structure::Undo), cx);
         window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
         window.dispatch_action(Box::new(mw_structure::MakeSupercell), cx);
     }),
     // A new derived structure after rutile's other supercell, opened.
-    ("30-supercell-made", |workbench, window, cx| {
+    ("32-supercell-made", |workbench, window, cx| {
         window.close_dialog(cx);
         if let Some(workspace) = workbench.workspace().cloned() {
             workspace.update(cx, |workspace, cx| {
@@ -315,35 +335,35 @@ const TOUR: &[(&str, Step)] = &[
     }),
     // The imports and the supercell are not saved yet: closing their
     // project asks first.
-    ("31-unsaved-dialog", |workbench, window, cx| {
+    ("33-unsaved-dialog", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_active_project(&crate::actions::CloseProject, window, cx);
     }),
-    ("32-settings", |_, window, cx| {
+    ("34-settings", |_, window, cx| {
         window.close_dialog(cx);
         settings::open(window, cx)
     }),
-    ("33-no-sidebar", |workbench, window, cx| {
+    ("35-no-sidebar", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.set_sidebar_open(false, cx);
     }),
-    // The structure from step 23 (entry 10) shares a site between Ti and
+    // The structure from step 25 (entry 10) shares a site between Ti and
     // V, so the formats that list atoms are unavailable and say why.
     ("_show-snapped", |workbench, window, cx| {
         workbench.set_sidebar_open(true, cx);
         workbench.open_structure(StructureEntryId(10), window, cx);
     }),
-    ("34-export-dialog", |workbench, window, cx| {
+    ("36-export-dialog", |workbench, window, cx| {
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::ExportStructure), cx);
     }),
     // The empty state lists the recent projects.
-    ("35-empty", |workbench, window, cx| {
+    ("37-empty", |workbench, window, cx| {
         window.close_dialog(cx);
         workbench.close_structure(window, cx);
     }),
     // A new project is untitled and empty until files are opened into it.
-    ("36-new-project", |workbench, window, cx| {
+    ("38-new-project", |workbench, window, cx| {
         workbench.new_project(&crate::actions::NewProject, window, cx);
     }),
 ];

@@ -32,7 +32,10 @@ pub(crate) type ElementList = SearchableVec<&'static str>;
 
 /// The fields for one occupant of the edited site.
 pub(crate) struct OccupantEditor {
+    /// The occupant's label in the document.
     pub label: SharedString,
+    /// The field that renames it.
+    pub label_input: Entity<InputState>,
     pub element: Entity<SelectState<ElementList>>,
     pub occupancy: Entity<InputState>,
 }
@@ -343,8 +346,9 @@ impl StructureWorkspace {
     }
 
     /// Shows the selected site in the coordinate and occupant fields. The
-    /// occupant fields are made again only when the site or its occupants'
-    /// labels change, so a field keeps its focus across other edits.
+    /// occupant fields are made again only when the site or its number of
+    /// occupants change, so a field keeps its focus across other edits,
+    /// renaming included.
     pub(crate) fn sync_site_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self
             .selected_site()
@@ -361,15 +365,16 @@ impl StructureWorkspace {
                 state.set_value(format::coordinate(value), window, cx)
             });
         }
-        let same_occupants = self.editing_site == Some(site.id)
-            && self
-                .occupants
-                .iter()
-                .map(|editor| editor.label.as_ref())
-                .eq(site.occupants.iter().map(|o| o.label.as_str()));
+        let same_occupants =
+            self.editing_site == Some(site.id) && self.occupants.len() == site.occupants.len();
         self.editing_site = Some(site.id);
         if same_occupants {
-            for (editor, occupant) in self.occupants.iter().zip(&site.occupants) {
+            for (editor, occupant) in self.occupants.iter_mut().zip(&site.occupants) {
+                editor.label = occupant.label.clone().into();
+                let label = editor.label.clone();
+                editor
+                    .label_input
+                    .update(cx, |state, cx| state.set_value(label, window, cx));
                 let element = occupant.species.element.as_str();
                 let symbol = element::symbols().find(|symbol| *symbol == element);
                 editor.element.update(cx, |state, cx| match symbol {
@@ -385,40 +390,60 @@ impl StructureWorkspace {
         }
         self.occupants.clear();
         self._occupant_subscriptions.clear();
-        for occupant in &site.occupants {
+        // The fields name their occupant by position, and read its label when
+        // they commit: a rename keeps the fields.
+        for (index, occupant) in site.occupants.iter().enumerate() {
             let label = SharedString::from(occupant.label.clone());
+            let label_input = cx.new(|cx| InputState::new(window, cx).default_value(label.clone()));
             let element = element_picker(&occupant.species.element, window, cx);
             let occupancy = cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(format::occupancy(occupant.occupancy.value()))
             });
             let site = site.id;
-            let picked = label.clone();
+            self._occupant_subscriptions.push(cx.subscribe_in(
+                &label_input,
+                window,
+                move |this, _, event, window, cx| {
+                    if commits(event) {
+                        this.commit_label(index, window, cx);
+                    }
+                },
+            ));
             self._occupant_subscriptions.push(cx.subscribe_in(
                 &element,
                 window,
                 move |this, _, event: &SelectEvent<ElementList>, window, cx| {
-                    if let SelectEvent::Confirm(Some(symbol)) = event {
-                        this.set_element(site, picked.clone(), symbol, window, cx);
+                    if let SelectEvent::Confirm(Some(symbol)) = event
+                        && let Some(label) = this.occupant_label(index)
+                    {
+                        this.set_element(site, label, symbol, window, cx);
                     }
                 },
             ));
-            let typed = label.clone();
             self._occupant_subscriptions.push(cx.subscribe_in(
                 &occupancy,
                 window,
                 move |this, _, event, window, cx| {
-                    if commits(event) {
-                        this.commit_occupancy(typed.clone(), window, cx);
+                    if commits(event)
+                        && let Some(label) = this.occupant_label(index)
+                    {
+                        this.commit_occupancy(label, window, cx);
                     }
                 },
             ));
             self.occupants.push(OccupantEditor {
                 label,
+                label_input,
                 element,
                 occupancy,
             });
         }
+    }
+
+    /// The label of the occupant whose fields are at `index`.
+    fn occupant_label(&self, index: usize) -> Option<SharedString> {
+        self.occupants.get(index).map(|editor| editor.label.clone())
     }
 
     /// Rebuilds what the viewport draws, after the display model or the

@@ -478,9 +478,12 @@ edit:
     unknown_element:
       en: "%{symbol} is not an element symbol."
       zh-CN: "%{symbol} 不是元素符号。"
+    empty_label:
+      en: A label cannot be empty.
+      zh-CN: 标签不能为空。
     invalid_label:
-      en: "%{label} cannot be a label: it must not be empty, contain spaces, or start with _ # $ ' \" [ ] or ;."
-      zh-CN: "%{label} 不能用作标签：不能为空、不能含空格，也不能以 _ # $ ' \" [ ] 或 ; 开头。"
+      en: "%{label} cannot be a label: it must not contain spaces or start with _ # $ ' \" [ ] or ;."
+      zh-CN: "%{label} 不能用作标签：不能含空格，也不能以 _ # $ ' \" [ ] 或 ; 开头。"
     duplicate_label:
       en: "The label %{label} is already in use."
       zh-CN: "标签 %{label} 已被使用。"

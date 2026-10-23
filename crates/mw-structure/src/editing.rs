@@ -91,6 +91,7 @@ pub(crate) fn error_text(error: &EditError, structure: &Structure) -> SharedStri
         EditError::UnknownElement { symbol } => {
             tr!("edit.error.unknown_element", symbol = symbol)
         }
+        EditError::InvalidLabel { label } if label.is_empty() => tr!("edit.error.empty_label"),
         EditError::InvalidLabel { label } => tr!("edit.error.invalid_label", label = label),
         EditError::DuplicateLabel { label } => {
             tr!("edit.error.duplicate_label", label = label)
@@ -411,6 +412,33 @@ impl StructureWorkspace {
             occupancy: Measured::exact(value),
         });
         if edit.is_none_or(|edit| self.edit(edit, window, cx).is_err()) {
+            self.sync_site_inputs(window, cx);
+        }
+    }
+
+    /// Renames the occupant whose fields are at `index` to the typed label.
+    /// A refused label (not usable in CIF, or taken) leaves the field showing
+    /// the label it had.
+    pub(crate) fn commit_label(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(site), Some(editor)) = (self.editing_site, self.occupants.get(index)) else {
+            return;
+        };
+        let current = editor.label.clone();
+        let typed = editor.label_input.read(cx).value().trim().to_string();
+        if typed == current.as_ref() {
+            return;
+        }
+        let edit = Edit::RenameLabel {
+            site,
+            occupant: current.to_string(),
+            label: typed,
+        };
+        if self.edit(edit, window, cx).is_err() {
             self.sync_site_inputs(window, cx);
         }
     }

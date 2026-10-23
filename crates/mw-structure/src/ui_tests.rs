@@ -11,8 +11,8 @@
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    AppContext as _, Bounds, Entity, TestAppContext, VisualTestContext, WindowBounds,
-    WindowOptions, px, size,
+    AppContext as _, Bounds, Entity, Focusable as _, TestAppContext, VisualTestContext,
+    WindowBounds, WindowOptions, px, size,
 };
 use mw_crystal::sample::SampleKey;
 use mw_crystal::{AtomRef, CellParam, EditMode, SiteId, Target};
@@ -254,6 +254,97 @@ fn mixed_occupancy_from_the_occupant_fields(cx: &mut TestAppContext) {
     assert_eq!(occupancies(&mut cx), [1.0]);
     let labels = workspace.read_with(&cx, |workspace, _| workspace.occupants.len());
     assert_eq!(labels, 1);
+}
+
+/// The labels of a site's occupants in the document.
+fn labels(
+    workspace: &Entity<StructureWorkspace>,
+    site: SiteId,
+    cx: &mut VisualTestContext,
+) -> Vec<String> {
+    workspace.read_with(cx, |workspace, _| {
+        let site = workspace.document.structure().site(site).unwrap();
+        site.occupants.iter().map(|o| o.label.clone()).collect()
+    })
+}
+
+fn notifications(cx: &mut VisualTestContext) -> usize {
+    cx.update(|window, cx| window.notifications(cx).len())
+}
+
+#[gpui_kit::test]
+fn labels_are_renamed_from_their_field_and_undo(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::Rutile);
+    // The workspace opens on O1.
+    let field = workspace.read_with(&cx, |workspace, _| {
+        workspace.occupants[0].label_input.clone()
+    });
+    // Spaces around the label are dropped.
+    type_into(&mut cx, &field, " O2 ");
+    assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O2"]);
+    assert_eq!(text(&field, &mut cx), "O2");
+    assert_eq!(steps(&workspace, &mut cx), 1);
+    // The field was kept, with its focus, and now edits O2.
+    let (kept, focused) = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let editor = &workspace.occupants[0];
+            (
+                editor.label_input == field && editor.label == "O2",
+                editor.label_input.focus_handle(cx).is_focused(window),
+            )
+        })
+    });
+    assert!(kept && focused);
+    // Leaving the field with its label unchanged adds no step.
+    focus_workspace(&workspace, &mut cx);
+    assert_eq!(steps(&workspace, &mut cx), 1);
+    let occupancy =
+        workspace.read_with(&cx, |workspace, _| workspace.occupants[0].occupancy.clone());
+    type_into(&mut cx, &occupancy, "0.5");
+    assert_eq!(steps(&workspace, &mut cx), 2);
+
+    focus_workspace(&workspace, &mut cx);
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    draw(&mut cx);
+    assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O1"]);
+    assert_eq!(text(&field, &mut cx), "O1");
+    cx.simulate_keystrokes("cmd-shift-z");
+    draw(&mut cx);
+    assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O2"]);
+    assert_eq!(text(&field, &mut cx), "O2");
+}
+
+#[gpui_kit::test]
+fn refused_labels_leave_the_field_as_it_was(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx, SampleKey::Rutile);
+    let field = workspace.read_with(&cx, |workspace, _| {
+        workspace.occupants[0].label_input.clone()
+    });
+    // Taken by the other site, empty, with a space inside, and starting
+    // with a character CIF reserves.
+    for (typed, refused) in [("Ti1", 1), ("", 2), ("O 1", 3), ("_O1", 4)] {
+        type_into(&mut cx, &field, typed);
+        assert_eq!(text(&field, &mut cx), "O1", "{typed:?}");
+        assert_eq!(notifications(&mut cx), refused, "{typed:?}");
+    }
+    assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O1"]);
+    assert_eq!(steps(&workspace, &mut cx), 0);
+    cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+
+    // Two occupants of one site cannot share a label either.
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.add_occupant(SiteId(2), "F", 0.25, window, cx));
+        })
+    });
+    draw(&mut cx);
+    let f = workspace.read_with(&cx, |workspace, _| {
+        workspace.occupants[1].label_input.clone()
+    });
+    type_into(&mut cx, &f, "O1");
+    assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O1", "F1"]);
+    assert_eq!(text(&f, &mut cx), "F1");
+    assert_eq!(steps(&workspace, &mut cx), 1);
 }
 
 #[gpui_kit::test]
