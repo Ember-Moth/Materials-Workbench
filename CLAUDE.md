@@ -2,13 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。当前处于 v0.1：里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过），剩下的模拟（mock）属于之后的版本。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12；M7（对称模式下的几何编辑）已实现，剩下的模拟（mock）属于之后的里程碑和版本。
 
 ## 文档是设计的依据
 
 动手前先读对应的文档，设计需要改时先改设计稿：
 
-- `docs/architecture.md`：crate 划分、依赖方向、运行时结构；**第 9 节是模拟清单，第 10 节是 v0.1 里程碑 M1–M6 及状态**。
+- `docs/architecture.md`：crate 划分、依赖方向、运行时结构；**第 9 节是模拟清单，第 10 节是 v0.1（M1–M6）和 v0.2（M7–M12）的里程碑及状态**。
 - `docs/development.md`：命令、代码约定（图标、文字、命令、模拟）、测试分层、交付流程、提交规范。
 - `docs/roadmap.md`：各版本的功能、算法与验收标准。
 - `docs/design/`：
@@ -32,7 +32,7 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量和选中要删除的原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；原子的位置按屏幕上那一帧算，所以转动视图的拖动要单独放进一步，等新画面到了再点选；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
+- **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量、选中要删除的原子和移动模式下拖动原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；拖动原子时的预览用 `Hold` 按住截图，下一步再 `Release`；原子的位置按屏幕上那一帧算，所以转动视图的拖动要单独放进一步，等新画面到了再点选；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
   ```bash
   MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -67,12 +67,12 @@ cargo fmt --all
 - **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源。
 - **能力 crate（依赖 GPUI）**：
   - `mw-project`：打开着的项目（`ProjectCatalog`：清单、目录、导入或派生后还没保存的结构）和左侧边栏；
-  - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区。
+  - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区；移动模式（在视口里拖动原子）在 `src/moving.rs`，拖动中只画预览（`scene::Preview`，不做对称性分析），松手才执行一条 `MoveSite`。
 
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
-- **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。它不知道晶体是什么。
+- **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。宿主用 `set_sphere_dragging` 打开后，按在球上的拖动报告屏幕平面内的位移（`SphereDragged` / `SphereDropped`，Å）而不转相机；预览用 `preview_scene`，它保持相机绕的中心，画面不平移。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型、对称操作、原子展开、转为 P1 与超胞（`src/transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal`：模型、对称操作、原子展开、转为 P1 与超胞（`src/transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
   - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
   - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"；
   - `mw-automation`：能力注册表（`ai-integration.md` 第 4 节）。每个能力有英文说明、输入输出 Schema、副作用等级和处理函数，调用的是 `mw-crystal` 的领域命令，导入诊断和导出文本用 `mw-crystal-io`（`src/files.rs`）；Schema 由 `schema_struct!` 从 Rust 类型和字段文档注释生成，测试用 `mw-llm` 的检查函数确认它们在严格子集内。`StructureEntryId` 定义在这里，`mw-project` 重新导出；
@@ -88,7 +88,7 @@ cargo fmt --all
 - **真源**是不对称单元加对称操作：整数矩阵加有理平移，并做群封闭检查。
 - **派生数据**由真源计算：等效原子、`AtomRef`（位点 + 轨道成员 + 晶胞偏移）、位点对称性、键（共价半径之和 + 容差，跨周期边界，金属之间默认不成键）。
 - 能力、选区和测量都引用稳定 ID（`StructureEntryId`、`SiteId`、`AtomRef`），不用列表下标。
-- 编辑分对称模式和 P1 模式，都是可序列化的命令（`mw_crystal::Edit`），带精确的逆命令，进入 `CrystalDocument` 的撤销栈（M4）。转为 P1 是命令 `ExpandToP1`（逆命令恢复整个结构，`IdMap` 的 `Split` / `Merged` 让选区和测量跟着原子走）；超胞是 `make_supercell` 生成的新结构，由外壳作为派生结构加进项目。命令只指向整个位点；指向单个原子的请求先经 `target_sites` 换算，对称模式下只改部分等效原子会被拒绝并给出引导。界面、能力注册表（`mw-automation`）和以后的脚本调用的是同一批命令。
+- 编辑分对称模式和 P1 模式，都是可序列化的命令（`mw_crystal::Edit`），带精确的逆命令，进入 `CrystalDocument` 的撤销栈（M4）。转为 P1 是命令 `ExpandToP1`（逆命令恢复整个结构，`IdMap` 的 `Split` / `Merged` 让选区和测量跟着原子走）；超胞是 `make_supercell` 生成的新结构，由外壳作为派生结构加进项目。命令只指向整个位点；指向单个原子的请求先经 `target_sites` 换算，对称模式下只改部分等效原子会被拒绝并给出引导。对称模式下的几何编辑（M7）：`MoveSite` 把被拖原子的分数位移经 `W_k⁻¹` 换算到代表点，再用 `P_s` 投影（可选择脱离特殊位置）；`SetCoordinate` 按行最简形参数化改主元或只依赖一个主元的跟随坐标；`AddSite` 吸附到位点对称群的平均位置，与已有轨道重合时拒绝并引导为混合占位；落到更高对称的特殊位置附近时吸附。吸附和多重度变化作为 `EditInfo` 随结果返回，界面显示为通知。界面、能力注册表（`mw-automation`）和以后的脚本调用的是同一批命令。
 
 ### 视口
 

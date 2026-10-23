@@ -89,18 +89,20 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 19 个能力：
+- `Registry::standard()` 注册的能力：
   - 结构查询：`structure.list`、`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
-  - 结构编辑：`structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`，以及 P1 下的 `structure.set_position`；
+  - 结构编辑：`structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`；
+  - 对称模式下的几何编辑（M7，晶体学设计稿 7.4–7.6 节）：`structure.move_site`（拖动一个原子，分数位移，`leave_special_position` 决定是否投影到约束子空间）、`structure.set_coordinate`（`axis` 为 `"x"`/`"y"`/`"z"`，跟随坐标联动，常数坐标返回 `fixed_coordinate`）、`structure.add_site`（元素、分数坐标、占位率，吸附到特殊位置；重合时返回 `coincident_site`，引导 `{"kind": "add_occupant", "site": …}`）。`structure.set_position` 在对称模式下也可用，位点取新位置的位点对称性；
   - `history.undo`、`history.redo`。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
 - `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。
 - **Schema 由 Rust 类型生成**：输入输出都是用 `schema_struct!` 声明的结构体，同一份字段列表同时生成 serde 类型和 Schema，字段的文档注释就是给模型看的说明，两者不会不一致。没有用 schemars：它生成的 Schema 带有严格子集之外的关键字（`format`、`minimum`、`$schema` 等），还得再改写一遍。
-- **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部 19 个能力放进一个严格请求也合规；输出 Schema 同样在子集内，可以有可空字段。
+- **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，只读能力放进一个严格请求合规，全部能力每 20 个一组也合规（见下文）；输出 Schema 同样在子集内，可以有可空字段。
 - **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`。`Documents` 是放在内存里的实现，供测试和以后的无界面模式使用；连接运行中的应用时由界面实现（v0.2）。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
 - **参数先按类型反序列化**（拒绝多余字段），类型不对时返回 `invalid_arguments`；范围和单位由处理函数检查。元素符号不区分大小写（`zr` 即 Zr）。
+- **编辑的结果**：`EditOutput` 有 `changed`、`revision`、作用到的 `sites`、`warnings`，以及 `info`（M7）：编辑在要求之外做了什么，`snapped`（吸附到特殊位置）或 `multiplicity`（等效原子数变了）。摘要里写成 `Note: …`；移动位点的摘要写明它最后的位置、等效原子数和 Wyckoff 位置。
 - **错误可恢复**：`CallError` 有稳定的 `code`、英文的 `message` 和引导 `guidance`。例如对称模式下只给 Ti1 的一个等效原子换元素，返回 `breaks_symmetry`，引导为"改整个位点"或"转为 P1"（晶体学设计稿 7.1 节）。
 - **结果双份**：`CallResult` 是符合输出 Schema 的 JSON 加一句英文摘要。
 - 界面不经过注册表：GPUI 动作直接调用同一批领域命令（`CrystalDocument::execute`），注册表包装的也是它们，所以两边的行为一致。
@@ -108,7 +110,7 @@ Capability
   - `structure.diagnostics`：结构导入时的诊断，分页；每条有严重程度、稳定代码（如 `atom.snapped`）、源文件行号和英文说明。英文说明由 `diagnostic_message` 生成，写在 `mw-automation` 里，因为它是给模型看的；界面仍用 `mw-structure/src/diagnostics.rs` 的本地化文案。不是从文件来的结构（例如示例）没有诊断。
   - `structure.export`：把结构写成 CIF、POSCAR 或扩展 XYZ 文本并返回，不写文件，所以副作用等级是只读（第 5.2 节）。写法与界面的导出对话框相同：导入的结构写 CIF 时写回源文件的字段，POSCAR 的注释行是"结构名 · 项目名"；部分占位、未知元素被拒绝时返回 `partial_occupancy`、`unknown_element`，前者提示改用 CIF。文本超过 1 MiB 时拒绝（`too_large`），这已远超模型一次能读的量，写大文件属于 v0.3 的写文件能力。
   - 为此新增的接口都是只加不改：`mw-automation` 依赖 `mw-crystal-io`；`Host` 新增带默认实现（返回 `None`）的 `source`，给出结构导入自的数据块；`Documents` 新增 `add_imported`；`CallResult` 新增 `new`（它是 `#[non_exhaustive]`，给注册表之外的入口构造结果用）。
-  - 注册表现在有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。内置助手以后要按任务挑选工具子集，不能总是把全部能力放进一个请求。
+  - 原型时注册表有 19 个能力，离 Anthropic 每个严格请求 20 个工具的上限只差一个（6.2.3 节）。M7 加了三个几何编辑能力后已超过上限：测试改为检查只读能力（MCP Server 提供的那些）能放进一个严格请求，全部能力每 20 个一组。内置助手要按任务挑选工具子集，不能把全部能力放进一个请求。
 
 ## 5. MCP Server（`mw-mcp`）
 
@@ -145,7 +147,7 @@ Capability
 |---|---|---|---|
 | 项目 | `project.list`、`project.open`、`structure.list`、`structure.open`、`file.import` | 读；导入为可撤销写入 | v0.2–v0.3 |
 | 结构查询 | `structure.summary`（化学式、晶胞、空间群、位点）、`structure.sites`、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`、`structure.diagnostics` | 只读 | v0.2 |
-| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`（P1）、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
+| 结构编辑 | `structure.set_cell`、`structure.set_element`、`structure.set_occupancy`、`structure.add_occupant`、`structure.remove_occupant`、`structure.rename_label`、`structure.delete_sites`、`structure.set_position`、`structure.move_site`、`structure.set_coordinate`、`structure.add_site`、`structure.convert_to_p1`、`structure.make_supercell`、`history.undo`、`history.redo` | 可撤销写入 | v0.3 |
 | 导出 | `structure.export`（CIF / POSCAR / XYZ 文本，或写入文件） | 返回文本为只读；写文件为外部副作用 | v0.2（文本）、v0.3（文件） |
 | 视图（仅连接应用时） | `view.select`、`view.set_display_model`、`view.reset`、`view.snapshot`（返回视口图片，供多模态模型"看"结构） | 不改数据 | v0.3 |
 | XRD | `xrd.simulate`、`xrd.import`、`xrd.find_peaks`、`xrd.match_phases`、`xrd.compare` | 计算为只读；导入为写入 | v0.4 |
