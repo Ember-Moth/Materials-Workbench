@@ -498,21 +498,50 @@ pub struct Renderer {
 impl Renderer {
     /// Creates a renderer on the high-performance adapter. Blocks while the
     /// device is requested.
+    ///
+    /// wgpu's environment variables narrow the choice: `WGPU_BACKEND`
+    /// (`vulkan`, `dx12`, `metal`, `gl`), `WGPU_ADAPTER_NAME` (part of the
+    /// adapter's name, any case), `WGPU_POWER_PREF` and the instance
+    /// flags. CI pins the software adapters with them
+    /// (`docs/development.md` §2.1).
     pub fn new() -> Result<Self, RenderError> {
         pollster::block_on(Self::new_async())
     }
 
     async fn new_async() -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|e| RenderError::NoAdapter(e.to_string()))?;
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match std::env::var("WGPU_ADAPTER_NAME") {
+            Ok(name) if !name.is_empty() => {
+                let wanted = name.to_lowercase();
+                let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+                let names: Vec<String> = adapters.iter().map(|a| a.get_info().name).collect();
+                adapters
+                    .into_iter()
+                    .find(|a| a.get_info().name.to_lowercase().contains(&wanted))
+                    .ok_or_else(|| {
+                        RenderError::NoAdapter(format!(
+                            "none is named like WGPU_ADAPTER_NAME={name}; there are {names:?}"
+                        ))
+                    })?
+            }
+            _ => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::from_env()
+                        .unwrap_or(wgpu::PowerPreference::HighPerformance),
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(|e| RenderError::NoAdapter(e.to_string()))?,
+        };
         let info = adapter.get_info();
+        log::info!(
+            "renderer adapter: {} ({:?}, {:?})",
+            info.name,
+            info.backend,
+            info.device_type
+        );
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("mw-crystal-render"),
@@ -983,9 +1012,20 @@ mod tests {
 
     const SIZE: u32 = 65;
 
-    /// A renderer, or `None` (and the test passes) on machines without a GPU.
+    /// A renderer, or `None` on machines without a GPU adapter: the test
+    /// is skipped and says why. Where `MW_REQUIRE_GPU` is set, as in CI
+    /// with its software adapters, a missing adapter fails the test.
     fn renderer() -> Option<Renderer> {
-        Renderer::new().map_err(|e| eprintln!("skipping: {e}")).ok()
+        match Renderer::new() {
+            Ok(renderer) => Some(renderer),
+            Err(e) if std::env::var_os("MW_REQUIRE_GPU").is_some_and(|v| v != "0") => {
+                panic!("MW_REQUIRE_GPU is set, but there is no renderer: {e}")
+            }
+            Err(e) => {
+                eprintln!("skipped, there is no renderer: {e} (MW_REQUIRE_GPU=1 fails instead)");
+                None
+            }
+        }
     }
 
     fn submit(renderer: &mut Renderer, size: u32, camera: CameraMatrices) -> PendingFrame {

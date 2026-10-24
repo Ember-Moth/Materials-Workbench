@@ -62,6 +62,17 @@ fn open_document(
         .expect("open a test window")
     });
     let mut cx = VisualTestContext::from_window(window, cx);
+    // The tests pick atoms and count frames; without a renderer they would
+    // fail for reasons that have nothing to do with what they test.
+    let error = workspace.read_with(&cx, |workspace, cx| {
+        workspace.viewport.read(cx).renderer_error().cloned()
+    });
+    if let Some(error) = error {
+        panic!(
+            "the 3D view has no renderer ({error}): UI tests need a wgpu adapter, on a \
+             machine without a GPU a software one (docs/development.md §4)"
+        );
+    }
     focus_workspace(&workspace, &mut cx);
     (workspace, cx)
 }
