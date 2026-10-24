@@ -1,0 +1,33 @@
+# The Python package of Materials Workbench (docs/design/scripting.md §5),
+# built with maturin: `maturin build --release` in this directory gives one
+# abi3 wheel per platform for CPython 3.10 and newer. CI builds the wheels
+# (.github/workflows/ci.yml); nothing is published to PyPI yet.
+
+[build-system]
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "materials-workbench"
+description = "Crystal structures from Python: read CIF and POSCAR, make supercells, change cells, find and apply symmetry, through the Materials Workbench capability registry"
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+keywords = ["crystallography", "CIF", "POSCAR", "VASP", "symmetry", "materials science"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "materials_workbench"
+# The bindings are behind a feature, so that `cargo build` needs no Python.
+# `extension-module` turns them on and keeps the module from linking
+# libpython; maturin 1.9.4 and newer also do the latter by setting
+# PYO3_BUILD_EXTENSION_MODULE.
+features = ["extension-module"]
