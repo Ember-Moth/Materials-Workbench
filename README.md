@@ -70,7 +70,7 @@ relaxed.call("structure.sites", {"offset": 0, "limit": 10})
 - [产品路线图](docs/roadmap.md)：定位、竞品、各版本的功能、算法与验收标准
 - [架构](docs/architecture.md)：模块划分、依赖方向、模拟清单与当前里程碑
 - [开发指南](docs/development.md)：环境、命令、代码约定、测试与提交
-- 设计稿：[界面外壳](docs/design/ui-shell.md) · [晶体学数据模型](docs/design/crystallography-model.md) · [3D 视口](docs/design/viewport-rendering.md) · [AI 集成](docs/design/ai-integration.md) · [命令行与 Python](docs/design/scripting.md)
+- 设计稿：[界面外壳](docs/design/ui-shell.md) · [晶体学数据模型](docs/design/crystallography-model.md) · [3D 视口](docs/design/viewport-rendering.md) · [AI 集成](docs/design/ai-integration.md) · [命令行与 Python](docs/design/scripting.md) · [发布与打包](docs/design/release.md)
 
 ## 许可证
 

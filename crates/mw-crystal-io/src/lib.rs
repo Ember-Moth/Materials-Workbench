@@ -1,7 +1,9 @@
 //! Reading and writing crystal structure files, independent of any UI.
 //!
-//! [`cif::read`] imports the CIF 1.1 subset described in
-//! `docs/design/crystallography-model.md` §9.1: one [`ImportedBlock`] per
+//! [`cif::read`] imports the CIF 1.1 subset described in §9.1 of the design
+//! notes in the Materials Workbench repository,
+//! [`docs/design/crystallography-model.md`][design] (in Chinese; "design
+//! §n" below refers to their sections): one [`ImportedBlock`] per
 //! data block, each with its structure (unless it has errors) and the
 //! [`Diagnostic`]s found in it, every one tied to a source line. Structures
 //! come out normalized: sites snapped onto special positions, mixed
@@ -15,6 +17,53 @@
 //! [`cif::write`], [`poscar::write`] and [`xyz::write`] export a structure
 //! as text (design §9.2–9.4). POSCAR and XYZ list atoms one by one, so they
 //! refuse structures with partially occupied sites ([`ExportError`]).
+//!
+//! The structures are those of the `mw-crystal` crate.
+//!
+//! # Example
+//!
+//! ```
+//! use mw_crystal_io::{cif, poscar};
+//!
+//! let text = "\
+//! data_rutile
+//! _space_group_name_H-M_alt 'P 42/m n m'
+//! _cell_length_a 4.594
+//! _cell_length_b 4.594
+//! _cell_length_c 2.959
+//! _cell_angle_alpha 90
+//! _cell_angle_beta 90
+//! _cell_angle_gamma 90
+//! loop_
+//! _atom_site_label
+//! _atom_site_type_symbol
+//! _atom_site_fract_x
+//! _atom_site_fract_y
+//! _atom_site_fract_z
+//! Ti1 Ti 0 0 0
+//! O1 O 0.3048 0.3048 0
+//! ";
+//! let report = cif::read_str(text);
+//! for diagnostic in report.all_diagnostics() {
+//!     println!("line {:?}: {:?}", diagnostic.line(), diagnostic.kind());
+//! }
+//! let (block, rutile) = report.structures().next().unwrap();
+//! assert_eq!(block.name, "rutile");
+//! assert_eq!(rutile.symmetry.operations().len(), 16);
+//!
+//! // POSCAR lists the 6 atoms of the cell, grouped by element.
+//! let vasp = poscar::write(rutile, "rutile").unwrap();
+//! let back = poscar::read_str(&vasp);
+//! let (_, p1) = back.structures().next().unwrap();
+//! assert_eq!(p1.sites.len(), 6);
+//! ```
+//!
+//! [design]: https://github.com/Ember-Moth/Materials-Workbench/blob/main/docs/design/crystallography-model.md
+
+// The README's example runs with the doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 mod atoms;
 mod cif_write;
