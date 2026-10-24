@@ -176,7 +176,7 @@ fn a_project_comes_back_as_it_was_saved(cx: &mut TestAppContext) {
     let view = cx.update(|_, cx| rutile.read(cx).view(cx));
 
     focus(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
     assert!(!rutile.read_with(&cx, |workspace, _| workspace.is_modified()));
@@ -270,7 +270,7 @@ fn imported_files_are_saved_with_their_copy(cx: &mut TestAppContext) {
     assert!(unsaved(&workbench, &mut cx));
 
     focus(&workspace(&workbench, &mut cx), &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
 
@@ -332,7 +332,7 @@ fn poscar_files_are_imported_and_saved_with_their_copy(cx: &mut TestAppContext) 
     assert_eq!(notifications(&mut cx), before + 2);
 
     focus(&workspace(&workbench, &mut cx), &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
 
@@ -396,7 +396,7 @@ fn supercells_join_the_project_as_derived_structures(cx: &mut TestAppContext) {
     assert_eq!(names, ["SrTiO₃".to_string(), name.clone()]);
 
     focus(&workspace(&workbench, &mut cx), &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
 
@@ -634,16 +634,18 @@ fn the_mcp_setting_starts_and_stops_listening(cx: &mut TestAppContext) {
     assert!(!crate::config::Settings::load(&paths).mcp);
 }
 
-/// With the setting on from the start and listening impossible (here the
-/// socket's path is too long), the window opens and nothing listens.
+/// With the setting on from the start and listening impossible (here a
+/// file is in the way of the endpoint's directory), the window opens and
+/// nothing listens.
 #[gpui_kit::test]
 fn a_failure_to_listen_at_start_is_no_crash(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
-    let dir = temp.path().join("x".repeat(100));
+    let endpoint = AppPaths::in_dir(temp.path().join("config")).mcp_endpoint();
+    std::fs::create_dir_all(temp.path().join("config")).unwrap();
+    std::fs::write(endpoint.dir(), "").unwrap();
     cx.update(|cx| cx.set_global(crate::settings::McpSetting(true)));
-    let (workbench, mut cx) = start(cx, &dir);
+    let (workbench, mut cx) = start(cx, temp.path());
     assert!(workbench.read_with(&cx, |workbench, _| workbench.mcp.is_none()));
-    let endpoint = AppPaths::in_dir(dir.join("config")).mcp_endpoint();
     assert!(!endpoint.token_file().exists());
     assert_eq!(project_count(&workbench, &mut cx), 2);
 }

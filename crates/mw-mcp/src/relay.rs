@@ -64,7 +64,10 @@ pub(crate) async fn connect(endpoint: &Endpoint, access: &Access) -> io::Result<
 
 /// Copies `input` to the application and its answers to `output`, byte for
 /// byte, until the application closes the connection. When `input` ends
-/// (the client is done), the application learns of it and finishes.
+/// (the client is done), the application learns of it: a Unix socket is
+/// closed for writing, and the application finishes. A named pipe cannot be
+/// closed for one direction alone, so on Windows the relay ends there and
+/// the connection closes; the client asks nothing more once its input ends.
 pub(crate) async fn relay<I, O>(link: Link, mut input: I, mut output: O) -> io::Result<()>
 where
     I: AsyncRead + Unpin,
@@ -87,6 +90,9 @@ where
         result = &mut downstream => result,
         result = &mut upstream => {
             result?;
+            if cfg!(windows) {
+                return Ok(());
+            }
             downstream.await
         }
     }
@@ -190,18 +196,20 @@ mod tests {
         })
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn listening_leaves_private_files_and_cleans_up() {
-        use std::os::unix::fs::PermissionsExt as _;
         let temp = tempfile::tempdir().unwrap();
         let endpoint = Endpoint::in_dir(temp.path().join("run"));
         let (dispatcher, _calls) = dispatcher();
         let listening = listen(&endpoint, dispatcher.clone()).unwrap();
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(endpoint.dir()), 0o700);
-        assert_eq!(mode(&endpoint.socket()), 0o600);
-        assert_eq!(mode(&endpoint.token_file()), 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(endpoint.dir()), 0o700);
+            assert_eq!(mode(&endpoint.socket()), 0o600);
+            assert_eq!(mode(&endpoint.token_file()), 0o600);
+        }
         let token = endpoint::read_token(&endpoint.token_file())
             .unwrap()
             .unwrap();
@@ -209,13 +217,17 @@ mod tests {
 
         // A second instance does not take over.
         let error = listen(&endpoint, dispatcher.clone()).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse, "{error}");
         let unchanged = endpoint::read_token(&endpoint.token_file()).unwrap();
         assert_eq!(unchanged.as_deref(), Some(token.as_str()));
 
+        // Stopped once dropped: nothing to connect to, the endpoint free.
         drop(listening);
+        #[cfg(unix)]
         assert!(!endpoint.socket().exists());
         assert!(!endpoint.token_file().exists());
+        let access = Access::default();
+        assert!(connect(&endpoint, &access).await.unwrap().is_none());
         // The next start has a new token.
         let again = listen(&endpoint, dispatcher.clone()).unwrap();
         let next = endpoint::read_token(&endpoint.token_file()).unwrap();
@@ -223,12 +235,15 @@ mod tests {
         drop(again);
 
         // A socket path the system cannot take leaves nothing behind.
-        let long = temp.path().join("x".repeat(120));
-        let endpoint = Endpoint::in_dir(&long);
-        let error = listen(&endpoint, dispatcher).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-        assert!(error.to_string().contains("too long"), "{error}");
-        assert!(!endpoint.token_file().exists());
+        #[cfg(unix)]
+        {
+            let long = temp.path().join("x".repeat(120));
+            let endpoint = Endpoint::in_dir(&long);
+            let error = listen(&endpoint, dispatcher).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("too long"), "{error}");
+            assert!(!endpoint.token_file().exists());
+        }
     }
 
     #[tokio::test]
@@ -241,20 +256,23 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        // Left behind by an application that did not quit cleanly.
+        // Left behind by an application that did not quit cleanly: the
+        // token file, and on Unix the socket. A pipe ends with its process.
         #[cfg(unix)]
         {
             endpoint::make_private_dir(endpoint.dir()).unwrap();
             drop(std::os::unix::net::UnixListener::bind(endpoint.socket()).unwrap());
-            endpoint::write_token(&endpoint.token_file(), &endpoint::new_token()).unwrap();
             assert!(endpoint.socket().exists());
-            assert!(
-                connect(&endpoint, &Access::default())
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
         }
+        #[cfg(windows)]
+        std::fs::create_dir_all(endpoint.dir()).unwrap();
+        endpoint::write_token(&endpoint.token_file(), &endpoint::new_token()).unwrap();
+        assert!(
+            connect(&endpoint, &Access::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[cfg(unix)]
@@ -283,21 +301,43 @@ mod tests {
         assert!(error.to_string().contains("wrong token"), "{error}");
     }
 
-    /// An application that answers the handshake and then echoes whatever
-    /// comes, to see that the relay passes bytes through untouched.
+    /// Where an application would listen at `endpoint`, without one: the
+    /// first connection, once a client makes it.
     #[cfg(unix)]
+    fn accept_one(endpoint: &Endpoint) -> impl Future<Output = tokio::net::UnixStream> + use<> {
+        endpoint::make_private_dir(endpoint.dir()).unwrap();
+        let listener = tokio::net::UnixListener::bind(endpoint.socket()).unwrap();
+        async move { listener.accept().await.unwrap().0 }
+    }
+
+    #[cfg(windows)]
+    fn accept_one(
+        endpoint: &Endpoint,
+    ) -> impl Future<Output = tokio::net::windows::named_pipe::NamedPipeServer> + use<> {
+        std::fs::create_dir_all(endpoint.dir()).unwrap();
+        let pipe = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(endpoint.pipe())
+            .unwrap();
+        async move {
+            pipe.connect().await.unwrap();
+            pipe
+        }
+    }
+
+    /// An application that answers the handshake and then echoes whatever
+    /// comes, to see that the relay passes bytes through untouched, and
+    /// that the application learns when the client is done.
     #[tokio::test]
     async fn the_relay_copies_bytes_as_they_come() {
         let temp = tempfile::tempdir().unwrap();
         let endpoint = Endpoint::in_dir(temp.path().join("run"));
-        endpoint::make_private_dir(endpoint.dir()).unwrap();
+        let accepted = accept_one(&endpoint);
         let token = endpoint::new_token();
         endpoint::write_token(&endpoint.token_file(), &token).unwrap();
-        let listener = tokio::net::UnixListener::bind(endpoint.socket()).unwrap();
         let allowed = temp.path().canonicalize().unwrap();
         let echo = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (read, mut write) = tokio::io::split(stream);
+            let (read, mut write) = tokio::io::split(accepted.await);
             let mut read = BufReader::new(read);
             let hello: Hello = serde_json::from_str(&read_line(&mut read).await.unwrap()).unwrap();
             let welcome = Welcome {
@@ -305,9 +345,11 @@ mod tests {
                 error: None,
             };
             write_line(&mut write, &welcome).await.unwrap();
-            tokio::io::copy_buf(&mut read, &mut write).await.unwrap();
-            write.shutdown().await.unwrap();
-            hello
+            // Until the client is done: the end of the stream on Unix, the
+            // connection closed on Windows.
+            let echoed = tokio::io::copy_buf(&mut read, &mut write).await;
+            let _ = write.shutdown().await;
+            (hello, echoed)
         });
 
         let link = connect(&endpoint, &access(&allowed))
@@ -325,17 +367,25 @@ mod tests {
             let sent = sent.clone();
             tokio::spawn(async move {
                 client.write_all(&sent).await.unwrap();
-                client.shutdown().await.unwrap();
+                client
             })
         };
-        let mut back = Vec::new();
-        received.read_to_end(&mut back).await.unwrap();
-        writer.await.unwrap();
-        relayed.await.unwrap().unwrap();
-        assert_eq!(back.len(), sent.len());
+        let mut back = vec![0; sent.len()];
+        received.read_exact(&mut back).await.unwrap();
         assert!(back == sent, "the relay changed the bytes");
 
-        let hello = echo.await.unwrap();
+        // The client is done; the relay ends, and nothing more comes.
+        writer.await.unwrap().shutdown().await.unwrap();
+        relayed.await.unwrap().unwrap();
+        let mut rest = Vec::new();
+        received.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty(), "{} bytes after the end", rest.len());
+
+        let (hello, echoed) = echo.await.unwrap();
+        #[cfg(unix)]
+        assert_eq!(echoed.unwrap(), sent.len() as u64);
+        #[cfg(windows)]
+        let _ = echoed;
         assert_eq!(hello.handshake, HANDSHAKE);
         assert_eq!(hello.allow, vec![allowed]);
         assert_eq!(hello.cwd, std::env::current_dir().ok());

@@ -33,6 +33,8 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
+- **CI**：`.github/workflows/ci.yml` 在 macOS、Linux、Windows 上跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告算失败）、渲染一帧、`cargo test --workspace --locked` 和构建应用。运行器没有显卡，出帧的测试用软件适配器（Linux 的 lavapipe、Windows 的 WARP），由 `WGPU_BACKEND` 和 `WGPU_ADAPTER_NAME` 固定；`MW_REQUIRE_GPU=1` 让找不到适配器的渲染器测试失败而不是跳过。CI 只在推送后运行，推送前先问用户。本地复现和各平台依赖见 `docs/development.md` 第 1 节和 2.1 节。
+
 - **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量、选中要删除的原子和移动模式下拖动原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；拖动原子时的预览用 `Hold` 按住截图，下一步再 `Release`；原子的位置按屏幕上那一帧算，所以转动视图的拖动要单独放进一步，等新画面到了再点选；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
   ```bash
@@ -104,7 +106,7 @@ cargo fmt --all
 
 ### 命令与快捷键
 
-- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。
+- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。修饰键写 `secondary-`（macOS 上是 ⌘，Linux 和 Windows 上是 Ctrl），不写 `cmd-`（那在其他平台是 Super / Win 键）；界面集成测试里按键也写 `secondary-`，鼠标事件的修饰键用 `Modifiers::secondary()`。
 - 按键上下文有两个：`Workbench`（外壳）和 `StructureWorkspace`（只在结构工作区内有效的快捷键）。
 - 处理器写在拥有该命令的视图上。按钮、快捷键和命令面板都派发同一个动作。
 - 撤销和重做是 `Undo` / `Redo`（⌘Z / ⇧⌘Z，绑定在 `StructureWorkspace` 上下文里；输入框更深的上下文里是撤销文字）。

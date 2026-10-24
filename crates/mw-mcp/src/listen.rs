@@ -21,12 +21,14 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The application listening at an endpoint, on a thread of its own.
 /// Dropping it stops listening, closes every connection and removes the
-/// socket and the token file.
+/// socket and the token file; once it returns, the endpoint is free for
+/// the next start (on Windows the pipe closes with the thread).
 #[derive(Debug)]
 pub struct Listening {
     endpoint: Endpoint,
     token: String,
     stop: Option<oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Listening {
@@ -39,6 +41,10 @@ impl Drop for Listening {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
+        }
+        // Quick: the thread drops its connections without waiting for them.
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
         // Only the files of this start: another instance may have taken over.
         let file = self.endpoint.token_file();
@@ -75,7 +81,7 @@ pub fn listen(endpoint: &Endpoint, dispatcher: Dispatcher) -> io::Result<Listeni
     };
     let (stop, stopped) = oneshot::channel();
     let shared: Arc<str> = token.as_str().into();
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("mcp-listener".into())
         .spawn(move || {
             runtime.block_on(async move {
@@ -95,6 +101,7 @@ pub fn listen(endpoint: &Endpoint, dispatcher: Dispatcher) -> io::Result<Listeni
         endpoint: endpoint.clone(),
         token,
         stop: Some(stop),
+        thread: Some(thread),
     })
 }
 
@@ -288,9 +295,18 @@ mod platform {
         std::fs::create_dir_all(endpoint.dir())?;
         let name = endpoint.pipe();
         let next = instance(&name, true).map_err(|e| {
+            // A first instance of a name that exists is refused with
+            // ERROR_ACCESS_DENIED; reported as the socket's address in use.
+            let kind = match e.kind() {
+                io::ErrorKind::PermissionDenied => io::ErrorKind::AddrInUse,
+                kind => kind,
+            };
             io::Error::new(
-                e.kind(),
-                format!("{name} is taken, by another instance of the application or another program: {e}"),
+                kind,
+                format!(
+                    "{name} is taken, by another instance of the application or another \
+                     program: {e}"
+                ),
             )
         })?;
         endpoint::write_token(&endpoint.token_file(), token)?;

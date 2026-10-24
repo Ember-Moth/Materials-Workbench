@@ -1,6 +1,7 @@
 //! The workspace's one selection, shared by the site list and the viewport
 //! (`docs/design/ui-shell.md` §4.2–§4.3): the list selects whole sites, the
-//! viewport single atoms; ⇧- or ⌘-click adds and removes atoms.
+//! viewport single atoms; ⇧- or ⌘-click (Ctrl-click on Linux and Windows)
+//! adds and removes atoms.
 
 use gpui_kit::*;
 use mw_crystal::{AtomFate, AtomRef, IdMap, SiteId, Target};
@@ -211,7 +212,7 @@ impl StructureWorkspace {
             }
             return;
         }
-        let adding = modifiers.shift || modifiers.platform;
+        let adding = modifiers.shift || modifiers.secondary();
         let selection = match (atom, pick) {
             (Some(atom), _) if adding => {
                 let mut selection = self.selection.clone();

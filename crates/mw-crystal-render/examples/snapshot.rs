@@ -72,8 +72,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("frame size mismatch")?
         .save(&path)?;
     println!(
-        "{} atoms -> {path} ({}x{})",
-        atoms, frame.width, frame.height
+        "{} atoms -> {path} ({}x{}) on {}",
+        atoms,
+        frame.width,
+        frame.height,
+        renderer.adapter_name()
     );
     Ok(())
 }

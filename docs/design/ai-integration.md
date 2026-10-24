@@ -149,7 +149,7 @@ Capability
   - **令牌**：每次开始监听时新生成：两个 UUID v4 的随机位，共 256 位，来自系统的随机数生成器（`uuid` 经 `getrandom`），十六进制写进令牌文件。比较时不在第一个不同的字节处提前返回。
   - **握手**：转发进程先发一行 JSON `{"materials-workbench-mcp": 1, "token": …, "allow": […], "cwd": …}`：`allow` 是它命令行允许的目录（已是规范路径），`cwd` 是它的工作目录。应用回一行 `{"ok": true}`，或 `{"ok": false, "error": …}` 后断开；之后连接上就是 MCP 的按行 JSON-RPC，与 stdio 相同。5 秒内没有握手或一行超过 64 KiB 时断开。应用按 `allow` 和 `cwd` 为这个连接建 `Access`（`Access::with_base`：相对路径从客户端的工作目录算），每个 `Call` 带着它，所以 `--allow` 在两种模式下含义相同，最近项目也只列范围内的。
   - **生命周期**：监听在自己的线程上跑一个 tokio 运行时（应用用 GPUI 的执行器）。同一个目录里已有实例在监听时，后启动的不接管、报错；没正常退出的实例留下的套接字在下次启动时清掉，令牌文件被新令牌覆盖。停止监听（关掉设置或退出）时关闭所有连接，删除套接字和令牌文件。
-- **`materials-workbench mcp`**（`src/relay.rs`、`src/cli.rs`）：解析参数、建好 `Access` 之后先找通道。没有目录或令牌文件、套接字不存在或连不上（遗留的）时，照 M11 无界面运行；连上并通过握手后，只在 stdio 和连接之间原样复制字节。客户端关掉 stdin 时关闭连接的写端，等应用答完；应用关闭连接（退出或关掉设置）时转发进程随之结束，不再等 stdin（`tokio` 的 stdin 读取取消不了，所以用 `shutdown_background` 结束运行时）。连接被拒绝（令牌不对、握手版本不同）或目录不安全时在标准错误里警告，再无界面运行。开发用的独立 `mw-mcp` 不找通道。
+- **`materials-workbench mcp`**（`src/relay.rs`、`src/cli.rs`）：解析参数、建好 `Access` 之后先找通道。没有目录或令牌文件、套接字不存在或连不上（遗留的）时，照 M11 无界面运行；连上并通过握手后，只在 stdio 和连接之间原样复制字节。客户端关掉 stdin 时关闭连接的写端，等应用答完（Windows 的命名管道不能只关一个方向，转发进程在 stdin 结束时直接关闭连接，客户端此时已不再等回答）；应用关闭连接（退出或关掉设置）时转发进程随之结束，不再等 stdin（`tokio` 的 stdin 读取取消不了，所以用 `shutdown_background` 结束运行时）。连接被拒绝（令牌不对、握手版本不同）或目录不安全时在标准错误里警告，再无界面运行。开发用的独立 `mw-mcp` 不找通道。
 - **应用端**（`apps/workbench/src/mcp.rs`、`host.rs`）：设置里"允许 MCP 客户端连接"打开时，外壳调用 `mw_mcp::listen`，并在主线程上起一个任务逐个运行 `Calls`。每个调用拿到一个 `AppHost`：借用 `Workbench`、窗口和 `Context`，实现 `Host` 和 `Projects`：
   - 结构 ID 是应用里的 ID（`ProjectCatalog` 分配的），应用运行期间稳定，几个客户端同时连接时看到的相同，打开的状态也共用；
   - `project.list` 列出窗口里打开着的项目（未命名项目的路径为空）和最近项目（只列客户端允许范围内的）；`structure.list` 列出它们的全部结构，外壳已为之建了工作区的算打开着；
@@ -160,7 +160,7 @@ Capability
 - **资源列表变化**：每次调用后与客户端上次知道的列表比较（`resources/list` 或上一次调用之后），不只比较这次调用前后，所以用户在界面里打开的结构会在下一次调用后通知。界面里打开、关闭结构时还不会立即通知。
 - **默认关**：监听是对本机同一用户的其他进程开放的入口，所以设置默认关。开关立即生效，保存在 `settings.json` 的 `mcp` 字段（没有这个字段的旧设置读作关）。启动时或打开开关时监听失败（另一个实例在监听、路径太长），用通知说明，应用照常使用。
 - **测试**：令牌、令牌文件和目录的权限、目录别人能进入时转发进程不信任它、令牌不对时拒绝、第二个实例不接管、停止后文件清掉、路径太长时什么都不留；用一个只回显的假应用确认转发进程把任意字节（含非 JSON、非 UTF-8、20 万字节）原样转发；经通道用 rmcp 的客户端调用宿主线程上的 `Headless`（`crates/mw-mcp/src/relay.rs`）；`Server::dispatching` 的调用在宿主线程上执行、线程不在时返回 `unavailable`（`src/server.rs`）。外壳的界面集成测试在无头窗口里打开示例项目，经 `Server::dispatching` 调用：只有只读工具、没有 `file_open`；列出打开的项目和结构；没打开的结构先报 `structure_not_open`，打开后窗口显示它；用户的编辑立刻读到；`project_open` 加进边栏而不切换显示、记进最近项目，允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不会让应用崩溃（`apps/workbench/src/ui_tests.rs`）。`apps/workbench/tests/mcp.rs` 在测试里启动监听端，用 rmcp 的客户端驱动 `materials-workbench mcp`：转接到监听端（相对路径从它的工作目录算）、读资源，监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用。另在真实的应用里手动走过一遍（打开设置的临时配置目录，按行发 JSON-RPC）。
-- **还没做**：Windows 的命名管道只做过编译检查（`cargo check --target x86_64-pc-windows-msvc`），没在 Windows 上运行；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用。
+- **还没做**：Windows 的命名管道在 M13 改为通道测试在 Windows 上也运行（CI，开发指南 2.1 节），还没在 Windows 实机上和真实的客户端一起用过；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用。
 
 ### 5.2 暴露的内容
 

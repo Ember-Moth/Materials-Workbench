@@ -67,7 +67,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_window_closed(|cx, _| cx.quit()).detach();
 

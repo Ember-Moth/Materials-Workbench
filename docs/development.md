@@ -6,10 +6,18 @@
 
 | 平台 | 需要 |
 |---|---|
-| 全部 | Rust 1.92 或更新（GPUI Kit 当前依赖要求）；本仓库在 1.97 上开发 |
+| 全部 | Rust 1.92 或更新（GPUI Kit 当前依赖要求）；本仓库在 1.97 上开发，CI 用 1.97 |
 | macOS | Xcode（GPUI 用 Metal），`xcode-select -p` 指向 Xcode |
-| Linux | 图形会话（Wayland 或 X11）和可用的 Vulkan 驱动；依赖包见 [GPUI Kit 安装说明](https://gpui-kit.com/docs/installation) |
-| Windows | 尚未测试 |
+| Linux | 构建：下面这些包（Ubuntu 24.04 的包名，取自 [GPUI Kit 安装说明](https://gpui-kit.com/docs/installation)，去掉了本工作区用不到的 WebView、音频和 OpenSSL）；运行：图形会话（Wayland 或 X11）和可用的 Vulkan 驱动，没有显卡时用 Mesa 的 lavapipe（`mesa-vulkan-drivers`） |
+| Windows | Visual Studio 2022 Build Tools（"使用 C++ 的桌面开发"，含 MSVC 和 Windows SDK），用 MSVC 版的 Rust 工具链；CMake 在 `PATH` 上。`aws-lc-sys`（GPUI 和 `mw-llm` 的 HTTP 客户端用的 TLS）在 x86_64 上要 NASM，没装时设 `AWS_LC_SYS_PREBUILT_NASM=1`，用它自带的汇编结果 |
+
+Linux 的构建依赖：
+
+```bash
+sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libvulkan1 mesa-vulkan-drivers
+```
+
+Linux 和 Windows 上还没有在实机上打开过窗口（路线图 v0.3 的 M13），实机检查的步骤见[视口设计稿](design/viewport-rendering.md) 8.4 节。
 
 ## 2. 常用命令
 
@@ -28,6 +36,48 @@ cargo clippy --workspace --all-targets
 ```bash
 cargo fmt --all
 ```
+
+### 2.1 CI
+
+`.github/workflows/ci.yml` 在 push 到 `main`、每个 pull request 和手动触发时运行，macOS 15、Ubuntu 24.04、Windows Server 2025 各一个任务，互不中断（一个平台失败，其余照常跑完）。每个任务依次：
+
+| 步骤 | 命令 | 说明 |
+|---|---|---|
+| 格式 | `cargo fmt --all -- --check` | |
+| 静态检查 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | 警告算失败；本地不加 `-D warnings` 时只打印 |
+| 渲染一帧 | `cargo run -p mw-crystal-render --example snapshot --locked -- snapshot.png 1000` | 打印渲染器用的适配器；图片作为任务的产物保存（`snapshot-<平台>`），可以下载下来看软件渲染的结果 |
+| 测试 | `cargo test --workspace --locked` | 全部测试，含渲染器的像素测试和界面集成测试 |
+| 构建应用 | `cargo build --bin materials-workbench --locked` | |
+
+GitHub 的运行器没有显卡，出帧的测试用软件适配器：Linux 装 Mesa 的 lavapipe（Vulkan，适配器名 `llvmpipe (…)`），Windows 用系统自带的 WARP（Direct3D 12，`Microsoft Basic Render Driver`），macOS 运行器有虚拟的 Metal 设备。渲染器读 wgpu 的环境变量（`mw-crystal-render` 的 `Renderer::new`）：`WGPU_BACKEND` 限定后端（`vulkan`、`dx12`、`metal`），`WGPU_ADAPTER_NAME` 只取名字里含这段文字的适配器（不分大小写），CI 用两者把测试固定在软件适配器上；`MW_REQUIRE_GPU=1` 让找不到适配器的测试失败而不是跳过（第 4 节）。其他环境变量：`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 缩小目标目录和缓存；`AWS_LC_SYS_PREBUILT_NASM=1` 见第 1 节。依赖的编译结果由 `Swatinem/rust-cache` 缓存，只有 `main` 上的运行写缓存。
+
+在本地复现一个平台的任务（Linux 和 Windows 上先装好第 1 节的依赖）：
+
+```bash
+cargo fmt --all -- --check
+```
+
+```bash
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+```bash
+MW_REQUIRE_GPU=1 cargo test --workspace --locked
+```
+
+```bash
+cargo build --bin materials-workbench --locked
+```
+
+在有显卡的机器上复现软件渲染，按名字选软件适配器（Linux 上要先装 `mesa-vulkan-drivers`；Windows 总会列出 WARP）：
+
+```bash
+WGPU_BACKEND=vulkan WGPU_ADAPTER_NAME=llvmpipe MW_REQUIRE_GPU=1 cargo test --workspace
+```
+
+Windows 的 PowerShell 里先设 `$env:WGPU_BACKEND="dx12"`、`$env:WGPU_ADAPTER_NAME="Microsoft Basic Render Driver"`、`$env:MW_REQUIRE_GPU="1"`，再运行 `cargo test --workspace`。渲染一帧看结果：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000` 会打印用的是哪个适配器，名字对不上时列出所有能用的。
+
+CI 只在 GitHub 上运行，改了工作流要推送后才能看到结果。本地没有工作流的检查工具（actionlint 要另外下载）；在 macOS 上能交叉检查非测试代码在其他平台上能否编译：`aws-lc-sys` 的 C 代码在 macOS 上编不了 Windows 版，所以只能检查不依赖它的 crate，例如 `cargo clippy -p mw-mcp -p mw-crystal-render --lib --bins --target x86_64-pc-windows-msvc`（要先装好这个 target，用另一个 `CARGO_TARGET_DIR` 不占用平时的构建目录）。
 
 CIF 导入的语料统计：读取本地一个 COD 目录（不随仓库提交）。语料从 COD 的官方 rsync 服务器取，数据属于公有领域；`--max-size=1M` 只取不超过 1 MiB 的文件（约 50 万个、37 GB，占全部条目的 94 %，超过的大多嵌着衍射数据），按前缀目录 1–9 分别同步，以后重跑同一条命令只补新增和改动的条目：
 
@@ -302,7 +352,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 1. 在拥有它的 crate 里用 `gpui_kit::actions!` 定义动作。
 2. 在该视图上用 `.on_action(cx.listener(...))` 处理。
-3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。
+3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。修饰键写 `secondary-`（macOS 上是 ⌘，Linux 和 Windows 上是 Ctrl），不写 `cmd-`：`cmd-` 在 Linux 和 Windows 上是 Super / Win 键。界面集成测试里按快捷键同样写 `secondary-`（GPUI 输入框的全选、撤销在 macOS 上绑 `cmd-`，在其他平台上绑 `ctrl-`）；判断鼠标事件的修饰键用 `Modifiers::secondary()`。
 4. 加进命令面板：结构相关的加到 `mw_structure::palette_commands()`，外壳命令加到 `apps/workbench/src/palette.rs`。关键词里写英文名和拼音。
 5. 按钮、菜单都派发同一个动作，不要各自复制一份逻辑。
 
@@ -322,7 +372,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | POSCAR 导入 | `fixtures/poscar/` 的手写文件（VASP 5、Cartesian 与显式朝向、负缩放因子、CONTCAR、VASP 4、左手系）；每种错误和警告的行号；能写成 POSCAR 的结构"导出 → 导入"后原子、晶格矢量和手性相同，再导出文本相同 | `crates/mw-crystal-io/tests/poscar.rs` |
 | 项目文件 | 全部内置示例、每个 fixture 能导入的结构和一个左手系显式朝向的结构写成项目再读回，结构、测量（含已失效的）、编辑记录、来源记录、视图状态逐项相同，重写一遍字节相同；只重写改过的文件、另存为、清理不再引用的文件、读不了的部分（损坏、朝向不正交、版本更新、源文件副本被改或缺失）；示例项目与重新生成的一致；旧版本的测试项目能打开、内容与当前示例相同，第一次保存时备份并写成当前版本 | `crates/mw-project-file/tests/roundtrip.rs`、`samples.rs`、`migration.rs` |
 | 语料统计 | COD 批量导入与 CIF 往返，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs`、`cod_roundtrip.rs` |
-| 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡），以及拾取结果 | `mw-crystal-render` |
+| 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡），以及拾取结果；没有适配器时跳过并打印原因，设了 `MW_REQUIRE_GPU` 时失败 | `mw-crystal-render` |
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
 | 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部只读能力放进一个严格请求也合规，其余每 20 个一组（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试。对称化的预览与执行（M9）用示例里 P1 的超胞测试；项目能力用一个内存里的假宿主测试：列出和打开项目、没打开的结构返回 `structure_not_open`、打开后可用、没有项目的 `Host` 上返回 `unavailable` | `crates/mw-automation/tests/capabilities.rs`、`tests/projects.rs` |
@@ -334,6 +384,8 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |
 
 改动界面时，至少手动检查：键盘能否完成操作、焦点去向、深浅色主题、中英文两种语言下的文字长度。
+
+**需要 GPU 的测试**：渲染器的像素和拾取测试、结构工作区的界面集成测试（拾取原子、数出帧、等最新一帧）都要一个 wgpu 适配器，没有显卡的机器上用软件适配器（第 2.1 节）。渲染器测试找不到适配器时跳过，在标准错误里写明原因和 `MW_REQUIRE_GPU=1`；设了 `MW_REQUIRE_GPU`（非 `0`）时失败，CI 总是设。结构工作区的界面集成测试离不开视口，打开工作区时视口没有渲染器就失败，并说明要装软件适配器，不会在后面的断言里莫名其妙地失败。外壳的界面集成测试不看画面，没有适配器也能跑。
 
 ### 4.1 测试数据
 
