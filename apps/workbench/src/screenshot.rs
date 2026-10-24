@@ -632,7 +632,72 @@ const TOUR: &[(&str, Step)] = &[
     ("_default-range", |workbench, window, cx| {
         set_display_range(workbench, DisplayRange::default(), window, cx);
     }),
+    // Coordination polyhedra (M15), on rutile: a TiO₆ octahedron around
+    // every Ti of the cell, the corners' completed with O beyond it. The
+    // view is reset to take in the octahedra beyond the cell.
+    ("62-polyhedra", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+        window.dispatch_action(Box::new(mw_structure::ResetView), cx);
+    }),
+    // The popover beside the button: Ti chosen, the threefold O not.
+    ("63-polyhedron-centers", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditPolyhedra), cx);
+    }),
+    // 3 × 3 × 2 cells, as in step 58: chains of edge-sharing octahedra
+    // along c, joined at their corners.
+    ("64-polyhedra-cells", |workbench, window, cx| {
+        set_polyhedra_open(workbench, false, cx);
+        let range = DisplayRange::Cells {
+            counts: [3, 3, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    // The SrTiO₃ imported in step 21 (entry 6): the sample's own was
+    // converted to P1 and lost an O in step 18.
+    ("_show-srtio3-polyhedra", |workbench, window, cx| {
+        set_display_range(workbench, DisplayRange::default(), window, cx);
+        workbench.open_structure(StructureEntryId(6), window, cx);
+    }),
+    // SrTiO₃: the TiO₆ octahedron only; the twelvefold Sr are lone atoms.
+    ("65-perovskite-polyhedra", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+    }),
+    // Zincite, imported once more: ZnO₄ tetrahedra.
+    ("_import-zincite-polyhedra", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
+    }),
+    ("66-tetrahedra", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+    }),
+    // 3 × 3 × 2 cells: the corner-sharing tetrahedra of wurtzite.
+    ("67-tetrahedra-cells", |workbench, window, cx| {
+        let range = DisplayRange::Cells {
+            counts: [3, 3, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    ("68-tetrahedra-dark", |_, window, cx| {
+        settings::set_dark_mode(true, window, cx);
+    }),
+    ("_light-again", |_, window, cx| {
+        settings::set_dark_mode(false, window, cx);
+    }),
 ];
+
+/// Opens or closes the popover choosing the polyhedra's centers.
+fn set_polyhedra_open(workbench: &Workbench, open: bool, cx: &mut App) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| workspace.set_polyhedra_open(open, cx));
+    }
+}
 
 /// Closes the display range popover and shows `range`, as its fields do.
 fn set_display_range(

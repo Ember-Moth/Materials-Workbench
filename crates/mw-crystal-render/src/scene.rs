@@ -53,12 +53,29 @@ pub struct HighlightRing {
     pub color_width: [f32; 4],
 }
 
+/// A translucent convex polyhedron in one color, such as a coordination
+/// polyhedron, or a flat polygon. Drawn after the opaque scene, sorted back
+/// to front, seen through and seen through again; it hides nothing and is
+/// not pickable, so clicks reach the atoms behind and inside it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Polyhedron {
+    /// Corners in Å.
+    pub vertices: Vec<[f32; 3]>,
+    /// Faces as triangles of indices into `vertices`, counter-clockwise
+    /// seen from outside. Either side of a face may show; a flat polygon
+    /// is shaded alike from both.
+    pub triangles: Vec<[u32; 3]>,
+    /// Linear RGB and opacity.
+    pub color: [f32; 4],
+}
+
 /// Everything drawn in one frame, apart from highlights.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub spheres: Vec<SphereInstance>,
     pub bonds: Vec<BondInstance>,
     pub lines: Vec<LineInstance>,
+    pub polyhedra: Vec<Polyhedron>,
 }
 
 impl Scene {
@@ -77,7 +94,15 @@ impl Scene {
             .lines
             .iter()
             .map(|l| point(&l.start_width).max(point(&l.end_dash)));
-        spheres.chain(bonds).chain(lines).fold(0.0, f32::max)
+        let corners = self
+            .polyhedra
+            .iter()
+            .flat_map(|p| p.vertices.iter().map(|v| point(v)));
+        spheres
+            .chain(bonds)
+            .chain(lines)
+            .chain(corners)
+            .fold(0.0, f32::max)
     }
 
     /// Moves everything by `offset`.
@@ -96,6 +121,9 @@ impl Scene {
         for line in &mut self.lines {
             shift(&mut line.start_width);
             shift(&mut line.end_dash);
+        }
+        for corner in self.polyhedra.iter_mut().flat_map(|p| &mut p.vertices) {
+            *corner = (Vec3::from_array(*corner) + offset).to_array();
         }
     }
 }
@@ -163,6 +191,39 @@ pub fn synthetic_bonds(spheres: &[SphereInstance]) -> Vec<BondInstance> {
     bonds
 }
 
+/// Translucent octahedra around every `every`-th sphere of
+/// [`synthetic_lattice`], in its color, with their corners on the
+/// neighboring grid points: a load like coordination polyhedra.
+pub fn synthetic_polyhedra(spheres: &[SphereInstance], every: usize) -> Vec<Polyhedron> {
+    // The corners along ±x, ±y, ±z; faces counter-clockwise from outside.
+    const TRIANGLES: [[u32; 3]; 8] = [
+        [0, 2, 4],
+        [2, 1, 4],
+        [1, 3, 4],
+        [3, 0, 4],
+        [2, 0, 5],
+        [1, 2, 5],
+        [3, 1, 5],
+        [0, 3, 5],
+    ];
+    spheres
+        .iter()
+        .step_by(every.max(1))
+        .map(|sphere| {
+            let center = Vec3::from_slice(&sphere.center_radius[..3]);
+            let vertices = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+                .map(|axis| (center + axis * SPACING).to_array())
+                .to_vec();
+            let [r, g, b, _] = sphere.color;
+            Polyhedron {
+                vertices,
+                triangles: TRIANGLES.to_vec(),
+                color: [r, g, b, 0.5],
+            }
+        })
+        .collect()
+}
+
 fn grid_size(count: usize) -> usize {
     (count as f64).cbrt().ceil().max(1.0) as usize
 }
@@ -214,5 +275,21 @@ mod tests {
         scene.translate(Vec3::new(0.0, -3.0, -4.0));
         assert_eq!(scene.lines[0].start_width, [0.0, -3.0, -4.0, 1.0]);
         assert_eq!(scene.bounding_radius(), 5.0);
+    }
+
+    #[test]
+    fn bounds_include_polyhedra() {
+        let mut scene = Scene {
+            polyhedra: vec![Polyhedron {
+                vertices: vec![[0.0; 3], [6.0, 0.0, 8.0], [6.0, 0.0, 0.0]],
+                triangles: vec![[0, 1, 2]],
+                color: [1.0, 0.0, 0.0, 0.5],
+            }],
+            ..Scene::default()
+        };
+        assert_eq!(scene.bounding_radius(), 10.0);
+        scene.translate(Vec3::new(-6.0, 0.0, -8.0));
+        assert_eq!(scene.polyhedra[0].vertices[1], [0.0; 3]);
+        assert_eq!(scene.bounding_radius(), 10.0);
     }
 }

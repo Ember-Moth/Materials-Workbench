@@ -18,7 +18,9 @@ use crate::{editing, format};
 /// commands report snapping from the same distance.
 const REPORTED_SNAP: f64 = 1e-4;
 
-/// Mock: tells the user a command exists but does nothing yet.
+/// Tells the user a command exists but does nothing yet, for the next mock
+/// (`docs/development.md` §3.7). Nothing is mocked at the moment.
+#[allow(dead_code, reason = "kept for the next mock")]
 pub(crate) fn not_implemented(feature: SharedString, window: &mut Window, cx: &mut App) {
     window.push_notification(
         Notification::info(tr!("mock.not_implemented", feature = feature.to_string())),

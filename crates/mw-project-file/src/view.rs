@@ -30,6 +30,11 @@ pub struct EntryView {
     /// Since `view.json` version 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_range: Option<DisplayRange>,
+    /// The elements whose atoms are the centers of polyhedra, once the
+    /// user chose them (crystallography design §5.6); `None` for the
+    /// default rule. Since `view.json` version 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polyhedron_centers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<PanelTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,6 +52,7 @@ impl EntryView {
             camera,
             display_model,
             display_range: None,
+            polyhedron_centers: None,
             panel,
             panel_open,
         }
@@ -54,6 +60,14 @@ impl EntryView {
 
     pub fn with_display_range(mut self, range: DisplayRange) -> Self {
         self.display_range = Some(range);
+        self
+    }
+
+    /// The elements chosen as the centers of polyhedra, in order.
+    pub fn with_polyhedron_centers(mut self, mut elements: Vec<String>) -> Self {
+        elements.sort();
+        elements.dedup();
+        self.polyhedron_centers = Some(elements);
         self
     }
 }

@@ -2,15 +2,14 @@ use std::collections::HashMap;
 
 use gpui_kit::{Hsla, Rgba};
 use mw_crystal::{
-    Annotation, AtomFate, AtomRef, BondRules, DisplayRange, Displayed, IdMap, Orbit, Structure,
-    covalent_radius,
+    Annotation, AtomFate, AtomRef, BondRules, DisplayRange, Displayed, IdMap, Orbit,
+    PolyhedronCenters, Structure, covalent_radius,
 };
-use mw_viewport::{BondInstance, LineInstance, Scene, SphereInstance, srgb_to_linear};
+use mw_viewport::{BondInstance, LineInstance, Polyhedron, Scene, SphereInstance, srgb_to_linear};
 
-/// How atoms are drawn.
-///
-/// Mock: polyhedra need the polygon pass the renderer does not have yet;
-/// they draw as ball and stick.
+/// How atoms are drawn. Polyhedra draw the atoms as ball and stick, with
+/// the coordination polyhedra of the chosen centers over them
+/// (crystallography design §5.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DisplayModel {
     BallAndStick,
@@ -153,6 +152,13 @@ const UNKNOWN_RADIUS: f64 = 1.50;
 const BOND_RADIUS: f32 = 0.12;
 /// Logical pixels.
 const CELL_EDGE_WIDTH: f32 = 1.25;
+/// Logical pixels: thinner than the cell's edges, which stay the frame.
+const POLYHEDRON_EDGE_WIDTH: f32 = 1.0;
+/// How much of what is behind a polyhedron's face shows through it.
+const POLYHEDRON_OPACITY: f32 = 0.5;
+/// The edges of a polyhedron in its center's color, darkened so that they
+/// stand out from the faces.
+const POLYHEDRON_EDGE_SHADE: f32 = 0.45;
 const MEASUREMENT_WIDTH: f32 = 1.5;
 const MEASUREMENT_DASH: f32 = 4.0;
 
@@ -223,13 +229,22 @@ pub(crate) struct Preview {
 }
 
 impl Preview {
-    /// The edited structure as `range` shows it. A sphere around an atom
-    /// should be [fixed](DisplayRange::fixed) first, so that the region
-    /// stays put while its atom moves.
-    pub fn new(structure: Structure, ids: IdMap, range: &DisplayRange) -> Self {
+    /// The edited structure as `range` shows it, with the polyhedra of
+    /// `polyhedra`'s centers in that model. A sphere around an atom should
+    /// be [fixed](DisplayRange::fixed) first, so that the region stays put
+    /// while its atom moves.
+    pub fn new(
+        structure: Structure,
+        ids: IdMap,
+        range: &DisplayRange,
+        polyhedra: Option<&PolyhedronCenters>,
+    ) -> Self {
         let orbits = mw_crystal::orbits(&structure);
         let bonds = mw_crystal::bonds(&structure, &orbits, &BondRules::default());
-        let displayed = Displayed::new(&structure, &orbits, &bonds, range);
+        let displayed = match polyhedra {
+            Some(centers) => Displayed::with_polyhedra(&structure, &orbits, &bonds, range, centers),
+            None => Displayed::new(&structure, &orbits, &bonds, range),
+        };
         Self {
             structure,
             ids,
@@ -250,9 +265,10 @@ impl Preview {
 
 /// What the viewport draws: one sphere per displayed atom, in the order of
 /// `shown.displayed.atoms`, so a picked sphere's index is the atom's index;
-/// the bonds between displayed atoms; the edges of the cell at the origin;
-/// and a dashed line along each of the document's measurements
-/// (`annotations`) whose atoms still exist.
+/// the bonds between displayed atoms; the coordination polyhedra, if any,
+/// translucent in their center's color with darker edges; the edges of the
+/// cell at the origin; and a dashed line along each of the document's
+/// measurements (`annotations`) whose atoms still exist.
 pub(crate) fn draw(
     shown: &Atoms,
     annotations: &[Annotation],
@@ -316,6 +332,31 @@ pub(crate) fn draw(
         .filter(|(i, j)| i != j)
         .map(|(i, j)| line(corner(i), corner(j), CELL_EDGE_WIDTH, 0.0, cell_color))
         .collect();
+
+    let atoms = &shown.displayed.atoms;
+    let mut polyhedra = Vec::with_capacity(shown.displayed.polyhedra.len());
+    for polyhedron in &shown.displayed.polyhedra {
+        let [r, g, b, _] = spheres[polyhedron.center].color;
+        let corners = polyhedron.vertices();
+        // Indices into the corners, which the faces name as atoms.
+        let local = |atom: usize| corners.binary_search(&atom).unwrap_or(0) as u32;
+        polyhedra.push(Polyhedron {
+            vertices: corners.iter().map(|&i| point(atoms[i].position)).collect(),
+            triangles: polyhedron.triangles().map(|t| t.map(local)).collect(),
+            color: [r, g, b, POLYHEDRON_OPACITY],
+        });
+        let edge_color = [r, g, b].map(|c| c * POLYHEDRON_EDGE_SHADE);
+        let [er, eg, eb] = edge_color;
+        lines.extend(polyhedron.edges().into_iter().map(|[i, j]| {
+            line(
+                atoms[i].position,
+                atoms[j].position,
+                POLYHEDRON_EDGE_WIDTH,
+                0.0,
+                [er, eg, eb, 1.0],
+            )
+        }));
+    }
     let measurement_color = linear(colors.measurement);
     // Stale measurements may refer to atoms that are gone or moved.
     for annotation in annotations.iter().filter(|a| !a.stale) {
@@ -343,6 +384,7 @@ pub(crate) fn draw(
         spheres,
         bonds,
         lines,
+        polyhedra,
     }
 }
 
@@ -357,5 +399,81 @@ mod tests {
         }
         assert_eq!(element_style("O").0, [0xFF, 0x0D, 0x0D]);
         assert_eq!(element_style(mw_crystal::UNKNOWN_ELEMENT).0, UNKNOWN_COLOR);
+    }
+
+    fn colors() -> LineColors {
+        LineColors {
+            cell: gpui_kit::hsla(0.0, 0.0, 0.5, 1.0),
+            measurement: gpui_kit::hsla(0.0, 0.0, 0.1, 1.0),
+        }
+    }
+
+    /// Polyhedra are drawn in their center's color, translucent, with
+    /// darker edges; the faces name the polyhedron's own corners.
+    #[test]
+    fn polyhedra_take_their_centers_color() {
+        let sample = mw_crystal::sample::load(mw_crystal::sample::SampleKey::Rutile);
+        let displayed = sample.derived.display_polyhedra(
+            &sample.structure,
+            &DisplayRange::default(),
+            &PolyhedronCenters::Default,
+        );
+        let atoms = Atoms {
+            structure: &sample.structure,
+            orbits: &sample.derived.orbits,
+            displayed: &displayed,
+            ids: None,
+        };
+        let scene = draw(&atoms, &[], DisplayModel::Polyhedra, colors());
+        assert_eq!(scene.spheres.len(), displayed.atoms.len());
+        assert_eq!(scene.polyhedra.len(), 9);
+        // Ti–O bonds are the polyhedra.
+        assert!(scene.bonds.is_empty());
+        let ti = element_style("Ti")
+            .0
+            .map(|c| srgb_to_linear(f32::from(c) / 255.0));
+        for polyhedron in &scene.polyhedra {
+            assert_eq!(polyhedron.color, [ti[0], ti[1], ti[2], POLYHEDRON_OPACITY]);
+            assert_eq!(polyhedron.vertices.len(), 6);
+            assert_eq!(polyhedron.triangles.len(), 8);
+            assert!(polyhedron.triangles.iter().flatten().all(|&i| i < 6));
+        }
+        // The cell's 12 edges, and 12 per octahedron.
+        assert_eq!(scene.lines.len(), 12 + 9 * 12);
+        let edge = scene.lines.last().unwrap().color;
+        assert!((edge[0] - ti[0] * POLYHEDRON_EDGE_SHADE).abs() < 1e-6);
+    }
+
+    /// Viewport design §8.6: making the scene of 10 × 10 × 10 rutile cells
+    /// with their 2331 octahedra, on the UI thread.
+    #[test]
+    fn large_ranges_of_polyhedra_draw_quickly() {
+        let sample = mw_crystal::sample::load(mw_crystal::sample::SampleKey::Rutile);
+        let range = DisplayRange::Cells {
+            counts: [10, 10, 10],
+            boundary: true,
+        };
+        let displayed = sample.derived.display_polyhedra(
+            &sample.structure,
+            &range,
+            &PolyhedronCenters::Default,
+        );
+        let atoms = Atoms {
+            structure: &sample.structure,
+            orbits: &sample.derived.orbits,
+            displayed: &displayed,
+            ids: None,
+        };
+        let started = std::time::Instant::now();
+        let scene = draw(&atoms, &[], DisplayModel::Polyhedra, colors());
+        let elapsed = started.elapsed();
+        assert_eq!(scene.polyhedra.len(), 2331);
+        eprintln!(
+            "scene of 10 × 10 × 10 rutile polyhedra: {} spheres, {} polyhedra, {} lines in {elapsed:?}",
+            scene.spheres.len(),
+            scene.polyhedra.len(),
+            scene.lines.len()
+        );
+        assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
     }
 }

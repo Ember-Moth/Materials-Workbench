@@ -152,6 +152,36 @@ pub fn atomic_weight(symbol: &str) -> Option<f64> {
         .find_map(|(s, weight)| (*s == symbol).then_some(*weight))
 }
 
+/// Pauling electronegativities by atomic number − 1, H to Lr (the values
+/// commonly tabulated after Allred, J. Inorg. Nucl. Chem. 1961, 17, 215;
+/// several heavy elements are estimates); 0 where none is known (He, Ne,
+/// Ar). Only their order matters here: which atom of a bond is the cation
+/// (design §5.6).
+const ELECTRONEGATIVITIES: [f64; 103] = [
+    2.20, 0.0, // H, He
+    0.98, 1.57, 2.04, 2.55, 3.04, 3.44, 3.98, 0.0, // Li–Ne
+    0.93, 1.31, 1.61, 1.90, 2.19, 2.58, 3.16, 0.0, // Na–Ar
+    0.82, 1.00, 1.36, 1.54, 1.63, 1.66, 1.55, 1.83, 1.88, // K–Co
+    1.91, 1.90, 1.65, 1.81, 2.01, 2.18, 2.55, 2.96, 3.00, // Ni–Kr
+    0.82, 0.95, 1.22, 1.33, 1.60, 2.16, 1.90, 2.20, 2.28, // Rb–Rh
+    2.20, 1.93, 1.69, 1.78, 1.96, 2.05, 2.10, 2.66, 2.60, // Pd–Xe
+    0.79, 0.89, 1.10, 1.12, 1.13, 1.14, 1.13, 1.17, 1.20, // Cs–Eu
+    1.20, 1.10, 1.22, 1.23, 1.24, 1.25, 1.10, 1.27, // Gd–Lu
+    1.30, 1.50, 2.36, 1.90, 2.20, 2.20, 2.28, 2.54, 2.00, // Hf–Hg
+    1.62, 1.87, 2.02, 2.00, 2.20, 2.20, // Tl–Rn
+    0.79, 0.90, 1.10, 1.30, 1.50, 1.38, 1.36, 1.28, 1.13, 1.28, // Fr–Cm
+    1.30, 1.30, 1.30, 1.30, 1.30, 1.30, 1.30, // Bk–Lr
+];
+
+/// Pauling electronegativity, if one is tabulated for the element.
+pub fn electronegativity(symbol: &str) -> Option<f64> {
+    let number = atomic_number(symbol)?;
+    ELECTRONEGATIVITIES
+        .get(usize::from(number) - 1)
+        .copied()
+        .filter(|&e| e > 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +194,29 @@ mod tests {
         assert_eq!(atomic_weight("O"), Some(15.999));
         assert!(!is_element("TI"));
         assert!(!is_element(UNKNOWN_ELEMENT));
+    }
+
+    #[test]
+    fn electronegativities_order_cations_before_anions() {
+        assert_eq!(electronegativity("F"), Some(3.98));
+        assert_eq!(electronegativity("O"), Some(3.44));
+        assert_eq!(electronegativity("Lr"), Some(1.30));
+        assert_eq!(electronegativity("Ar"), None);
+        assert_eq!(electronegativity("Rf"), None);
+        assert_eq!(electronegativity(UNKNOWN_ELEMENT), None);
+        // Fluorine is the most electronegative; caesium among the least.
+        let tabulated: Vec<f64> = symbols().filter_map(electronegativity).collect();
+        assert_eq!(tabulated.len(), 103 - 3);
+        assert!(tabulated.iter().all(|&e| (0.7..=3.98).contains(&e)));
+        for (cation, anion) in [
+            ("Ti", "O"),
+            ("Si", "O"),
+            ("Zn", "S"),
+            ("Ga", "As"),
+            ("C", "O"),
+        ] {
+            assert!(electronegativity(cation) < electronegativity(anion));
+        }
     }
 
     #[test]

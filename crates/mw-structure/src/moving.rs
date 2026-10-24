@@ -39,6 +39,11 @@ impl AtomDrag {
     pub(crate) fn previewed_position(&self, site: mw_crystal::SiteId) -> Option<[f64; 3]> {
         Some(self.preview.as_ref()?.structure.site(site)?.position)
     }
+
+    /// How many polyhedra the preview shown draws.
+    pub(crate) fn previewed_polyhedra(&self) -> Option<usize> {
+        Some(self.preview.as_ref()?.displayed.polyhedra.len())
+    }
 }
 
 /// The key that leaves the special position, as the platform names it.
@@ -168,9 +173,10 @@ impl StructureWorkspace {
         let range = self.display_range.fixed(&self.document.derived().orbits);
         let annotations = self.document.crystal.annotations().to_vec();
         let (model, colors) = (self.display_model, self.line_colors(cx));
+        let polyhedra = self.polyhedra_shown();
         let make = move || {
             let applied = edit.apply(&structure).ok()?;
-            let preview = Preview::new(applied.structure, applied.ids, &range);
+            let preview = Preview::new(applied.structure, applied.ids, &range, polyhedra.as_ref());
             let scene = scene::draw(&preview.atoms(), &annotations, model, colors);
             let rings: Vec<usize> = preview
                 .displayed

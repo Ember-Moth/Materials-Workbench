@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::{AtomFate, AtomRef, Bond, Derived, IdMap, Orbit, Structure, bonds};
+use crate::{AtomFate, AtomRef, Bond, Derived, IdMap, Orbit, Polyhedron, Structure, bonds};
 
 /// Atoms beyond which a range is refused: the viewport draws 100 000 atoms
 /// with their bonds at about 30 frames a second (viewport design §8.2).
@@ -83,14 +83,20 @@ pub struct DisplayAtom {
     pub position: [f64; 3],
 }
 
-/// The atoms a display range shows, and the bonds between them.
+/// The atoms a display range shows, and the bonds between them; in the
+/// polyhedra model, also the coordination polyhedra (design §5.6).
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct Displayed {
-    /// By site, orbit member, then cell.
+    /// By site, orbit member, then cell; in the polyhedra model, followed by
+    /// the ligands outside the range that complete the polyhedra.
     pub atoms: Vec<DisplayAtom>,
-    /// Bonds with both atoms shown, as index pairs into `atoms`.
+    /// Bonds with both atoms shown, as index pairs into `atoms`; in the
+    /// polyhedra model, without those the polyhedra show.
     pub bonds: Vec<[usize; 2]>,
+    /// Coordination polyhedra, only in the polyhedra model
+    /// ([`Displayed::with_polyhedra`]).
+    pub polyhedra: Vec<Polyhedron>,
 }
 
 impl Displayed {
@@ -106,7 +112,11 @@ impl Displayed {
     ) -> Self {
         let atoms = atoms(structure, orbits, range);
         let bonds = bonds::display_bonds(&atoms, bonds);
-        Self { atoms, bonds }
+        Self {
+            atoms,
+            bonds,
+            polyhedra: Vec::new(),
+        }
     }
 }
 
@@ -118,7 +128,7 @@ impl Derived {
 }
 
 /// Fractional coordinates of an orbit member translated by its cell.
-fn position(orbits: &[Orbit], atom: AtomRef) -> Option<[f64; 3]> {
+pub(crate) fn position(orbits: &[Orbit], atom: AtomRef) -> Option<[f64; 3]> {
     let orbit = orbits.iter().find(|orbit| orbit.site == atom.site)?;
     let p = orbit.positions.get(usize::from(atom.member))?;
     Some([0, 1, 2].map(|i| p[i] + f64::from(atom.cell[i])))
@@ -267,7 +277,11 @@ impl DisplayRange {
 /// The atoms `range` shows: for a block of cells, each orbit member once
 /// per cell plus its boundary images; for a sphere, every copy of a member
 /// within the radius (and the position tolerance) of the center.
-fn atoms(structure: &Structure, orbits: &[Orbit], range: &DisplayRange) -> Vec<DisplayAtom> {
+pub(crate) fn atoms(
+    structure: &Structure,
+    orbits: &[Orbit],
+    range: &DisplayRange,
+) -> Vec<DisplayAtom> {
     let lattice = &structure.lattice;
     let tolerance = fractional_tolerance(structure);
     let reciprocal = lattice.params().reciprocal_lengths();

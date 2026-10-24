@@ -18,7 +18,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomRef, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS, SphereCenter, Structure,
+    AtomRef, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS, PolyhedronCenters,
+    SphereCenter, Structure,
 };
 
 use crate::actions::EditDisplayRange;
@@ -33,15 +34,43 @@ pub(crate) const BACKGROUND_ATOMS: usize = 5_000;
 /// Å, the radius a sphere starts with.
 const DEFAULT_RADIUS: f64 = 6.0;
 
+/// What the atoms shown are made for: a structure, a range, and in the
+/// polyhedra model the centers of the polyhedra.
+#[derive(Clone)]
+pub(crate) struct DisplayKey {
+    structure: Arc<Structure>,
+    range: DisplayRange,
+    polyhedra: Option<PolyhedronCenters>,
+}
+
+impl DisplayKey {
+    fn is(&self, other: &DisplayKey) -> bool {
+        Arc::ptr_eq(&self.structure, &other.structure)
+            && self.range == other.range
+            && self.polyhedra == other.polyhedra
+    }
+
+    /// The atoms, bonds and polyhedra shown.
+    fn display(&self, orbits: &[mw_crystal::Orbit], bonds: &[mw_crystal::Bond]) -> Displayed {
+        let structure = &self.structure;
+        match &self.polyhedra {
+            Some(centers) => {
+                Displayed::with_polyhedra(structure, orbits, bonds, &self.range, centers)
+            }
+            None => Displayed::new(structure, orbits, bonds, &self.range),
+        }
+    }
+}
+
 /// What the workspace shows of the crystal, and what it is working out.
 #[derive(Default)]
 pub(crate) struct DisplayState {
     /// What the scene draws: sphere i is atom i.
     pub shown: Displayed,
-    /// The structure and range `shown` was made for.
-    made_for: Option<(Arc<Structure>, DisplayRange)>,
-    /// The structure and range being worked out in the background.
-    pub preparing: Option<(Arc<Structure>, DisplayRange)>,
+    /// What `shown` was made for.
+    made_for: Option<DisplayKey>,
+    /// What is being worked out in the background.
+    pub preparing: Option<DisplayKey>,
     /// The background work; replacing it drops work no longer wanted.
     _job: Option<Task<()>>,
     /// Whether the view frames the next scene, made for a new range.
@@ -49,16 +78,12 @@ pub(crate) struct DisplayState {
 }
 
 impl DisplayState {
-    fn is_for(&self, structure: &Arc<Structure>, range: DisplayRange) -> bool {
-        self.made_for
-            .as_ref()
-            .is_some_and(|(s, r)| Arc::ptr_eq(s, structure) && *r == range)
+    fn is_for(&self, key: &DisplayKey) -> bool {
+        self.made_for.as_ref().is_some_and(|made| made.is(key))
     }
 
-    fn is_preparing(&self, structure: &Arc<Structure>, range: DisplayRange) -> bool {
-        self.preparing
-            .as_ref()
-            .is_some_and(|(s, r)| Arc::ptr_eq(s, structure) && *r == range)
+    fn is_preparing(&self, key: &DisplayKey) -> bool {
+        self.preparing.as_ref().is_some_and(|made| made.is(key))
     }
 }
 
@@ -140,16 +165,21 @@ impl StructureWorkspace {
         self.display_range.center(&self.document.derived().orbits)
     }
 
-    /// Brings the atoms shown up to date with the structure and the range.
-    /// `false` while they are worked out in the background: the scene then
-    /// waits for them.
+    /// Brings the atoms shown up to date with the structure, the range and
+    /// the polyhedra. `false` while they are worked out in the background:
+    /// the scene then waits for them.
     pub(crate) fn update_display(&mut self, cx: &mut Context<Self>) -> bool {
         let structure = self.document.crystal.snapshot();
         let range = self.display_range;
-        if self.display.is_for(&structure, range) {
+        let key = DisplayKey {
+            structure: structure.clone(),
+            range,
+            polyhedra: self.polyhedra_shown(),
+        };
+        if self.display.is_for(&key) {
             return true;
         }
-        if self.display.is_preparing(&structure, range) {
+        if self.display.is_preparing(&key) {
             return false;
         }
         let derived = self.document.derived();
@@ -167,17 +197,16 @@ impl StructureWorkspace {
             }
         };
         if atoms <= BACKGROUND_ATOMS {
-            self.display.shown = derived.display(&structure, &range);
-            self.display.made_for = Some((structure, range));
+            self.display.shown = key.display(&derived.orbits, &derived.bonds);
+            self.display.made_for = Some(key);
             self.display.preparing = None;
             self.display._job = None;
             return true;
         }
         let (orbits, bonds) = (derived.orbits.clone(), derived.bonds.clone());
-        let snapshot = structure.clone();
-        let work =
-            cx.background_spawn(async move { Displayed::new(&snapshot, &orbits, &bonds, &range) });
-        self.display.preparing = Some((structure, range));
+        let job = key.clone();
+        let work = cx.background_spawn(async move { job.display(&orbits, &bonds) });
+        self.display.preparing = Some(key);
         self.display._job = Some(cx.spawn(async move |this, cx| {
             let shown = work.await;
             this.update(cx, |this, cx| {

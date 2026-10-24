@@ -24,6 +24,7 @@ gpui_kit::actions!(
         ShowBallAndStick,
         ShowSpaceFilling,
         ShowPolyhedra,
+        EditPolyhedra,
         EditDisplayRange,
         ShowPropertiesPanel,
         ShowSitesPanel,
@@ -213,6 +214,19 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             &["polyhedra", "duomianti"],
             Lucide::Box,
             Box::new(ShowPolyhedra),
+        ),
+        command(
+            tr!("command.polyhedron_centers"),
+            &[
+                "polyhedra",
+                "coordination polyhedra",
+                "polyhedron centers",
+                "duomianti",
+                "peiwei duomianti",
+                "zhongxin yuanzi",
+            ],
+            Lucide::Hexagon,
+            Box::new(EditPolyhedra),
         ),
         command(
             tr!("command.display_range"),

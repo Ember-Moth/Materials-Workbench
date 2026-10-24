@@ -1,7 +1,8 @@
 //! Everything GPUI draws over the 3D image: the info chip, the hovered
 //! atom, the measuring or moving prompt, measurement labels and the
-//! floating view toolbar (`docs/design/ui-shell.md` §4.2). Only the toolbar takes the
-//! pointer; the chips and labels let clicks through to the atoms.
+//! floating view toolbar with its popovers (`docs/design/ui-shell.md`
+//! §4.2). Only the toolbar takes the pointer; the chips and labels let
+//! clicks through to the atoms.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -194,6 +195,28 @@ impl StructureWorkspace {
                 tr!("toolbar.polyhedra"),
                 DisplayModel::Polyhedra,
             ))
+            // The centers belong to the polyhedra, so their popover only
+            // shows with them.
+            .when(self.display_model() == DisplayModel::Polyhedra, |this| {
+                let panel = self.polyhedra_panel.clone();
+                this.child(
+                    Popover::new("polyhedron-centers")
+                        .anchor(Anchor::BottomCenter)
+                        .open(self.polyhedra_open)
+                        .on_open_change(cx.listener(|this, open: &bool, _, cx| {
+                            this.set_polyhedra_open(*open, cx)
+                        }))
+                        .trigger(
+                            Button::new("polyhedron-centers-trigger")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ChevronUp)
+                                .tooltip(tr!("toolbar.polyhedron_centers"))
+                                .accessibility_label(tr!("toolbar.polyhedron_centers")),
+                        )
+                        .content(move |_, _, _| panel.clone()),
+                )
+            })
             .child(div().w_px().h_5().mx_1().bg(theme.border))
             .child(
                 Button::new("toggle-measure")
