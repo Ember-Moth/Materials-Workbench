@@ -10,8 +10,8 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomRef, Axis, CellParam, CellParams, CellPreset, CellValues, Command, Edit, Measured, SiteId,
-    Species, Target,
+    AtomRef, Axis, CellParam, CellParams, CellPreset, CellValues, Command, DisplayRange, Edit,
+    Measured, SiteId, Species, SphereCenter, Target,
 };
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
@@ -590,7 +590,66 @@ const TOUR: &[(&str, Step)] = &[
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::AlignCell), cx);
     }),
+    // Display ranges (M14), on rutile: the popover shows one cell with its
+    // boundary atoms, the default.
+    ("_show-rutile-range", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        workbench.open_structure(StructureEntryId(1), window, cx);
+    }),
+    ("57-display-range", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditDisplayRange), cx);
+    }),
+    // 3 × 3 × 2 cells with their boundary atoms; the view frames them.
+    ("58-cells", |workbench, window, cx| {
+        let range = DisplayRange::Cells {
+            counts: [3, 3, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    // A sphere of 6 Å around the body-center Ti: its octahedron, the Ti
+    // around it and their O, in the cells around.
+    ("59-sphere", |workbench, window, cx| {
+        let range = DisplayRange::Sphere {
+            center: SphereCenter::Atom(AtomRef::new(SiteId(1), 1, [0; 3])),
+            radius: 6.0,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    ("60-sphere-popover", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditDisplayRange), cx);
+    }),
+    // 10 × 10 × 10 cells, 6531 atoms, worked out in the background.
+    ("61-large-range", |workbench, window, cx| {
+        let range = DisplayRange::Cells {
+            counts: [10, 10, 10],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    ("_default-range", |workbench, window, cx| {
+        set_display_range(workbench, DisplayRange::default(), window, cx);
+    }),
 ];
+
+/// Closes the display range popover and shows `range`, as its fields do.
+fn set_display_range(
+    workbench: &Workbench,
+    range: DisplayRange,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_range_open(false, window, cx);
+            if let Err(error) = workspace.set_display_range(range, cx) {
+                log::warn!("screenshot tour: {error}");
+            }
+        });
+    }
+}
 
 /// A fresh directory for the tour's settings, session and sample projects
 /// (`<MW_SCREENSHOT_DIR>/config`), so that every run starts as a first

@@ -35,9 +35,75 @@ header:
     en: Show or hide the side panel
     zh-CN: 显示或隐藏侧面板
 viewport:
-  info:
-    en: "%{atoms} atoms · 1 × 1 × 1 cell · orthographic"
-    zh-CN: "%{atoms} 个原子 · 1 × 1 × 1 晶胞 · 正交投影"
+  info_cells:
+    en: "%{atoms} atoms · %{a} × %{b} × %{c} cells · orthographic"
+    zh-CN: "%{atoms} 个原子 · %{a} × %{b} × %{c} 晶胞 · 正交投影"
+  info_sphere:
+    en: "%{atoms} atoms · sphere of radius %{radius} Å · orthographic"
+    zh-CN: "%{atoms} 个原子 · 半径 %{radius} Å 的球 · 正交投影"
+  preparing_cells:
+    en: "Preparing %{a} × %{b} × %{c} cells…"
+    zh-CN: "正在准备 %{a} × %{b} × %{c} 晶胞…"
+  preparing_sphere:
+    en: "Preparing a sphere of radius %{radius} Å…"
+    zh-CN: "正在准备半径 %{radius} Å 的球…"
+display_range:
+  title:
+    en: Display range
+    zh-CN: 显示范围
+  kind:
+    cells:
+      en: Cells
+      zh-CN: 晶胞
+    sphere:
+      en: Sphere
+      zh-CN: 球
+  counts:
+    en: Cells along a, b, c
+    zh-CN: 沿 a、b、c 的晶胞数
+  count_label:
+    en: "Cells along %{axis}"
+    zh-CN: "沿 %{axis} 的晶胞数"
+  boundary:
+    en: Boundary atoms
+    zh-CN: 边界原子
+  boundary_hint:
+    en: Atoms on faces, edges and corners are drawn on the opposite side too.
+    zh-CN: 面、棱、角上的原子在对面也画一份。
+  center:
+    en: Center, fractional coordinates
+    zh-CN: 中心（分数坐标）
+  coordinate_label:
+    en: "Center %{axis}"
+    zh-CN: "中心的 %{axis}"
+  center_atom:
+    en: "Centered on an atom of %{label}"
+    zh-CN: "中心是 %{label} 的一个原子"
+  center_point:
+    en: Centered on a point
+    zh-CN: 中心是一个点
+  center_on_selection:
+    en: Center on selected atom
+    zh-CN: 以选中的原子为中心
+  radius:
+    en: Radius
+    zh-CN: 半径
+  error:
+    cells:
+      en: The numbers of cells must be whole numbers of at least 1.
+      zh-CN: 晶胞数要是不小于 1 的整数。
+    radius:
+      en: The radius must be a positive number of Å.
+      zh-CN: 半径要是正数（Å）。
+    coordinates:
+      en: The center's coordinates must be numbers.
+      zh-CN: 中心的坐标要是数字。
+    center:
+      en: The atom at the center is no longer in the structure.
+      zh-CN: 中心的原子已经不在结构里了。
+    too_many:
+      en: "About %{atoms} atoms, more than the limit of %{limit}. Make the range smaller and try again."
+      zh-CN: "约 %{atoms} 个原子，超过 %{limit} 个的上限。缩小范围后再试。"
 measure:
   prompt:
     first:
@@ -74,12 +140,6 @@ toolbar:
   display_range:
     en: Display range…
     zh-CN: 显示范围…
-  display_range_title:
-    en: Display range
-    zh-CN: 显示范围
-  display_range_mock:
-    en: Choosing how many cells to show is not implemented yet.
-    zh-CN: 选择显示多少个晶胞的功能尚未实现。
   reset_view:
     en: Reset view
     zh-CN: 重置视图
@@ -562,6 +622,9 @@ command:
   polyhedra:
     en: Polyhedra
     zh-CN: 多面体模型
+  display_range:
+    en: Display range…
+    zh-CN: 显示范围…
   reset_view:
     en: Reset view
     zh-CN: 重置视图

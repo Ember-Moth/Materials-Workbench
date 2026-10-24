@@ -1683,7 +1683,7 @@ mod tests {
         let offset = shift_of(&nacl, &shift);
         // Every atom drawn, each face and corner image included, is the
         // same atom after the change, wherever it now lies.
-        for atom in &before.atoms {
+        for atom in &before.one_cell(&nacl) {
             let AtomFate::Kept(kept) = applied.ids.atom(atom.atom) else {
                 panic!("{:?} lost", atom.atom)
             };

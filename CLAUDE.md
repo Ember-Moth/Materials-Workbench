@@ -75,7 +75,7 @@ cargo fmt --all
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。宿主用 `set_sphere_dragging` 打开后，按在球上的拖动报告屏幕平面内的位移（`SphereDragged` / `SphereDropped`，Å）而不转相机；预览用 `preview_scene`，它保持相机绕的中心，画面不平移。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1、晶胞变换与超胞（`src/transform.rs`；(P, p) 和 moyo 给出的预设在 `src/cell_transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`；对称性检测与对称化 `DetectSymmetry` 在 `src/symmetrize.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1、晶胞变换与超胞（`src/transform.rs`；(P, p) 和 moyo 给出的预设在 `src/cell_transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、显示范围画出的原子与键（`src/display.rs`，`DisplayRange` 和 `Displayed`）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`；对称性检测与对称化 `DetectSymmetry` 在 `src/symmetrize.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
   - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；POSCAR / CONTCAR 导入（`src/poscar_read.rs`，P1 结构）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
   - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"；
   - `mw-automation`：能力注册表（`ai-integration.md` 第 4 节）。每个能力有英文说明、输入输出 Schema、副作用等级和处理函数，调用的是 `mw-crystal` 的领域命令，导入诊断和导出文本用 `mw-crystal-io`（`src/files.rs`）；项目的列出与打开（`project.list`、`project.open`、`structure.list`、`structure.open`、只在无界面时可用的 `file.open`）在 `src/project.rs`，经 `Host::projects` 拿到 `Projects` trait，没有项目的 `Host`（`Documents`）上返回 `unavailable`；对称化有只读的预览 `structure.detect_symmetry`（MCP Server 自动提供）和可撤销的 `structure.symmetrize`；Schema 由 `schema_struct!` 从 Rust 类型和字段文档注释生成，测试用 `mw-llm` 的检查函数确认它们在严格子集内。`StructureEntryId` 定义在这里，`mw-project` 重新导出；
@@ -100,7 +100,8 @@ cargo fmt --all
 - stock GPUI 在任何平台上都没有零拷贝的表面，理由见 `viewport-rendering.md` 第 3 节。
 - 拾取用单独的 1× `R32Uint` ID 通道，只在拾取时、相机或场景变过之后才重画（`viewport-rendering.md` 5.4 节）。
 - `mw-structure` 决定画什么和叠什么：
-  - 原子颜色与半径、键、晶胞边和测量线在 `src/scene.rs` 组成场景，第 i 个球就是 `derived.atoms[i]`；
+  - 原子颜色与半径、键、晶胞边和测量线在 `src/scene.rs` 组成场景，第 i 个球就是显示范围里的第 i 个原子（`Displayed::atoms[i]`）；
+  - 显示范围（`mw_crystal::DisplayRange`，多个晶胞或以原子、点为中心的球）是视图状态，不进撤销栈：工作区在 `src/display_range.rs` 里按它算出显示原子（原子多时在后台），工具条的浮层设置它，随 `view.json` 保存；
   - 选区（位点列表和视口共用）在 `src/selection.rs`，测量模式在 `src/measure.rs`；
   - 测量标注等浮层的位置用 `Viewport::project` 计算。
 

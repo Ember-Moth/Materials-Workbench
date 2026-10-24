@@ -37,6 +37,12 @@ pub(crate) fn cell_param(param: mw_crystal::CellParam, value: f64) -> String {
     }
 }
 
+/// A display range's radius in Å, without the unit: up to four decimals and
+/// no trailing zeros, e.g. `6`, `4.5`.
+pub(crate) fn radius(value: f64) -> String {
+    coordinate(value)
+}
+
 /// Tolerances in Å with up to four decimals and no trailing zeros, e.g.
 /// `0.01`.
 pub(crate) fn tolerance(value: f64) -> String {

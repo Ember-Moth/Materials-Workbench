@@ -44,6 +44,11 @@ impl Selection {
         self.0.last().map(|item| item.site())
     }
 
+    /// The item added last.
+    pub fn last(&self) -> Option<Selected> {
+        self.0.last().copied()
+    }
+
     /// Whether the site or any of its atoms is selected.
     pub fn touches_site(&self, site: SiteId) -> bool {
         self.0.iter().any(|item| item.site() == site)
@@ -147,8 +152,8 @@ impl StructureWorkspace {
             }
         };
         let spheres: Vec<usize> = self
-            .document
-            .derived()
+            .display
+            .shown
             .atoms
             .iter()
             .enumerate()
@@ -159,10 +164,10 @@ impl StructureWorkspace {
     }
 
     /// The atom a viewport pick refers to; spheres are in the order of the
-    /// document's displayed atoms.
+    /// atoms the display range shows.
     pub(crate) fn picked_atom(&self, pick: Option<Pick>) -> Option<AtomRef> {
         match pick? {
-            Pick::Sphere(ix) => self.document.derived().atoms.get(ix).map(|atom| atom.atom),
+            Pick::Sphere(ix) => self.display.shown.atoms.get(ix).map(|atom| atom.atom),
             Pick::Bond(_) => None,
         }
     }
@@ -174,7 +179,7 @@ impl StructureWorkspace {
     /// if no such atom is displayed.
     pub fn displayed_atom_position(&self, fractional: [f64; 3], cx: &App) -> Option<Point<Pixels>> {
         let derived = self.document.derived();
-        let atom = derived.atoms.iter().find(|atom| {
+        let atom = self.display.shown.atoms.iter().find(|atom| {
             derived
                 .fractional(atom.atom)
                 .is_some_and(|f| (0..3).all(|i| (f[i] - fractional[i]).abs() < 1e-3))

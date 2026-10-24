@@ -262,9 +262,10 @@ impl StructureWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Outcome, EditError> {
+        let center = self.display_center();
         match self.document.crystal.execute(command) {
             Ok(outcome) => {
-                self.after_change(&outcome, window, cx);
+                self.after_change(&outcome, center, window, cx);
                 Ok(outcome)
             }
             Err(error) => {
@@ -284,9 +285,17 @@ impl StructureWorkspace {
         self.execute(Command::Edit(edit), window, cx)
     }
 
-    /// Follows the selection and the atoms picked for a measurement through
-    /// the change (design §7.11), shows its warnings, and redraws.
-    fn after_change(&mut self, outcome: &Outcome, window: &mut Window, cx: &mut Context<Self>) {
+    /// Follows the selection, the atoms picked for a measurement and the
+    /// atom the display range is centered on through the change (design
+    /// §7.11), shows its warnings, and redraws. `center` is where the range
+    /// was centered before.
+    fn after_change(
+        &mut self,
+        outcome: &Outcome,
+        center: Option<[f64; 3]>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !outcome.changed {
             return;
         }
@@ -315,27 +324,31 @@ impl StructureWorkspace {
             AtomFate::Site(_) | AtomFate::Removed => false,
         });
         self.selection = self.selection.remap(ids);
+        self.display_range = self.display_range.remap(ids, center);
         self.sync_cell_inputs(window, cx);
         self.sync_site_inputs(window, cx);
         self.refresh_scene(cx);
+        self.sync_range_panel(window, cx);
         cx.notify();
     }
 
     pub(crate) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        let center = self.display_center();
         if let Some(mut outcome) = self.document.crystal.undo() {
             // What the edit warned about was shown when it was made.
             outcome.warnings.clear();
             outcome.info.clear();
-            self.after_change(&outcome, window, cx);
+            self.after_change(&outcome, center, window, cx);
         }
     }
 
     pub(crate) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        let center = self.display_center();
         if let Some(mut outcome) = self.document.crystal.redo() {
             // What the edit warned about was shown when it was made.
             outcome.warnings.clear();
             outcome.info.clear();
-            self.after_change(&outcome, window, cx);
+            self.after_change(&outcome, center, window, cx);
         }
     }
 

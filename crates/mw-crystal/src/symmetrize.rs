@@ -1762,13 +1762,13 @@ mod tests {
         let expanded = p1(&rutile());
         let mut document = CrystalDocument::new(expanded.clone());
         let derived = document.derived().clone();
-        let o = derived
-            .atoms
+        let atoms = derived.one_cell(&expanded);
+        let o = atoms
             .iter()
             .find(|a| expanded.site(a.atom.site).unwrap().element() == "O")
             .unwrap()
             .atom;
-        let ti = derived.atoms[0].atom;
+        let ti = atoms[0].atom;
         let measurement = Measurement::Distance([ti, o]);
         document
             .execute(Command::AddMeasurement(measurement))
@@ -1787,7 +1787,7 @@ mod tests {
         let symmetrized = document.structure().clone();
         assert_eq!(symmetrized.sites.len(), 2);
         // Every atom is the atom at the same place.
-        for atom in &derived.atoms {
+        for atom in &atoms {
             let AtomFate::Kept(kept) = outcome.ids.atom(atom.atom) else {
                 panic!("{:?} lost", atom.atom);
             };
@@ -1838,7 +1838,7 @@ mod tests {
         let applied = edit.apply(&supercell).unwrap();
         let before = Derived::compute(&supercell);
         let after = Derived::compute(&applied.structure);
-        for atom in &before.atoms {
+        for atom in &before.one_cell(&supercell) {
             let AtomFate::Kept(kept) = applied.ids.atom(atom.atom) else {
                 panic!("{:?} lost", atom.atom);
             };

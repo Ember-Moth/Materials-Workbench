@@ -24,6 +24,7 @@ mod actions;
 mod cell_dialog;
 mod diagnostics;
 mod dialogs;
+mod display_range;
 mod document;
 mod editing;
 mod export;
@@ -42,10 +43,10 @@ mod workspace;
 
 pub use actions::{
     AddMixedOccupant, AddSite, AlignCell, ClearSelection, ConvertToP1, DeleteSelection,
-    ExportStructure, KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
-    ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel,
-    ShowSitesPanel, ShowSpaceFilling, Symmetrize, ToggleMeasure, ToggleMoveAtoms, TogglePanel,
-    TransformCell, Undo, bind_keys, palette_commands,
+    EditDisplayRange, ExportStructure, KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView,
+    ShowBallAndStick, ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra,
+    ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling, Symmetrize, ToggleMeasure,
+    ToggleMoveAtoms, TogglePanel, TransformCell, Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell};

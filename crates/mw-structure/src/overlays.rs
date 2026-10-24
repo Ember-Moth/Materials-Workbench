@@ -6,9 +6,9 @@
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
-};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::actions::{KEY_CONTEXT, ResetView, ToggleMeasure, ToggleMoveAtoms};
@@ -38,7 +38,8 @@ impl StructureWorkspace {
             self.measurement_labels(cx)
         };
         let hovered = self.render_hovered_atom(cx);
-        let atom_count = self.document.derived().atoms.len();
+        let info = self.display_info();
+        let preparing = self.is_preparing_display();
         let chip = || {
             div()
                 .absolute()
@@ -82,8 +83,12 @@ impl StructureWorkspace {
                         chip()
                             .relative()
                             .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
                             .text_color(theme.muted_foreground)
-                            .child(tr!("viewport.info", atoms = atom_count)),
+                            .when(preparing, |this| this.child(Spinner::new().xsmall()))
+                            .child(info),
                     )
                     .children(prompt.map(|prompt| {
                         h_flex()
@@ -222,31 +227,22 @@ impl StructureWorkspace {
                         window.dispatch_action(Box::new(ToggleMoveAtoms), cx)
                     })),
             )
-            .child(
-                // Mock: the popover only explains that display ranges are not
-                // implemented yet.
+            .child({
+                let panel = self.range_panel.clone();
                 Popover::new("display-range")
                     .anchor(Anchor::BottomCenter)
+                    .open(self.range_open)
+                    .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                        this.set_range_open(*open, window, cx)
+                    }))
                     .trigger(
                         Button::new("display-range-trigger")
                             .ghost()
                             .small()
                             .label(tr!("toolbar.display_range")),
                     )
-                    .content(|_, _, cx| {
-                        v_flex()
-                            .w_64()
-                            .gap_1()
-                            .text_sm()
-                            .child(tr!("toolbar.display_range_title"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(tr!("toolbar.display_range_mock")),
-                            )
-                    }),
-            )
+                    .content(move |_, _, _| panel.clone())
+            })
             .child(div().w_px().h_5().mx_1().bg(theme.border))
             .child(
                 Button::new("reset-view")
