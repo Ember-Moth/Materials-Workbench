@@ -10,6 +10,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bonds::{alternatives, covalent_radius};
 use crate::constraints::cell_constraints;
 use crate::placement::{self, Placement};
 use crate::{
@@ -242,6 +243,15 @@ struct Report {
 pub enum EditWarning {
     /// The occupancies of a site add up to more than 1 (design §7.7).
     OccupancySum { site: SiteId, sum: f64 },
+    /// The occupancies of a split site and of the split positions next to
+    /// it in the other groups of its disorder assembly add up to more than
+    /// 1 (design §7.7). `partners` holds, for each other group, the
+    /// adjacent site with the largest occupancy.
+    SplitOccupancySum {
+        site: SiteId,
+        partners: Vec<SiteId>,
+        sum: f64,
+    },
     /// After a move, an atom of `site` is closer than the structure's
     /// short-contact distance to an atom of `other`, in Å (design §7.4).
     ShortContact {
@@ -260,6 +270,7 @@ impl EditWarning {
     pub fn code(&self) -> &'static str {
         match self {
             Self::OccupancySum { .. } => "occupancy_sum",
+            Self::SplitOccupancySum { .. } => "split_occupancy_sum",
             Self::ShortContact { .. } => "short_contact",
             Self::CloseImages { .. } => "close_images",
         }
@@ -275,6 +286,20 @@ impl fmt::Display for EditWarning {
                 "the occupancies of site {} add up to {sum:.4}, more than 1",
                 site.0
             ),
+            Self::SplitOccupancySum {
+                site,
+                partners,
+                sum,
+            } => {
+                let partners: Vec<String> = partners.iter().map(|p| p.0.to_string()).collect();
+                write!(
+                    f,
+                    "the occupancies of split site {} and of the alternative positions next to \
+                     it (sites {}) add up to {sum:.4}, more than 1",
+                    site.0,
+                    partners.join(", ")
+                )
+            }
             Self::ShortContact {
                 site,
                 other,
@@ -687,6 +712,9 @@ impl Edit {
                 report
                     .warnings
                     .extend(occupancy_warning(site_ref(structure, *site)?));
+                report
+                    .warnings
+                    .extend(split_occupancy_warning(structure, *site));
                 let inverse = Self::SetOccupancy {
                     site: *site,
                     occupant: occupant.clone(),
@@ -715,6 +743,9 @@ impl Edit {
                     .occupants
                     .push(Occupant::new(&label, species.clone(), *occupancy));
                 report.warnings.extend(occupancy_warning(target));
+                report
+                    .warnings
+                    .extend(split_occupancy_warning(structure, *site));
                 let inverse = Self::RemoveOccupant {
                     site: *site,
                     occupant: label,
@@ -1349,16 +1380,83 @@ fn new_label(structure: &Structure, element: &str) -> String {
         .expect("finitely many labels")
 }
 
+fn occupancy_sum(site: &Site) -> f64 {
+    site.occupants.iter().map(|o| o.occupancy.value()).sum()
+}
+
 fn occupancy_warning(site: &Site) -> Option<EditWarning> {
-    let sum: f64 = site.occupants.iter().map(|o| o.occupancy.value()).sum();
+    let sum = occupancy_sum(site);
     (sum > 1.0 + OCCUPANCY_TOLERANCE).then_some(EditWarning::OccupancySum { site: site.id, sum })
+}
+
+/// Split positions of one disorder assembly are never occupied together,
+/// so a split site and the alternatives next to it may hold one atom
+/// between them (design §7.7). Alternatives are sites of the other groups
+/// of the assembly, as for bonds; next to it means an atom closer than the
+/// two elements' covalent radii, nearer than a bond would put them, or
+/// than the short-contact distance for elements without a radius. Of each
+/// other group the adjacent site with the largest occupancy counts. A site
+/// that alone holds more than 1 has its own warning.
+fn split_occupancy_warning(structure: &Structure, site: SiteId) -> Option<EditWarning> {
+    let own = structure.site(site)?;
+    own.disorder.as_ref()?;
+    let own_sum = occupancy_sum(own);
+    if own_sum > 1.0 + OCCUPANCY_TOLERANCE {
+        return None;
+    }
+    let short = structure.tolerances.short_contact;
+    let limit =
+        |a: &Site, b: &Site| match (covalent_radius(a.element()), covalent_radius(b.element())) {
+            (Some(ra), Some(rb)) => ra + rb,
+            _ => short,
+        };
+    let candidates: Vec<&Site> = structure
+        .sites
+        .iter()
+        .filter(|other| alternatives(own, other))
+        .collect();
+    let reach = candidates
+        .iter()
+        .map(|other| limit(own, other))
+        .fold(0.0, f64::max);
+    if reach <= 0.0 {
+        return None;
+    }
+    let orbits = expand::orbits(structure);
+    // For each other group, the adjacent site with the largest occupancy.
+    let mut groups: BTreeMap<&str, (f64, SiteId)> = BTreeMap::new();
+    for contact in expand::contacts_with(structure, &orbits, site, reach) {
+        let Some(other) = candidates.iter().find(|s| s.id == contact.b) else {
+            continue;
+        };
+        if contact.distance >= limit(own, other) {
+            continue;
+        }
+        let group = other.disorder.as_ref().map_or("", |d| d.group.as_str());
+        let occupancy = occupancy_sum(other);
+        let best = groups.entry(group).or_insert((occupancy, other.id));
+        if occupancy > best.0 {
+            *best = (occupancy, other.id);
+        }
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    let sum = own_sum + groups.values().map(|(occupancy, _)| occupancy).sum::<f64>();
+    let mut partners: Vec<SiteId> = groups.values().map(|&(_, id)| id).collect();
+    partners.sort();
+    (sum > 1.0 + OCCUPANCY_TOLERANCE).then_some(EditWarning::SplitOccupancySum {
+        site,
+        partners,
+        sum,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sample::{self, SampleKey};
-    use crate::{Adp, AtomFate, CellParams, Lattice, SymOp, Symmetry};
+    use crate::{Adp, AtomFate, CellParams, Disorder, Lattice, SymOp, Symmetry};
 
     fn load(key: SampleKey) -> (Structure, Derived) {
         let sample = sample::load(key);
@@ -1687,6 +1785,101 @@ mod tests {
             rename("Ti1").apply(&rutile),
             Err(EditError::DuplicateLabel { .. })
         ));
+    }
+
+    #[test]
+    fn split_sites_next_to_each_other_hold_one_atom() {
+        // Split positions of assembly A in a 10 Å P1 cell: C1B (group 2)
+        // 0.1 Å from C1A (group 1) and C1C (group 3); C2A, in group 1 as
+        // C1A, is 0.2 Å away, and of group 1 only the larger counts. Next
+        // to it but not alternatives: the ordered C0 (group 0) and C1D of
+        // assembly B. C3A of group 1 is far away.
+        let disorder =
+            |assembly: &str, group: &str| Disorder::new(Some(assembly.into()), group.into());
+        let split = |id: u32, label: &str, position: [f64; 3], occupancy: f64, d: Disorder| {
+            let occupant = Occupant::new(label, Species::element("C"), Measured::exact(occupancy));
+            Site::new(SiteId(id), position, vec![occupant]).with_disorder(d)
+        };
+        let structure = Structure::new(
+            Lattice::new(CellParams::new(10.0, 10.0, 10.0, 90.0, 90.0, 90.0)),
+            Symmetry::p1(),
+            vec![
+                split(1, "C1A", [0.10, 0.10, 0.10], 0.5, disorder("A", "1")),
+                split(2, "C2A", [0.09, 0.10, 0.10], 0.4, disorder("A", "1")),
+                split(3, "C1B", [0.11, 0.10, 0.10], 0.3, disorder("A", "2")),
+                split(4, "C1C", [0.11, 0.11, 0.10], 0.2, disorder("A", "3")),
+                split(5, "C0", [0.11, 0.10, 0.11], 1.0, disorder("A", "0")),
+                split(6, "C1D", [0.11, 0.09, 0.10], 0.9, disorder("B", "1")),
+                split(7, "C3A", [0.5, 0.5, 0.5], 0.9, disorder("A", "1")),
+            ],
+        );
+        let c1b = SiteId(3);
+        let set = |structure: &Structure, occupancy: f64| {
+            round_trip(
+                structure,
+                Edit::SetOccupancy {
+                    site: c1b,
+                    occupant: "C1B".into(),
+                    occupancy: Measured::exact(occupancy),
+                },
+            )
+        };
+        let split_sum = |applied: &Applied| match &applied.warnings[..] {
+            [
+                EditWarning::SplitOccupancySum {
+                    site,
+                    partners,
+                    sum,
+                },
+            ] if *site == c1b => Some((partners.clone(), *sum)),
+            [] => None,
+            other => panic!("unexpected warnings {other:?}"),
+        };
+
+        // 0.3 + 0.5 of group 1 (the larger of C1A and C2A) + 0.2 of group 3.
+        assert_eq!(split_sum(&set(&structure, 0.3)), None);
+        let (partners, sum) = split_sum(&set(&structure, 0.4)).expect("a warning");
+        assert_eq!(partners, [SiteId(1), SiteId(4)]);
+        assert!((sum - 1.1).abs() < 1e-12, "{sum}");
+        // Within the tolerance of refinements.
+        assert_eq!(split_sum(&set(&structure, 0.305)), None);
+
+        // Adding an occupant to the split site counts as well.
+        let added = round_trip(
+            &structure,
+            Edit::AddOccupant {
+                site: c1b,
+                species: Species::element("N"),
+                occupancy: Measured::exact(0.2),
+                label: None,
+            },
+        );
+        let (partners, sum) = split_sum(&added).expect("a warning");
+        assert_eq!(partners, [SiteId(1), SiteId(4)]);
+        assert!((sum - 1.2).abs() < 1e-12, "{sum}");
+
+        // A site that alone holds more than one atom has its own warning.
+        let full = set(&structure, 1.0).structure;
+        let over = Edit::AddOccupant {
+            site: c1b,
+            species: Species::element("N"),
+            occupancy: Measured::exact(0.1),
+            label: None,
+        }
+        .apply(&full)
+        .unwrap();
+        assert!(matches!(
+            over.warnings[..],
+            [EditWarning::OccupancySum { site, .. }] if site == c1b
+        ));
+
+        // The ordered part (group 0) is checked on its own only.
+        let ordered = Edit::SetOccupancy {
+            site: SiteId(5),
+            occupant: "C0".into(),
+            occupancy: Measured::exact(0.9),
+        };
+        assert!(ordered.apply(&structure).unwrap().warnings.is_empty());
     }
 
     #[test]

@@ -724,6 +724,9 @@ edit:
     occupancy_sum:
       en: "The occupancies of %{label} add up to %{sum}, more than 1."
       zh-CN: "%{label} 的占位率之和为 %{sum}，大于 1。"
+    split_occupancy_sum:
+      en: "%{label} and the split positions next to it (%{partners}) are alternatives of one atom, but their occupancies add up to %{sum}, more than 1."
+      zh-CN: "%{label} 与相邻的无序位置（%{partners}）互为替代，只能容纳一个原子，但占位率之和为 %{sum}，大于 1。"
     short_contact:
       en: "Atoms of %{a} and %{b} are only %{distance} apart."
       zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance}。"

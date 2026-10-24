@@ -186,6 +186,20 @@ pub(crate) fn warning_text(warning: &EditWarning, structure: &Structure) -> Shar
             label = site_label(structure, *site),
             sum = format::occupancy(*sum)
         ),
+        EditWarning::SplitOccupancySum {
+            site,
+            partners,
+            sum,
+        } => tr!(
+            "edit.warning.split_occupancy_sum",
+            label = site_label(structure, *site),
+            partners = partners
+                .iter()
+                .map(|&partner| site_label(structure, partner))
+                .collect::<Vec<_>>()
+                .join(&tr!("dialog.list_separator")),
+            sum = format::occupancy(*sum)
+        ),
         EditWarning::ShortContact {
             site,
             other,

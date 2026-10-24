@@ -124,7 +124,7 @@ fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
 /// Split positions of one disorder assembly exclude each other: atoms of
 /// different groups are alternatives, not neighbors. Group 0 is the ordered
 /// part, as in SHELX.
-fn alternatives(a: &Site, b: &Site) -> bool {
+pub(crate) fn alternatives(a: &Site, b: &Site) -> bool {
     match (&a.disorder, &b.disorder) {
         (Some(a), Some(b)) => {
             a.assembly == b.assembly && a.group != b.group && a.group != "0" && b.group != "0"
