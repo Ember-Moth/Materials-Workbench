@@ -20,9 +20,10 @@ use crate::{
 const FORMAT: &str = "materials-workbench/project";
 const WRITER: &str = concat!("Materials Workbench ", env!("CARGO_PKG_VERSION"));
 const VIEW: &str = "view.json";
-/// 2 since a structure's view has a display range (design §8); version 1
-/// files are read as they are, with the default range.
-const VIEW_VERSION: u32 = 2;
+/// 2 since a structure's view has a display range, 3 since it has the
+/// centers of its polyhedra (design §8); older files are read as they are,
+/// with the defaults.
+const VIEW_VERSION: u32 = 3;
 const STRUCTURES: &str = "structures";
 const SOURCES: &str = "sources";
 

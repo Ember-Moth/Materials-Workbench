@@ -125,6 +125,9 @@ toolbar:
   polyhedra:
     en: Polyhedra
     zh-CN: 多面体
+  polyhedron_centers:
+    en: Polyhedron centers
+    zh-CN: 多面体的中心原子
   measure:
     en: Measure
     zh-CN: 测量
@@ -622,6 +625,9 @@ command:
   polyhedra:
     en: Polyhedra
     zh-CN: 多面体模型
+  polyhedron_centers:
+    en: Polyhedron centers…
+    zh-CN: 多面体的中心原子…
   display_range:
     en: Display range…
     zh-CN: 显示范围…
@@ -631,10 +637,25 @@ command:
   toggle_panel:
     en: Show or hide side panel
     zh-CN: 显示或隐藏侧面板
-feature:
-  polyhedra:
+polyhedra:
+  title:
     en: Polyhedra
-    zh-CN: 多面体显示
+    zh-CN: 多面体
+  centers:
+    en: Centers
+    zh-CN: 中心原子
+  coordination:
+    en: "Coordination number %{numbers}"
+    zh-CN: "配位数 %{numbers}"
+  coordinations:
+    en: "Coordination numbers %{numbers}"
+    zh-CN: "配位数 %{numbers}"
+  separator:
+    en: ", "
+    zh-CN: "、"
+  none:
+    en: No atom has three or more ligands, so there are no polyhedra to draw.
+    zh-CN: 没有原子有 3 个以上的配体，画不出多面体。
 move:
   prompt:
     en: "Drag an atom to move its site with all equivalent atoms; hold %{key} to leave its special position"

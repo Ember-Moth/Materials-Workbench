@@ -15,7 +15,8 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use mw_crystal::{
     AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
-    CrystalDocument, DisplayRange, Edit, EditMode, SiteId, SphereCenter, Structure, element,
+    CrystalDocument, DisplayRange, Edit, EditMode, PolyhedronCenters, SiteId, SphereCenter,
+    Structure, element,
 };
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
@@ -29,6 +30,7 @@ use crate::cell_dialog::{self, CellDialog};
 use crate::display_range::{DisplayRangePanel, DisplayState};
 use crate::document::StructureDocument;
 use crate::moving::AtomDrag;
+use crate::polyhedra::PolyhedraPanel;
 use crate::scene::{self, Atoms, DisplayModel, LineColors};
 use crate::selection::Selection;
 use crate::symmetrize_dialog::{self, SymmetrizeDialog};
@@ -115,6 +117,12 @@ pub struct StructureWorkspace {
     pub(crate) panel: PanelTab,
     pub(crate) panel_open: bool,
     pub(crate) display_model: DisplayModel,
+    /// The centers of the polyhedra in the polyhedra model (crystallography
+    /// design §5.6): view state, like the display model.
+    pub(crate) polyhedron_centers: PolyhedronCenters,
+    pub(crate) polyhedra_panel: Entity<PolyhedraPanel>,
+    /// Whether the popover choosing the centers is open.
+    pub(crate) polyhedra_open: bool,
     /// What part of the crystal the viewport shows (crystallography design
     /// §5.5): view state, kept apart from the document and its undo.
     pub(crate) display_range: DisplayRange,
@@ -210,7 +218,8 @@ impl StructureWorkspace {
             .map_or_else(Selection::default, |site| Selection::site(site.id));
 
         let workspace = cx.entity().downgrade();
-        let range_panel = cx.new(|cx| DisplayRangePanel::new(workspace, window, cx));
+        let range_panel = cx.new(|cx| DisplayRangePanel::new(workspace.clone(), window, cx));
+        let polyhedra_panel = cx.new(|_| PolyhedraPanel::new(workspace));
 
         let mut this = Self {
             document,
@@ -219,6 +228,9 @@ impl StructureWorkspace {
             panel: PanelTab::Properties,
             panel_open: true,
             display_model: DisplayModel::BallAndStick,
+            polyhedron_centers: PolyhedronCenters::default(),
+            polyhedra_panel,
+            polyhedra_open: false,
             display_range: DisplayRange::default(),
             display: DisplayState::default(),
             range_panel,
@@ -312,13 +324,16 @@ impl StructureWorkspace {
             PanelTab::Measurements => SavedPanelTab::Measurements,
             PanelTab::Diagnostics => SavedPanelTab::Diagnostics,
         };
-        let view = EntryView::new(
+        let mut view = EntryView::new(
             Some(camera),
             Some(display_model),
             Some(panel),
             Some(self.panel_open),
         );
-        // Left out when it is the default, as older views have none.
+        // Left out when they are the default, as older views have none.
+        if let PolyhedronCenters::Elements(elements) = &self.polyhedron_centers {
+            view = view.with_polyhedron_centers(elements.iter().cloned().collect());
+        }
         if self.display_range == DisplayRange::default() {
             return view;
         }
@@ -350,6 +365,13 @@ impl StructureWorkspace {
                 self.refresh_scene(cx);
             }
         }
+        let centers = view
+            .polyhedron_centers
+            .as_ref()
+            .map_or(PolyhedronCenters::Default, |elements| {
+                PolyhedronCenters::Elements(elements.iter().cloned().collect())
+            });
+        self.set_polyhedron_centers(centers, cx);
         if let Some(panel) = view.panel {
             self.panel = match panel {
                 SavedPanelTab::Properties => PanelTab::Properties,
@@ -400,17 +422,11 @@ impl StructureWorkspace {
         cx.notify();
     }
 
-    fn set_display_model(
-        &mut self,
-        model: DisplayModel,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if model == DisplayModel::Polyhedra {
-            dialogs::not_implemented(tr!("feature.polyhedra"), window, cx);
-        }
+    fn set_display_model(&mut self, model: DisplayModel, _: &mut Window, cx: &mut Context<Self>) {
         if self.display_model != model {
             self.display_model = model;
+            // The centers' popover belongs to the polyhedra.
+            self.polyhedra_open &= model == DisplayModel::Polyhedra;
             self.refresh_scene(cx);
             cx.notify();
         }
@@ -963,6 +979,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::show_ball_and_stick))
             .on_action(cx.listener(Self::show_space_filling))
             .on_action(cx.listener(Self::show_polyhedra))
+            .on_action(cx.listener(Self::edit_polyhedra))
             .on_action(cx.listener(Self::edit_display_range))
             .on_action(cx.listener(Self::show_properties))
             .on_action(cx.listener(Self::show_sites))

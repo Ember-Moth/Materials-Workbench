@@ -1755,3 +1755,167 @@ fn the_display_range_is_saved_with_the_view(cx: &mut TestAppContext) {
     let view = cx.update(|_, cx| rutile.read(cx).view(cx));
     assert_eq!(view.display_range, None);
 }
+
+/// Polyhedra the viewport draws, as the scene holds them.
+fn polyhedra(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) -> usize {
+    workspace.read_with(cx, |workspace, _| workspace.display.shown.polyhedra.len())
+}
+
+/// Milestone M15: the polyhedra model draws the coordination polyhedra,
+/// with the ligands outside the cell; clicks pass through them to the
+/// atoms; dragging an atom previews the polyhedra too; it is a view, not
+/// an edit.
+#[gpui_kit::test]
+fn the_polyhedra_model_draws_coordination_polyhedra(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let shown = notifications(&mut cx);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowPolyhedra), cx));
+    draw(&mut cx);
+    // No "not implemented" any more.
+    assert_eq!(notifications(&mut cx), shown);
+    // The eight corner Ti and the body-center one, each an octahedron.
+    assert_eq!(polyhedra(&rutile, &mut cx), 9);
+    let atoms = shown_atoms(&rutile, &mut cx);
+    assert!(atoms.len() > 15, "{}", atoms.len());
+    // The cell's atoms come first; the O added for the corners' octahedra
+    // lie in the cells around.
+    assert!(atoms[15..].iter().all(|a| a.site == SiteId(2)));
+    assert!(atoms[15..].iter().all(|a| a.cell != [0; 3]));
+    assert_eq!(steps(&rutile, &mut cx), 0);
+
+    // Every Ti sits inside its octahedron, and is picked through it.
+    let (ti, _) = hover_atom_of(&rutile, SiteId(1), &mut cx);
+    assert_eq!(ti.site, SiteId(1));
+    // So is an O added for a corner's octahedron.
+    let (o, _) = hover_atom_where(
+        &rutile,
+        |a| a.site == SiteId(2) && a.cell != [0; 3],
+        &mut cx,
+    );
+    assert_eq!(o.site, SiteId(2));
+
+    // Dragging an O deforms the octahedra in the preview.
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let (_, at) = hover_atom_of(&rutile, SiteId(2), &mut cx);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let to = at + point(px(30.), px(20.));
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    let previewed = rutile.read_with(&cx, |workspace, _| {
+        workspace
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.previewed_polyhedra())
+    });
+    assert_eq!(previewed, Some(9));
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    assert_eq!(polyhedra(&rutile, &mut cx), 9);
+
+    // Ball and stick again: the cell's atoms, no polyhedra.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowBallAndStick), cx));
+    draw(&mut cx);
+    assert_eq!(polyhedra(&rutile, &mut cx), 0);
+    assert_eq!(shown_atoms(&rutile, &mut cx).len(), 15);
+}
+
+/// The popover chooses the centers by element; the choice is view state,
+/// saved with the view.
+#[gpui_kit::test]
+fn polyhedron_centers_are_chosen_by_element(cx: &mut TestAppContext) {
+    use mw_crystal::PolyhedronCenters;
+    let (srtio3, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    // The palette's "Polyhedron centers…" shows the polyhedra and opens
+    // the popover.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditPolyhedra), cx));
+    draw(&mut cx);
+    let (model, open) = srtio3.read_with(&cx, |workspace, _| {
+        (workspace.display_model(), workspace.polyhedra_open)
+    });
+    assert_eq!(model, crate::scene::DisplayModel::Polyhedra);
+    assert!(open);
+    // By default the TiO₆ octahedron only: Sr has twelve O.
+    assert_eq!(polyhedra(&srtio3, &mut cx), 1);
+
+    // The Sr too: the eight corners' cuboctahedra.
+    cx.update(|_, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.set_center_element("Sr", true, cx)
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 9);
+    let both = PolyhedronCenters::Elements(["Sr".to_string(), "Ti".to_string()].into());
+    let centers = srtio3.read_with(&cx, |workspace, _| workspace.polyhedron_centers().clone());
+    assert_eq!(centers, both);
+    assert_eq!(steps(&srtio3, &mut cx), 0);
+
+    // Saved with the view, and restored from it.
+    let view = cx.update(|_, cx| srtio3.read(cx).view(cx));
+    assert_eq!(
+        view.polyhedron_centers.as_deref(),
+        Some(&["Sr".to_string(), "Ti".to_string()][..])
+    );
+    cx.update(|_, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.set_center_element("Ti", false, cx);
+            workspace.set_center_element("Sr", false, cx);
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 0);
+    srtio3.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 9);
+    // A view without a choice is the default.
+    let default = mw_project_file::EntryView::new(None, view.display_model, None, None);
+    srtio3.update(&mut cx, |workspace, cx| workspace.set_view(&default, cx));
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 1);
+
+    // Escape closes the popover, which has the focus.
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(!srtio3.read_with(&cx, |workspace, _| workspace.polyhedra_open));
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditPolyhedra), cx));
+    draw(&mut cx);
+    assert!(srtio3.read_with(&cx, |workspace, _| workspace.polyhedra_open));
+
+    // Leaving the polyhedra closes their popover.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowSpaceFilling), cx));
+    draw(&mut cx);
+    assert!(!srtio3.read_with(&cx, |workspace, _| workspace.polyhedra_open));
+    assert_eq!(polyhedra(&srtio3, &mut cx), 0);
+}
+
+/// Polyhedra of a large range are worked out in the background with its
+/// atoms.
+#[gpui_kit::test]
+fn polyhedra_of_large_ranges_are_prepared_in_the_background(cx: &mut TestAppContext) {
+    use mw_crystal::DisplayRange;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowPolyhedra), cx));
+    draw(&mut cx);
+    let range = DisplayRange::Cells {
+        counts: [10, 10, 10],
+        boundary: true,
+    };
+    let started = std::time::Instant::now();
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(range, cx)
+    });
+    assert!(set.is_ok());
+    assert!(rutile.read_with(&cx, |workspace, _| workspace.is_preparing_display()));
+    assert_eq!(polyhedra(&rutile, &mut cx), 9);
+    draw(&mut cx);
+    assert!(!rutile.read_with(&cx, |workspace, _| workspace.is_preparing_display()));
+    // 11³ corner Ti and 1000 body-center ones.
+    assert_eq!(polyhedra(&rutile, &mut cx), 11 * 11 * 11 + 1000);
+    eprintln!(
+        "10 × 10 × 10 rutile polyhedra: {} atoms ready {:?} after setting the range",
+        shown_atoms(&rutile, &mut cx).len(),
+        started.elapsed()
+    );
+}

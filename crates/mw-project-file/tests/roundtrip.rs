@@ -206,8 +206,13 @@ fn build() -> Built {
         counts: [3, 2, 4],
         boundary: false,
     };
-    view.entries
-        .insert(oriented_id, EntryView::default().with_display_range(range));
+    let centers = vec!["Ti".to_string(), "O".to_string()];
+    view.entries.insert(
+        oriented_id,
+        EntryView::default()
+            .with_display_range(range)
+            .with_polyhedron_centers(centers),
+    );
     Built {
         save: Save {
             manifest,
@@ -502,7 +507,7 @@ fn unreadable_view_state_is_dropped() {
     assert!(dir.read_view().is_some());
     let view = path.join("view.json");
     let text = fs::read_to_string(&view).unwrap();
-    fs::write(&view, text.replace("\"version\": 2", "\"version\": 3")).unwrap();
+    fs::write(&view, text.replace("\"version\": 3", "\"version\": 4")).unwrap();
     assert_eq!(dir.read_view(), None);
     fs::write(&view, "{").unwrap();
     assert_eq!(dir.read_view(), None);
@@ -540,16 +545,26 @@ fn version_1_view_state_reads_with_the_default_range() {
     assert_eq!(saved.display_model, Some(DisplayModel::BallAndStick));
     assert_eq!(saved.panel, Some(PanelTab::Sites));
     assert_eq!(saved.display_range, None);
-    // Written back as version 2, ranges included.
+    assert_eq!(saved.polyhedron_centers, None);
+    // Written back as version 3, ranges and polyhedra included.
     let range = DisplayRange::Sphere {
         center: SphereCenter::Point([0.5, 0.25, 0.0]),
         radius: 4.0,
     };
     let mut view = view;
-    view.entries.insert(entry, saved.with_display_range(range));
+    let saved = saved
+        .with_display_range(range)
+        .with_polyhedron_centers(vec!["Zn".into(), "Si".into(), "Zn".into()]);
+    view.entries.insert(entry, saved);
     write_view(&path, &view).unwrap();
     let text = fs::read_to_string(path.join("view.json")).unwrap();
-    assert!(text.contains("\"version\": 2"), "{text}");
+    assert!(text.contains("\"version\": 3"), "{text}");
+    // Sorted, each once.
+    let compact: String = text.split_whitespace().collect();
+    assert!(
+        compact.contains(r#""polyhedron_centers":["Si","Zn"]"#),
+        "{text}"
+    );
     assert!(
         text.contains(r#""display_range": {"#) && text.contains(r#""point": ["#),
         "{text}"

@@ -8,7 +8,9 @@
 //! coordinate constraints and Wyckoff position ([`SymmetryAnalysis`]). The
 //! space group tables and the symmetry search come from moyo. A
 //! [`DisplayRange`] chooses the part of the crystal the view shows, a block
-//! of cells or a sphere, and gives its atoms and bonds ([`Displayed`]).
+//! of cells or a sphere, and gives its atoms and bonds ([`Displayed`]); in
+//! the polyhedra model also the coordination [`Polyhedron`]s of the centers
+//! [`PolyhedronCenters`] chooses.
 //!
 //! Editing (design §7): an [`Edit`] is a serializable command on whole
 //! sites with an exact inverse; [`target_sites`] refuses edits of single
@@ -38,6 +40,7 @@ mod linalg;
 mod measured;
 mod neighbors;
 mod placement;
+mod polyhedra;
 pub mod sample;
 mod site;
 mod space_group;
@@ -73,6 +76,10 @@ pub use id_map::{AtomFate, IdMap, PositionMap, Rebasing, Relocation, SiteFate};
 pub use lattice::{CellParams, Lattice, Orientation, Rotation};
 pub use measured::Measured;
 pub use neighbors::Neighbor;
+pub use polyhedra::{
+    CenterElement, Coordination, DEFAULT_MAX_COORDINATION, MAX_LIGANDS, Polyhedron,
+    PolyhedronCenters,
+};
 pub use site::{CoordinateForm, SiteSymmetry, SpecialPosition, special_position};
 pub use space_group::{
     DetectedSymmetry, Setting, SpaceGroupType, Wyckoff, detect_symmetry, it_number_of,
