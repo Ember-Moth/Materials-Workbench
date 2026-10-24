@@ -412,9 +412,17 @@ fn the_element_picker_replaces_the_element(cx: &mut TestAppContext) {
 fn delete_removes_whole_sites_and_undo_brings_them_back(cx: &mut TestAppContext) {
     let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
     select(&workspace, Selection::site(SiteId(3)), &mut cx);
+    // The notification names the site and its atoms, which are gone from
+    // the view (design §7.6): O1, 3 atoms.
+    let message = workspace.read_with(&cx, |workspace, _| {
+        workspace.deletion_message(&[SiteId(3)]).to_string()
+    });
+    assert!(message.contains("O1") && message.contains('3'), "{message}");
+    let before = notifications(&mut cx);
     cx.simulate_keystrokes("delete");
     draw(&mut cx);
     assert_eq!(sites(&workspace, &mut cx), [SiteId(1), SiteId(2)]);
+    assert_eq!(notifications(&mut cx), before + 1);
     // No confirmation: deleting can be undone.
     cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
     let selected = workspace.read_with(&cx, |workspace, _| workspace.selected_site());

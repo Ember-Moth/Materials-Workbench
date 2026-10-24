@@ -421,6 +421,24 @@ impl StructureWorkspace {
         }
     }
 
+    /// What deleting `sites` tells the user: the site, or how many, and
+    /// how many atoms went with them (crystallography design §7.6).
+    pub(crate) fn deletion_message(&self, sites: &[SiteId]) -> SharedString {
+        let derived = self.document.derived();
+        let atoms: usize = sites
+            .iter()
+            .map(|&site| derived.multiplicity(site).unwrap_or(0))
+            .sum();
+        match sites {
+            [site] => tr!(
+                "edit.deleted_site",
+                label = site_label(self.document.structure(), *site),
+                count = atoms
+            ),
+            _ => tr!("edit.deleted_sites", sites = sites.len(), count = atoms),
+        }
+    }
+
     /// Deletes sites with all their equivalent atoms, as one undo step.
     pub(crate) fn delete_sites(
         &mut self,
@@ -428,19 +446,7 @@ impl StructureWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let derived = self.document.derived();
-        let atoms: usize = sites
-            .iter()
-            .map(|&site| derived.multiplicity(site).unwrap_or(0))
-            .sum();
-        let message = match sites[..] {
-            [site] => tr!(
-                "edit.deleted_site",
-                label = site_label(self.document.structure(), site),
-                count = atoms
-            ),
-            _ => tr!("edit.deleted_sites", sites = sites.len(), count = atoms),
-        };
+        let message = self.deletion_message(&sites);
         let mut edits: Vec<Edit> = sites
             .into_iter()
             .map(|site| Edit::RemoveSite { site })
