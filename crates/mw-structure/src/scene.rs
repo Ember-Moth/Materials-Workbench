@@ -2,25 +2,30 @@ use std::collections::HashMap;
 
 use gpui_kit::{Hsla, Rgba};
 use mw_crystal::{
-    Annotation, AtomFate, AtomRef, BondRules, DisplayRange, Displayed, IdMap, Orbit,
-    PolyhedronCenters, Structure, covalent_radius,
+    Annotation, AtomFate, AtomRef, BondRules, Displacement, Displacements, DisplayRange, Displayed,
+    IdMap, LatticePlane, Orbit, PolyhedronCenters, Structure, covalent_radius,
 };
-use mw_viewport::{BondInstance, LineInstance, Polyhedron, Scene, SphereInstance, srgb_to_linear};
+use mw_viewport::{
+    BondInstance, EllipsoidInstance, LineInstance, Polyhedron, Scene, SphereInstance,
+    srgb_to_linear,
+};
 
 /// How atoms are drawn. Polyhedra draw the atoms as ball and stick, with
 /// the coordination polyhedra of the chosen centers over them
-/// (crystallography design §5.6).
+/// (crystallography design §5.6); ellipsoids draw each atom as its
+/// displacement ellipsoid with thin bonds (§5.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayModel {
     BallAndStick,
     SpaceFilling,
     Polyhedra,
+    Ellipsoids,
 }
 
 impl DisplayModel {
     fn radius_scale(self) -> f32 {
         match self {
-            Self::BallAndStick | Self::Polyhedra => 1.0,
+            Self::BallAndStick | Self::Polyhedra | Self::Ellipsoids => 1.0,
             Self::SpaceFilling => 2.6,
         }
     }
@@ -29,6 +34,36 @@ impl DisplayModel {
     fn shows_bonds(self) -> bool {
         self != Self::SpaceFilling
     }
+
+    /// Å: ellipsoids are a few tenths of an ångström across, so their bonds
+    /// are thinner than those of balls.
+    fn bond_radius(self) -> f32 {
+        match self {
+            Self::Ellipsoids => ELLIPSOID_BOND_RADIUS,
+            _ => BOND_RADIUS,
+        }
+    }
+}
+
+/// How the scene draws the atoms it is given, besides its line colors.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Style {
+    pub model: DisplayModel,
+    /// The probability the displacement ellipsoids are drawn at.
+    pub probability: f64,
+    /// The lattice planes drawn, cut to `range` (§5.7).
+    pub planes: Vec<ShownPlane>,
+    /// The display range the atoms were chosen by.
+    pub range: DisplayRange,
+}
+
+/// A lattice plane as the view draws it: the plane and its color, an index
+/// into [`PLANE_COLORS`], under an id stable while the workspace is open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShownPlane {
+    pub id: u32,
+    pub plane: LatticePlane,
+    pub color: usize,
 }
 
 /// Element colors (Jmol, sRGB). These are data colors, not theme colors.
@@ -150,6 +185,28 @@ const UNKNOWN_COLOR: [u8; 3] = [0xFF, 0x14, 0x93];
 const UNKNOWN_RADIUS: f64 = 1.50;
 /// Å, the cylinder radius of bonds in ball and stick.
 const BOND_RADIUS: f32 = 0.12;
+/// Å, the cylinder radius of bonds between displacement ellipsoids.
+const ELLIPSOID_BOND_RADIUS: f32 = 0.04;
+/// Å, the radius of an atom without displacement parameters, or with
+/// parameters that make no ellipsoid, among ellipsoids: an arbitrary small
+/// sphere, as ORTEP drawings show hydrogen atoms.
+const NO_ELLIPSOID_RADIUS: f32 = 0.08;
+/// Lattice plane colors (sRGB), handed out in turn. Data colors like the
+/// elements': distinct from each other and from the commonest elements.
+pub(crate) const PLANE_COLORS: [[u8; 3]; 6] = [
+    [0x7B, 0x61, 0xFF],
+    [0x00, 0xA3, 0xA3],
+    [0xE8, 0xA3, 0x17],
+    [0xE0, 0x45, 0x7B],
+    [0x3B, 0x82, 0xF6],
+    [0x65, 0xA3, 0x0D],
+];
+/// How much of what is behind a lattice plane shows through it.
+const PLANE_OPACITY: f32 = 0.45;
+/// The outline of a lattice plane in its color, darkened.
+const PLANE_EDGE_SHADE: f32 = 0.6;
+/// Logical pixels.
+const PLANE_EDGE_WIDTH: f32 = 1.25;
 /// Logical pixels.
 const CELL_EDGE_WIDTH: f32 = 1.25;
 /// Logical pixels: thinner than the cell's edges, which stay the frame.
@@ -263,38 +320,95 @@ impl Preview {
     }
 }
 
-/// What the viewport draws: one sphere per displayed atom, in the order of
-/// `shown.displayed.atoms`, so a picked sphere's index is the atom's index;
-/// the bonds between displayed atoms; the coordination polyhedra, if any,
-/// translucent in their center's color with darker edges; the edges of the
-/// cell at the origin; and a dashed line along each of the document's
-/// measurements (`annotations`) whose atoms still exist.
+fn srgb(color: [u8; 3]) -> [f32; 3] {
+    color.map(|c| srgb_to_linear(f32::from(c) / 255.0))
+}
+
+/// The ellipsoid drawn for an atom's displacement (§5.8).
+fn ellipsoid(center: [f32; 3], color: [f32; 3], displacement: Displacement) -> EllipsoidInstance {
+    let sphere = |r: f32| [[r, 0.0, 0.0, 0.0], [0.0, r, 0.0, 0.0], [0.0, 0.0, r, 0.0]];
+    let (axes, radius) = match displacement {
+        Displacement::Ellipsoid(axes) => {
+            let mut axes = axes.map(|[x, y, z]| [x as f32, y as f32, z as f32, 0.0]);
+            // The principal ellipses show which way it points.
+            axes[0][3] = 1.0;
+            let longest = axes
+                .iter()
+                .map(|a| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt())
+                .fold(0.0, f32::max);
+            (axes, longest)
+        }
+        Displacement::Sphere(r) => (sphere(r as f32), r as f32),
+        Displacement::Missing | Displacement::NotPositiveDefinite => {
+            (sphere(NO_ELLIPSOID_RADIUS), NO_ELLIPSOID_RADIUS)
+        }
+    };
+    let [x, y, z] = center;
+    let [r, g, b] = color;
+    EllipsoidInstance {
+        center_radius: [x, y, z, radius],
+        axes,
+        color: [r, g, b, 1.0],
+    }
+}
+
+/// What the viewport draws: one atom per displayed atom, in the order of
+/// `shown.displayed.atoms`, so a picked atom's index is the atom's index;
+/// spheres, or in the ellipsoids model the displacement ellipsoids; the
+/// bonds between displayed atoms; the coordination polyhedra, if any,
+/// translucent in their center's color with darker edges; the lattice
+/// planes, cut to the display range, translucent with darker outlines; the
+/// edges of the cell at the origin; and a dashed line along each of the
+/// document's measurements (`annotations`) whose atoms still exist.
 pub(crate) fn draw(
     shown: &Atoms,
     annotations: &[Annotation],
-    model: DisplayModel,
+    style: &Style,
     colors: LineColors,
 ) -> Scene {
+    let model = style.model;
     let lattice = &shown.structure.lattice;
     // Looked up once per element rather than once per atom: a range of many
     // cells repeats a few elements thousands of times.
     let mut styles: HashMap<&str, ([f32; 3], f32)> = HashMap::new();
-    let spheres: Vec<SphereInstance> = shown
+    let atoms: Vec<([f32; 3], [f32; 3], f32)> = shown
         .displayed
         .atoms
         .iter()
         .map(|atom| {
-            let ([r, g, b], radius) = *styles.entry(&atom.element).or_insert_with(|| {
-                let (srgb, radius) = element_style(&atom.element);
-                (srgb.map(|c| srgb_to_linear(f32::from(c) / 255.0)), radius)
+            let (color, radius) = *styles.entry(&atom.element).or_insert_with(|| {
+                let (color, radius) = element_style(&atom.element);
+                (srgb(color), radius)
             });
-            let [x, y, z] = point(atom.position);
-            SphereInstance {
-                center_radius: [x, y, z, radius * model.radius_scale()],
-                color: [r, g, b, 1.0],
-            }
+            (point(atom.position), color, radius)
         })
         .collect();
+    let (spheres, ellipsoids) = if model == DisplayModel::Ellipsoids {
+        let displacements = Displacements::new(shown.structure, style.probability);
+        let ellipsoids = shown
+            .displayed
+            .atoms
+            .iter()
+            .zip(&atoms)
+            .map(|(atom, &(center, color, _))| {
+                ellipsoid(center, color, displacements.get(atom.atom))
+            })
+            .collect();
+        (Vec::new(), ellipsoids)
+    } else {
+        let spheres = atoms
+            .iter()
+            .map(|&([x, y, z], [r, g, b], radius)| SphereInstance {
+                center_radius: [x, y, z, radius * model.radius_scale()],
+                color: [r, g, b, 1.0],
+            })
+            .collect();
+        (spheres, Vec::new())
+    };
+    let color = |i: usize| {
+        let [r, g, b] = atoms[i].1;
+        [r, g, b, 1.0]
+    };
 
     let bonds = if model.shows_bonds() {
         shown
@@ -302,14 +416,12 @@ pub(crate) fn draw(
             .bonds
             .iter()
             .map(|&[i, j]| {
-                let (a, b) = (&spheres[i], &spheres[j]);
-                let mut start_radius = a.center_radius;
-                start_radius[3] = BOND_RADIUS;
+                let ([x, y, z], end) = (atoms[i].0, atoms[j].0);
                 BondInstance {
-                    start_radius,
-                    end: b.center_radius,
-                    start_color: a.color,
-                    end_color: b.color,
+                    start_radius: [x, y, z, model.bond_radius()],
+                    end: [end[0], end[1], end[2], 0.0],
+                    start_color: color(i),
+                    end_color: color(j),
                 }
             })
             .collect()
@@ -333,15 +445,18 @@ pub(crate) fn draw(
         .map(|(i, j)| line(corner(i), corner(j), CELL_EDGE_WIDTH, 0.0, cell_color))
         .collect();
 
-    let atoms = &shown.displayed.atoms;
+    let displayed = &shown.displayed.atoms;
     let mut polyhedra = Vec::with_capacity(shown.displayed.polyhedra.len());
     for polyhedron in &shown.displayed.polyhedra {
-        let [r, g, b, _] = spheres[polyhedron.center].color;
+        let [r, g, b, _] = color(polyhedron.center);
         let corners = polyhedron.vertices();
         // Indices into the corners, which the faces name as atoms.
         let local = |atom: usize| corners.binary_search(&atom).unwrap_or(0) as u32;
         polyhedra.push(Polyhedron {
-            vertices: corners.iter().map(|&i| point(atoms[i].position)).collect(),
+            vertices: corners
+                .iter()
+                .map(|&i| point(displayed[i].position))
+                .collect(),
             triangles: polyhedron.triangles().map(|t| t.map(local)).collect(),
             color: [r, g, b, POLYHEDRON_OPACITY],
         });
@@ -349,11 +464,39 @@ pub(crate) fn draw(
         let [er, eg, eb] = edge_color;
         lines.extend(polyhedron.edges().into_iter().map(|[i, j]| {
             line(
-                atoms[i].position,
-                atoms[j].position,
+                displayed[i].position,
+                displayed[j].position,
                 POLYHEDRON_EDGE_WIDTH,
                 0.0,
                 [er, eg, eb, 1.0],
+            )
+        }));
+    }
+    for shown_plane in &style.planes {
+        let Some(corners) = shown_plane
+            .plane
+            .section(lattice, &style.range, shown.orbits)
+        else {
+            continue;
+        };
+        let [r, g, b] = srgb(PLANE_COLORS[shown_plane.color % PLANE_COLORS.len()]);
+        polyhedra.push(Polyhedron {
+            vertices: corners.iter().map(|&c| point(c)).collect(),
+            // A fan over the convex polygon.
+            triangles: (1..corners.len() as u32 - 1)
+                .map(|i| [0, i, i + 1])
+                .collect(),
+            color: [r, g, b, PLANE_OPACITY],
+        });
+        let edge = [r, g, b].map(|c| c * PLANE_EDGE_SHADE);
+        let n = corners.len();
+        lines.extend((0..n).map(|i| {
+            line(
+                corners[i],
+                corners[(i + 1) % n],
+                PLANE_EDGE_WIDTH,
+                0.0,
+                [edge[0], edge[1], edge[2], 1.0],
             )
         }));
     }
@@ -382,6 +525,7 @@ pub(crate) fn draw(
 
     Scene {
         spheres,
+        ellipsoids,
         bonds,
         lines,
         polyhedra,
@@ -408,6 +552,15 @@ mod tests {
         }
     }
 
+    fn style(model: DisplayModel) -> Style {
+        Style {
+            model,
+            probability: mw_crystal::DEFAULT_PROBABILITY,
+            planes: Vec::new(),
+            range: DisplayRange::default(),
+        }
+    }
+
     /// Polyhedra are drawn in their center's color, translucent, with
     /// darker edges; the faces name the polyhedron's own corners.
     #[test]
@@ -424,7 +577,7 @@ mod tests {
             displayed: &displayed,
             ids: None,
         };
-        let scene = draw(&atoms, &[], DisplayModel::Polyhedra, colors());
+        let scene = draw(&atoms, &[], &style(DisplayModel::Polyhedra), colors());
         assert_eq!(scene.spheres.len(), displayed.atoms.len());
         assert_eq!(scene.polyhedra.len(), 9);
         // Ti–O bonds are the polyhedra.
@@ -465,7 +618,7 @@ mod tests {
             ids: None,
         };
         let started = std::time::Instant::now();
-        let scene = draw(&atoms, &[], DisplayModel::Polyhedra, colors());
+        let scene = draw(&atoms, &[], &style(DisplayModel::Polyhedra), colors());
         let elapsed = started.elapsed();
         assert_eq!(scene.polyhedra.len(), 2331);
         eprintln!(
@@ -475,5 +628,105 @@ mod tests {
             scene.lines.len()
         );
         assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
+    }
+
+    /// In the ellipsoids model every atom is an ellipsoid, in the order of
+    /// the atoms shown: anisotropic ones with their principal ellipses,
+    /// isotropic ones as spheres of C·√U, the others as small spheres;
+    /// bonds are thin.
+    #[test]
+    fn ellipsoids_stand_for_the_atoms() {
+        use mw_crystal::{Adp, Measured};
+        let mut sample = mw_crystal::sample::load(mw_crystal::sample::SampleKey::Rutile);
+        let structure = &mut sample.structure;
+        structure.sites[0].occupants[0].adp = Some(Adp::Isotropic(Measured::exact(0.006)));
+        structure.sites[1].occupants[0].adp = Some(Adp::Anisotropic(
+            [0.007, 0.007, 0.004, -0.002, 0.0, 0.0].map(Measured::exact),
+        ));
+        let derived = mw_crystal::Derived::compute(structure);
+        let displayed = derived.display(structure, &DisplayRange::default());
+        let atoms = Atoms {
+            structure,
+            orbits: &derived.orbits,
+            displayed: &displayed,
+            ids: None,
+        };
+        let scene = draw(&atoms, &[], &style(DisplayModel::Ellipsoids), colors());
+        assert!(scene.spheres.is_empty());
+        assert_eq!(scene.ellipsoids.len(), displayed.atoms.len());
+        let c = mw_crystal::probability_scale(0.5) as f32;
+        for (ellipsoid, atom) in scene.ellipsoids.iter().zip(&displayed.atoms) {
+            assert_eq!(ellipsoid.center_radius[..3], point(atom.position));
+            if atom.element == "Ti" {
+                let r = c * 0.006f32.sqrt();
+                assert!((ellipsoid.axes[0][0] - r).abs() < 1e-6);
+                assert_eq!(ellipsoid.axes[0][3], 0.0);
+            } else {
+                // Along [1 −1 0] the largest: U11 − U12 = 0.009.
+                assert!((ellipsoid.center_radius[3] - c * 0.009f32.sqrt()).abs() < 1e-5);
+                assert_eq!(ellipsoid.axes[0][3], 1.0);
+            }
+        }
+        assert!(!scene.bonds.is_empty());
+        assert!(
+            scene
+                .bonds
+                .iter()
+                .all(|b| b.start_radius[3] == ELLIPSOID_BOND_RADIUS)
+        );
+
+        // Without parameters: small spheres.
+        let bare = mw_crystal::sample::load(mw_crystal::sample::SampleKey::Rutile);
+        let displayed = bare
+            .derived
+            .display(&bare.structure, &DisplayRange::default());
+        let atoms = Atoms {
+            structure: &bare.structure,
+            orbits: &bare.derived.orbits,
+            displayed: &displayed,
+            ids: None,
+        };
+        let scene = draw(&atoms, &[], &style(DisplayModel::Ellipsoids), colors());
+        assert!(
+            scene
+                .ellipsoids
+                .iter()
+                .all(|e| e.center_radius[3] == NO_ELLIPSOID_RADIUS)
+        );
+    }
+
+    /// A lattice plane is a translucent polygon in its color with a darker
+    /// outline, cut to the display range; one outside the range is not
+    /// drawn.
+    #[test]
+    fn planes_are_cut_to_the_range() {
+        let sample = mw_crystal::sample::load(mw_crystal::sample::SampleKey::Rutile);
+        let displayed = sample
+            .derived
+            .display(&sample.structure, &DisplayRange::default());
+        let atoms = Atoms {
+            structure: &sample.structure,
+            orbits: &sample.derived.orbits,
+            displayed: &displayed,
+            ids: None,
+        };
+        let plane = |miller, position, color| ShownPlane {
+            id: color as u32,
+            plane: LatticePlane::new(miller, position).unwrap(),
+            color,
+        };
+        let mut style = style(DisplayModel::BallAndStick);
+        style.planes = vec![plane([1, 1, 0], 1.0, 1), plane([0, 0, 1], 3.0, 0)];
+        let scene = draw(&atoms, &[], &style, colors());
+        // x + y = 1 cuts the cell in a rectangle; z = 3c misses it.
+        assert_eq!(scene.polyhedra.len(), 1);
+        let polygon = &scene.polyhedra[0];
+        assert_eq!(polygon.vertices.len(), 4);
+        assert_eq!(polygon.triangles, [[0, 1, 2], [0, 2, 3]]);
+        let [r, g, b] = srgb(PLANE_COLORS[1]);
+        assert_eq!(polygon.color, [r, g, b, PLANE_OPACITY]);
+        // The cell's 12 edges and the outline's 4.
+        assert_eq!(scene.lines.len(), 16);
+        assert!((scene.lines[12].color[0] - r * PLANE_EDGE_SHADE).abs() < 1e-6);
     }
 }

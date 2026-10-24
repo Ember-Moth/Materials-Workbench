@@ -39,7 +39,14 @@ impl StructureWorkspace {
             self.measurement_labels(cx)
         };
         let hovered = self.render_hovered_atom(cx);
-        let info = self.display_info();
+        let info = match self.ellipsoid_info() {
+            Some(note) => tr!(
+                "viewport.info_with_note",
+                info = self.display_info(),
+                note = note
+            ),
+            None => self.display_info(),
+        };
         let preparing = self.is_preparing_display();
         let chip = || {
             div()
@@ -217,6 +224,32 @@ impl StructureWorkspace {
                         .content(move |_, _, _| panel.clone()),
                 )
             })
+            .child(model_button(
+                "model-ellipsoids",
+                tr!("toolbar.ellipsoids"),
+                DisplayModel::Ellipsoids,
+            ))
+            // Likewise the probability with the ellipsoids.
+            .when(self.display_model() == DisplayModel::Ellipsoids, |this| {
+                let panel = self.ellipsoids_panel.clone();
+                this.child(
+                    Popover::new("ellipsoid-probability")
+                        .anchor(Anchor::BottomCenter)
+                        .open(self.ellipsoids_open)
+                        .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                            this.set_ellipsoids_open(*open, window, cx)
+                        }))
+                        .trigger(
+                            Button::new("ellipsoid-probability-trigger")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ChevronUp)
+                                .tooltip(tr!("toolbar.ellipsoid_probability"))
+                                .accessibility_label(tr!("toolbar.ellipsoid_probability")),
+                        )
+                        .content(move |_, _, _| panel.clone()),
+                )
+            })
             .child(div().w_px().h_5().mx_1().bg(theme.border))
             .child(
                 Button::new("toggle-measure")
@@ -250,6 +283,22 @@ impl StructureWorkspace {
                         window.dispatch_action(Box::new(ToggleMoveAtoms), cx)
                     })),
             )
+            .child({
+                let panel = self.planes_panel.clone();
+                Popover::new("lattice-planes")
+                    .anchor(Anchor::BottomCenter)
+                    .open(self.planes_open)
+                    .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                        this.set_planes_open(*open, window, cx)
+                    }))
+                    .trigger(
+                        Button::new("lattice-planes-trigger")
+                            .ghost()
+                            .small()
+                            .label(tr!("toolbar.planes")),
+                    )
+                    .content(move |_, _, _| panel.clone())
+            })
             .child({
                 let panel = self.range_panel.clone();
                 Popover::new("display-range")

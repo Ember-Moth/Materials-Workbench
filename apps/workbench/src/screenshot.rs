@@ -728,7 +728,111 @@ const TOUR: &[(&str, Step)] = &[
         settings::AiSetting::remember(&client, cx);
         settings::open(window, cx)
     }),
+    // Displacement ellipsoids (M16): (Ba,Sr)TiO₃ with anisotropic O.
+    ("_import-bst", |workbench, window, cx| {
+        window.close_dialog(cx);
+        workbench.import_paths(vec![fixture("bst_su_aniso.cif")], window, cx);
+    }),
+    // Each O ellipsoid is long along its own Ti–O–Ti line, with the
+    // principal ellipses drawn; Ba/Sr and Ti are round.
+    ("72-ellipsoids", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowEllipsoids), cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+    }),
+    // The popover beside the button, at 90 %: larger ellipsoids.
+    ("73-ellipsoid-probability", |workbench, window, cx| {
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_ellipsoid_probability(0.9, cx)
+            });
+        }
+        window.dispatch_action(Box::new(mw_structure::EditEllipsoids), cx);
+    }),
+    // A POSCAR has no displacement parameters: small spheres, and the
+    // info chip says how many sites have no ellipsoid.
+    ("_import-poscar-ellipsoids", |workbench, window, cx| {
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_ellipsoids_open(false, window, cx)
+            });
+        }
+        workbench.import_paths(
+            vec![fixture("poscar/gaas_primitive_cartesian.vasp")],
+            window,
+            cx,
+        );
+    }),
+    ("74-ellipsoids-without-adp", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowEllipsoids), cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+    }),
+    // Lattice planes (M16), on rutile.
+    ("_show-rutile-planes", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        workbench.open_structure(StructureEntryId(1), window, cx);
+    }),
+    // (1 1 0) through the cell's diagonal and (0 0 1) halfway up, each in
+    // its color; the popover lists them with their spacings.
+    ("75-planes", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowBallAndStick), cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+        add_plane(workbench, [1, 1, 0], 1.0, window, cx);
+        add_plane(workbench, [0, 0, 1], 0.5, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditPlanes), cx);
+    }),
+    // Planes span the display range and sort among the polyhedra: 2 × 2 × 2
+    // cells of octahedra, and (1 1 0) two spacings out through the block's
+    // middle.
+    ("76-planes-polyhedra", |workbench, window, cx| {
+        set_planes_open(workbench, false, window, cx);
+        add_plane(workbench, [1, 1, 0], 2.0, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+        let range = DisplayRange::Cells {
+            counts: [2, 2, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    // In a sphere around the body-center Ti, the planes are discs.
+    ("77-planes-sphere", |workbench, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::ShowBallAndStick), cx);
+        let range = DisplayRange::Sphere {
+            center: SphereCenter::Point([0.5; 3]),
+            radius: 6.0,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
 ];
+
+/// Draws a lattice plane on the open structure, as the planes popover does.
+fn add_plane(
+    workbench: &Workbench,
+    miller: [i32; 3],
+    position: f64,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Ok(plane) = mw_crystal::LatticePlane::new(miller, position) else {
+        return;
+    };
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| workspace.add_plane(plane, window, cx));
+    }
+}
+
+/// Opens or closes the lattice planes popover.
+fn set_planes_open(workbench: &Workbench, open: bool, window: &mut Window, cx: &mut App) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_planes_open(open, window, cx)
+        });
+    }
+}
 
 /// Opens or closes the popover choosing the polyhedra's centers.
 fn set_polyhedra_open(workbench: &Workbench, open: bool, cx: &mut App) {

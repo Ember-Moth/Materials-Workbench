@@ -582,7 +582,7 @@ impl DisplayRangePanel {
 
 /// Whether an input event commits the typed value: Enter, or leaving the
 /// field.
-fn commits(event: &InputEvent) -> bool {
+pub(crate) fn commits(event: &InputEvent) -> bool {
     matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur)
 }
 

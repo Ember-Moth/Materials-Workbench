@@ -47,6 +47,9 @@ viewport:
   info_sphere:
     en: "%{atoms} atoms · sphere of radius %{radius} Å · orthographic"
     zh-CN: "%{atoms} 个原子 · 半径 %{radius} Å 的球 · 正交投影"
+  info_with_note:
+    en: "%{info} · %{note}"
+    zh-CN: "%{info} · %{note}"
   preparing_cells:
     en: "Preparing %{a} × %{b} × %{c} cells…"
     zh-CN: "正在准备 %{a} × %{b} × %{c} 晶胞…"
@@ -134,6 +137,12 @@ toolbar:
   polyhedron_centers:
     en: Polyhedron centers
     zh-CN: 多面体的中心原子
+  ellipsoids:
+    en: Ellipsoids
+    zh-CN: 椭球
+  ellipsoid_probability:
+    en: Probability of the ellipsoids
+    zh-CN: 椭球的概率
   measure:
     en: Measure
     zh-CN: 测量
@@ -146,6 +155,9 @@ toolbar:
   move_tooltip:
     en: Drag atoms to move their sites
     zh-CN: 拖动原子来移动位点
+  planes:
+    en: Planes…
+    zh-CN: 晶面…
   display_range:
     en: Display range…
     zh-CN: 显示范围…
@@ -634,6 +646,15 @@ command:
   polyhedron_centers:
     en: Polyhedron centers…
     zh-CN: 多面体的中心原子…
+  ellipsoids:
+    en: Displacement ellipsoids
+    zh-CN: 热振动椭球模型
+  ellipsoid_probability:
+    en: Probability of the ellipsoids…
+    zh-CN: 热振动椭球的概率…
+  planes:
+    en: Lattice planes…
+    zh-CN: 晶面…
   display_range:
     en: Display range…
     zh-CN: 显示范围…
@@ -662,6 +683,78 @@ polyhedra:
   none:
     en: No atom has three or more ligands, so there are no polyhedra to draw.
     zh-CN: 没有原子有 3 个以上的配体，画不出多面体。
+ellipsoids:
+  title:
+    en: Displacement ellipsoids
+    zh-CN: 热振动椭球
+  probability:
+    en: Probability
+    zh-CN: 概率
+  probability_hint:
+    en: Each ellipsoid holds its atom's center with this probability. ORTEP drawings usually use 50 %.
+    zh-CN: 原子中心落在椭球内的概率。ORTEP 图通常用 50 %。
+  error:
+    en: Enter a whole number from 1 to 99.
+    zh-CN: 请输入 1 到 99 的整数。
+  missing:
+    en: "%{sites} have no displacement parameters and are drawn as small spheres."
+    zh-CN: "%{sites} 没有位移参数，画成小球。"
+  not_positive:
+    en: "The displacement parameters of %{sites} are not positive definite, so they are drawn as small spheres."
+    zh-CN: "%{sites} 的位移参数不是正定的，画成小球。"
+  separator:
+    en: ", "
+    zh-CN: "、"
+  and_more:
+    en: "%{sites} and %{count} more"
+    zh-CN: "%{sites} 等另外 %{count} 个位点"
+  info_without:
+    en: "%{count} sites without ellipsoids"
+    zh-CN: "%{count} 个位点没有椭球"
+planes:
+  title:
+    en: Lattice planes
+    zh-CN: 晶面
+  empty:
+    en: No planes yet. Enter Miller indices below to draw one.
+    zh-CN: 还没有晶面。在下面输入 Miller 指数来画一个。
+  spacing:
+    en: "d = %{d} Å"
+    zh-CN: "d = %{d} Å"
+  spacing_outside:
+    en: "d = %{d} Å · outside the display range"
+    zh-CN: "d = %{d} Å · 不在显示范围内"
+  position_label:
+    en: "Position of %{plane}, in interplanar spacings"
+    zh-CN: "%{plane} 的位置，以晶面间距为单位"
+  position_hint:
+    en: The position is the distance from the origin in interplanar spacings d; 1 is the nearest plane of the family, 0 passes through the origin.
+    zh-CN: 位置是离原点的距离，以晶面间距 d 为单位：1 是这一族里离原点最近的面，0 过原点。
+  remove:
+    en: Remove plane
+    zh-CN: 删除晶面
+  remove_label:
+    en: "Remove %{plane}"
+    zh-CN: "删除 %{plane}"
+  add_title:
+    en: Add a plane (hkl)
+    zh-CN: 添加晶面 (hkl)
+  index_label:
+    en: "Miller index %{index}"
+    zh-CN: "Miller 指数 %{index}"
+  add:
+    en: Add
+    zh-CN: 添加
+  error:
+    indices:
+      en: Miller indices are whole numbers, such as 1, 0 or −2.
+      zh-CN: Miller 指数要是整数，如 1、0、−2。
+    zero:
+      en: h, k and l cannot all be 0.
+      zh-CN: h、k、l 不能全为 0。
+    position:
+      en: The position must be a number, such as 1 or 0.5.
+      zh-CN: 位置要是一个数，如 1 或 0.5。
 move:
   prompt:
     en: "Drag an atom to move its site with all equivalent atoms; hold %{key} to leave its special position"

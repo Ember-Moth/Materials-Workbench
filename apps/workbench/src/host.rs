@@ -225,6 +225,7 @@ impl Host for AppHost<'_, '_> {
                     DisplayModel::BallAndStick => mw_structure::DisplayModel::BallAndStick,
                     DisplayModel::SpaceFilling => mw_structure::DisplayModel::SpaceFilling,
                     DisplayModel::Polyhedra => mw_structure::DisplayModel::Polyhedra,
+                    DisplayModel::Ellipsoids => mw_structure::DisplayModel::Ellipsoids,
                 };
                 workspace.set_display_model(model, window, cx);
             }

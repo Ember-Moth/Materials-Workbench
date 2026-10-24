@@ -49,7 +49,9 @@ pub use manifest::{
 pub use store::{ProjectDir, ReadError, Save, SaveError, Source, read_manifest, save, write_view};
 pub use structure_file::StructureFile;
 pub use time::Timestamp;
-pub use view::{Camera, DisplayModel, DisplayRange, EntryView, PanelTab, SphereCenter, ViewState};
+pub use view::{
+    Camera, DisplayModel, DisplayRange, EntryView, PanelTab, Plane, SphereCenter, ViewState,
+};
 
 /// The format version this code writes and the newest it reads (design
 /// §4): 2 since lattices can have an explicit orientation and structures

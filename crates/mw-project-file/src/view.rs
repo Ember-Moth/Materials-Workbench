@@ -35,6 +35,15 @@ pub struct EntryView {
     /// default rule. Since `view.json` version 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polyhedron_centers: Option<Vec<String>>,
+    /// The probability the displacement ellipsoids are drawn at, a
+    /// fraction, once changed from the default 0.5 (crystallography design
+    /// §5.8). Since `view.json` version 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ellipsoid_probability: Option<f64>,
+    /// The lattice planes drawn, in the order they were added
+    /// (crystallography design §5.7). Since `view.json` version 4.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planes: Vec<Plane>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<PanelTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +62,8 @@ impl EntryView {
             display_model,
             display_range: None,
             polyhedron_centers: None,
+            ellipsoid_probability: None,
+            planes: Vec::new(),
             panel,
             panel_open,
         }
@@ -63,12 +74,44 @@ impl EntryView {
         self
     }
 
+    pub fn with_planes(mut self, planes: Vec<Plane>) -> Self {
+        self.planes = planes;
+        self
+    }
+
+    pub fn with_ellipsoid_probability(mut self, probability: f64) -> Self {
+        self.ellipsoid_probability = Some(probability);
+        self
+    }
+
     /// The elements chosen as the centers of polyhedra, in order.
     pub fn with_polyhedron_centers(mut self, mut elements: Vec<String>) -> Self {
         elements.sort();
         elements.dedup();
         self.polyhedron_centers = Some(elements);
         self
+    }
+}
+
+/// A lattice plane drawn over a structure: the plane `h·x + k·y + l·z =
+/// position` of the family (hkl), `position` interplanar spacings from the
+/// origin (crystallography design §5.7).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Plane {
+    pub miller: [i32; 3],
+    pub position: f64,
+    /// Which of the application's plane colors it is drawn in.
+    pub color: u32,
+}
+
+impl Plane {
+    pub fn new(miller: [i32; 3], position: f64, color: u32) -> Self {
+        Self {
+            miller,
+            position,
+            color,
+        }
     }
 }
 
@@ -101,6 +144,8 @@ pub enum DisplayModel {
     BallAndStick,
     SpaceFilling,
     Polyhedra,
+    /// Since `view.json` version 4.
+    Ellipsoids,
 }
 
 /// What part of the crystal is shown (crystallography design §5.5).

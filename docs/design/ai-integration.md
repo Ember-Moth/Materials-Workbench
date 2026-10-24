@@ -99,7 +99,7 @@ Capability
   - 对称性检测与对称化（M9，晶体学设计稿 7.10 节）：只读的 `structure.detect_symmetry` 给出对称化的预览而不改结构：检测到的空间群类型、结果的空间群（保持的晶胞容纳不下全部对称性时是子群）、位点数、晶胞内原子数、操作数、原子的最大位移和移动最大的位点、是否换晶胞或转朝向、原点移了多远、结果的晶胞；可撤销的 `structure.symmetrize` 执行同样的对称化，输出 `changed`、`revision` 和同一份预览（`result`）。输入相同：`tolerance`（Å，0 表示用结构自己的容差，因为输入不用可空类型）和 `standardize`。拒绝时返回 `symmetrize_no_higher_symmetry`、`symmetrize_not_found`、`symmetrize_mismatch`、`symmetrize_position_tolerance`、`symmetrize_too_large`、`symmetrize_no_atoms`，容差为负时 `invalid_arguments`。只读的那个的说明不提 `structure.symmetrize`：MCP Server 不提供编辑工具，提了只会让客户端去找不存在的工具；
   - `history.undo`、`history.redo`；
   - M18（5.3 节）：可撤销的 `structure.convert_to_p1`（已经是 P1 时返回 `already_p1`）、`structure.make_supercell`（`matrix` 是 M 的三行整数，`name` 为空时用默认名；行列式不为正时 `invalid_arguments`，超过 10 万个原子时 `too_large`）、`file.import`（`project` 给项目 ID，CIF 或 POSCAR），外部副作用的 `structure.export_file`（`overwrite` 为假而文件已存在时 `file_exists`，路径不在允许范围内时 `not_allowed`）。`file.open` 也能读 POSCAR 了：读文件、给结构命名都经 `parse_import`，规则与界面打开文件相同；
-  - M18 的视图工具（5.3 节"阶段 5 的实现"），副作用等级为视图、只在有窗口时可用：`view.select`（`sites`、`atoms`，都空时清除选区；不存在的位点和原子返回 `unknown_site`、`unknown_atom`）、`view.set_display_model`（`ball_and_stick`、`space_filling`、`polyhedra`）、`view.reset`、`view.snapshot`（宽、高 64–2048 像素，或都为 0 表示视口的大小，否则 `invalid_arguments`；渲染失败时 `render_failed`），结果里带 PNG 图像。
+  - M18 的视图工具（5.3 节"阶段 5 的实现"），副作用等级为视图、只在有窗口时可用：`view.select`（`sites`、`atoms`，都空时清除选区；不存在的位点和原子返回 `unknown_site`、`unknown_atom`）、`view.set_display_model`（`ball_and_stick`、`space_filling`、`polyhedra`，M16 起还有 `ellipsoids`）、`view.reset`、`view.snapshot`（宽、高 64–2048 像素，或都为 0 表示视口的大小，否则 `invalid_arguments`；渲染失败时 `render_failed`），结果里带 PNG 图像。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
 - `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、视图、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。`Spec::new(name, description, effect)` 默认两种模式都可用；`additive()`、`idempotent()` 给出 MCP 注解要的两个标记（5.3 节），外部副作用的能力必须用 `register_confirmed` 注册，带一个说明"要确认的是什么"的检查函数，否则注册时就 panic。
@@ -323,7 +323,7 @@ Capability
 **视图工具**（阶段 5，仅连接应用时）：新增副作用等级"视图"（7.1 节）：只改窗口里显示的内容，不改数据，不进撤销栈。
 
 - `view.select`：选中位点或原子（`sites`、`atoms`，都空时清除选区），与在视口里点选相同；
-- `view.set_display_model`：`ball_and_stick`、`space_filling`、`polyhedra`；
+- `view.set_display_model`：`ball_and_stick`、`space_filling`、`polyhedra`、`ellipsoids`（M16，热振动椭球，概率是窗口里设的）；晶面和椭球的概率还没有视图工具；
 - `view.reset`：相机回到默认视角；
 - `view.snapshot`：用当前相机和显示模型离屏渲染一帧（宽、高 64–2048 像素，0 表示视口当前的大小），结果里是 PNG 图像（MCP 的 `image` 内容块），结构化输出只有宽高。`CallResult` 为此新增可选的图像。渲染用视口自己的渲染线程，不另建 GPU 设备。
 

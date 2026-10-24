@@ -15,13 +15,14 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use mw_crystal::{
     AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
-    CrystalDocument, DisplayRange, Edit, EditMode, PolyhedronCenters, SiteId, SphereCenter,
-    Structure, Target, element,
+    CrystalDocument, DEFAULT_PROBABILITY, DisplayRange, Edit, EditMode, LatticePlane,
+    PolyhedronCenters, SiteId, SphereCenter, Structure, Target, element,
 };
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
     Camera, DisplayModel as SavedDisplayModel, DisplayRange as SavedDisplayRange, EntryView,
-    PanelTab as SavedPanelTab, SphereCenter as SavedSphereCenter, StructureFile,
+    PanelTab as SavedPanelTab, Plane as SavedPlane, SphereCenter as SavedSphereCenter,
+    StructureFile,
 };
 use mw_viewport::{CameraPose, Snapshot, Viewport};
 
@@ -29,9 +30,11 @@ use crate::actions::*;
 use crate::cell_dialog::{self, CellDialog};
 use crate::display_range::{DisplayRangePanel, DisplayState};
 use crate::document::StructureDocument;
+use crate::ellipsoids::EllipsoidsPanel;
 use crate::moving::AtomDrag;
+use crate::planes::PlanesPanel;
 use crate::polyhedra::PolyhedraPanel;
-use crate::scene::{self, Atoms, DisplayModel, LineColors};
+use crate::scene::{self, Atoms, DisplayModel, LineColors, ShownPlane, Style};
 use crate::selection::Selection;
 use crate::symmetrize_dialog::{self, SymmetrizeDialog};
 use crate::{dialogs, format};
@@ -141,6 +144,19 @@ pub struct StructureWorkspace {
     pub(crate) polyhedra_panel: Entity<PolyhedraPanel>,
     /// Whether the popover choosing the centers is open.
     pub(crate) polyhedra_open: bool,
+    /// The probability of the displacement ellipsoids in the ellipsoids
+    /// model (crystallography design §5.8): view state.
+    pub(crate) ellipsoid_probability: f64,
+    pub(crate) ellipsoids_panel: Entity<EllipsoidsPanel>,
+    /// Whether the popover setting the probability is open.
+    pub(crate) ellipsoids_open: bool,
+    /// The lattice planes drawn (crystallography design §5.7): view state.
+    pub(crate) planes: Vec<ShownPlane>,
+    /// The id the last plane added was given.
+    pub(crate) next_plane_id: u32,
+    pub(crate) planes_panel: Entity<PlanesPanel>,
+    /// Whether the planes popover is open.
+    pub(crate) planes_open: bool,
     /// What part of the crystal the viewport shows (crystallography design
     /// §5.5): view state, kept apart from the document and its undo.
     pub(crate) display_range: DisplayRange,
@@ -237,7 +253,9 @@ impl StructureWorkspace {
 
         let workspace = cx.entity().downgrade();
         let range_panel = cx.new(|cx| DisplayRangePanel::new(workspace.clone(), window, cx));
-        let polyhedra_panel = cx.new(|_| PolyhedraPanel::new(workspace));
+        let polyhedra_panel = cx.new(|_| PolyhedraPanel::new(workspace.clone()));
+        let ellipsoids_panel = cx.new(|cx| EllipsoidsPanel::new(workspace.clone(), window, cx));
+        let planes_panel = cx.new(|cx| PlanesPanel::new(workspace, window, cx));
 
         let mut this = Self {
             document,
@@ -249,6 +267,13 @@ impl StructureWorkspace {
             polyhedron_centers: PolyhedronCenters::default(),
             polyhedra_panel,
             polyhedra_open: false,
+            ellipsoid_probability: DEFAULT_PROBABILITY,
+            ellipsoids_panel,
+            ellipsoids_open: false,
+            planes: Vec::new(),
+            next_plane_id: 0,
+            planes_panel,
+            planes_open: false,
             display_range: DisplayRange::default(),
             display: DisplayState::default(),
             range_panel,
@@ -371,6 +396,7 @@ impl StructureWorkspace {
             DisplayModel::BallAndStick => SavedDisplayModel::BallAndStick,
             DisplayModel::SpaceFilling => SavedDisplayModel::SpaceFilling,
             DisplayModel::Polyhedra => SavedDisplayModel::Polyhedra,
+            DisplayModel::Ellipsoids => SavedDisplayModel::Ellipsoids,
         };
         let panel = match self.panel {
             PanelTab::Properties => SavedPanelTab::Properties,
@@ -388,6 +414,21 @@ impl StructureWorkspace {
         if let PolyhedronCenters::Elements(elements) = &self.polyhedron_centers {
             view = view.with_polyhedron_centers(elements.iter().cloned().collect());
         }
+        if self.ellipsoid_probability != DEFAULT_PROBABILITY {
+            view = view.with_ellipsoid_probability(self.ellipsoid_probability);
+        }
+        let planes = self
+            .planes
+            .iter()
+            .map(|shown| {
+                SavedPlane::new(
+                    shown.plane.miller(),
+                    shown.plane.position(),
+                    shown.color as u32,
+                )
+            })
+            .collect();
+        view = view.with_planes(planes);
         if self.display_range == DisplayRange::default() {
             return view;
         }
@@ -413,6 +454,7 @@ impl StructureWorkspace {
                 SavedDisplayModel::BallAndStick => DisplayModel::BallAndStick,
                 SavedDisplayModel::SpaceFilling => DisplayModel::SpaceFilling,
                 SavedDisplayModel::Polyhedra => DisplayModel::Polyhedra,
+                SavedDisplayModel::Ellipsoids => DisplayModel::Ellipsoids,
             };
             if self.display_model != model {
                 self.display_model = model;
@@ -426,6 +468,19 @@ impl StructureWorkspace {
                 PolyhedronCenters::Elements(elements.iter().cloned().collect())
             });
         self.set_polyhedron_centers(centers, cx);
+        // A probability out of range is the default, like a view that
+        // cannot be read.
+        let probability = view
+            .ellipsoid_probability
+            .filter(|p| *p > 0.0 && *p < 1.0)
+            .unwrap_or(DEFAULT_PROBABILITY);
+        self.set_ellipsoid_probability(probability, cx);
+        // Planes that cannot be made are left out, as unreadable views are.
+        let planes = view.planes.iter().filter_map(|saved| {
+            let plane = LatticePlane::new(saved.miller, saved.position).ok()?;
+            Some((plane, saved.color as usize))
+        });
+        self.restore_planes(planes, cx);
         if let Some(panel) = view.panel {
             self.panel = match panel {
                 SavedPanelTab::Properties => PanelTab::Properties,
@@ -486,8 +541,10 @@ impl StructureWorkspace {
     ) {
         if self.display_model != model {
             self.display_model = model;
-            // The centers' popover belongs to the polyhedra.
+            // The popovers of the centers and the probability belong to
+            // their models.
             self.polyhedra_open &= model == DisplayModel::Polyhedra;
+            self.ellipsoids_open &= model == DisplayModel::Ellipsoids;
             self.refresh_scene(cx);
             cx.notify();
         }
@@ -620,7 +677,7 @@ impl StructureWorkspace {
             ids: None,
         };
         let annotations = self.document.crystal.annotations();
-        let scene = scene::draw(&atoms, annotations, self.display_model, colors);
+        let scene = scene::draw(&atoms, annotations, &self.style(), colors);
         let reframe = self.take_reframe();
         self.viewport.update(cx, |viewport, cx| {
             viewport.set_scene(scene, cx);
@@ -629,6 +686,16 @@ impl StructureWorkspace {
             }
         });
         self.sync_viewport_selection(cx);
+    }
+
+    /// How the scene draws the atoms shown.
+    pub(crate) fn style(&self) -> Style {
+        Style {
+            model: self.display_model,
+            probability: self.ellipsoid_probability,
+            planes: self.planes.clone(),
+            range: self.display_range,
+        }
     }
 
     pub(crate) fn line_colors(&self, cx: &App) -> LineColors {
@@ -828,6 +895,10 @@ impl StructureWorkspace {
         self.set_display_model(DisplayModel::Polyhedra, window, cx);
     }
 
+    fn show_ellipsoids(&mut self, _: &ShowEllipsoids, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_display_model(DisplayModel::Ellipsoids, window, cx);
+    }
+
     fn show_properties(&mut self, _: &ShowPropertiesPanel, _: &mut Window, cx: &mut Context<Self>) {
         self.set_panel(PanelTab::Properties, cx);
     }
@@ -1011,6 +1082,9 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::show_space_filling))
             .on_action(cx.listener(Self::show_polyhedra))
             .on_action(cx.listener(Self::edit_polyhedra))
+            .on_action(cx.listener(Self::show_ellipsoids))
+            .on_action(cx.listener(Self::edit_ellipsoids))
+            .on_action(cx.listener(Self::edit_planes))
             .on_action(cx.listener(Self::edit_display_range))
             .on_action(cx.listener(Self::show_properties))
             .on_action(cx.listener(Self::show_sites))

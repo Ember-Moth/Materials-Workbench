@@ -10,7 +10,10 @@
 //! [`DisplayRange`] chooses the part of the crystal the view shows, a block
 //! of cells or a sphere, and gives its atoms and bonds ([`Displayed`]); in
 //! the polyhedra model also the coordination [`Polyhedron`]s of the centers
-//! [`PolyhedronCenters`] chooses.
+//! [`PolyhedronCenters`] chooses. A [`LatticePlane`] of the family (hkl)
+//! gives its spacing and the polygon where it cuts the display range;
+//! [`Displacements`] give each atom's displacement ellipsoid at a
+//! probability.
 //!
 //! Editing (design §7): an [`Edit`] is a serializable command on whole
 //! sites with an exact inverse; [`target_sites`] refuses edits of single
@@ -28,6 +31,7 @@ mod bonds;
 mod cell_transform;
 mod constraints;
 mod derived;
+mod displacement;
 mod display;
 mod document;
 mod edit;
@@ -40,6 +44,7 @@ mod linalg;
 mod measured;
 mod neighbors;
 mod placement;
+mod planes;
 mod polyhedra;
 pub mod sample;
 mod site;
@@ -61,6 +66,7 @@ pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
     DETECTION_LIMIT, Derived, SymmetryAnalysis,
 };
+pub use displacement::{DEFAULT_PROBABILITY, Displacement, Displacements, probability_scale};
 pub use display::{
     DisplayAtom, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS, SphereCenter,
 };
@@ -76,6 +82,7 @@ pub use id_map::{AtomFate, IdMap, PositionMap, Rebasing, Relocation, SiteFate};
 pub use lattice::{CellParams, Lattice, Orientation, Rotation};
 pub use measured::Measured;
 pub use neighbors::Neighbor;
+pub use planes::{LatticePlane, PlaneError};
 pub use polyhedra::{
     CenterElement, Coordination, DEFAULT_MAX_COORDINATION, MAX_LIGANDS, Polyhedron,
     PolyhedronCenters,

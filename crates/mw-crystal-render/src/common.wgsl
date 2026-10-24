@@ -15,6 +15,7 @@ struct Camera {
 // Must match `PickId` in renderer.rs.
 const SPHERE_ID: u32 = 0x40000000u;
 const BOND_ID: u32 = 0x80000000u;
+const ELLIPSOID_ID: u32 = 0xC0000000u;
 
 struct FsOut {
     @location(0) color: vec4<f32>,

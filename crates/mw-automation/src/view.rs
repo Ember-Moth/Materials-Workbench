@@ -23,6 +23,7 @@ string_enum! {
         BallAndStick => "ball_and_stick",
         SpaceFilling => "space_filling",
         Polyhedra => "polyhedra",
+        Ellipsoids => "ellipsoids",
     }
 }
 
@@ -55,8 +56,10 @@ schema_struct! {
         /// structure.open first.
         pub structure: StructureEntryId,
         /// ball_and_stick; space_filling, atoms as large spheres without
-        /// bonds; or polyhedra, coordination polyhedra around the cations
-        /// with the other atoms as balls and sticks.
+        /// bonds; polyhedra, coordination polyhedra around the cations
+        /// with the other atoms as balls and sticks; or ellipsoids, each
+        /// atom's displacement ellipsoid from its ADPs, at the probability
+        /// set in the window (50 % unless changed).
         pub model: DisplayModel,
     }
 }
@@ -184,8 +187,8 @@ pub(crate) fn register(registry: &mut Registry) {
         view(
             "view.set_display_model",
             "Switch how the application's window draws a structure: balls and sticks, space \
-             filling, or coordination polyhedra. Shows the structure in the window; changes no \
-             data.",
+             filling, coordination polyhedra, or displacement ellipsoids. Shows the structure in \
+             the window; changes no data.",
         ),
         |host: &mut dyn Host, input: DisplayModelInput| {
             document(host, input.structure)?;
@@ -194,6 +197,7 @@ pub(crate) fn register(registry: &mut Registry) {
                 DisplayModel::BallAndStick => "balls and sticks",
                 DisplayModel::SpaceFilling => "space filling",
                 DisplayModel::Polyhedra => "coordination polyhedra",
+                DisplayModel::Ellipsoids => "displacement ellipsoids",
             };
             let summary = format!("The window shows {} as {how}.", name(host, input.structure));
             Ok(Output::new(

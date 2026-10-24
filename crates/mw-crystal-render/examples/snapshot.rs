@@ -48,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         lines: box_edges(extent, [0.1, 0.1, 0.1, 1.0]),
         polyhedra: synthetic_polyhedra(&spheres, 9),
         spheres,
+        ..Scene::default()
     });
     if let Some(last) = last {
         renderer.set_highlights(&[HighlightRing {
