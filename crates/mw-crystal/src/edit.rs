@@ -11,7 +11,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::bonds::{alternatives, covalent_radius};
-use crate::constraints::cell_constraints;
+use crate::constraints::{cell_constraints, symmetrized_metric};
 use crate::placement::{self, Placement};
 use crate::{
     AtomFate, AtomRef, Axis, CellParam, CellParams, CellTransform, Constraint,
@@ -1100,7 +1100,8 @@ pub fn expand_and_remove(structure: &Structure, targets: &[Target]) -> Result<Ed
 
 /// The cell after setting `values` under the structure's cell constraints
 /// (design §7.3): each value goes to the free parameter it is or follows,
-/// and every parameter linked to that one takes it too.
+/// and every parameter linked to that one takes it too. The result always
+/// keeps the symmetry, so no values align a cell that does not.
 fn constrained_cell(structure: &Structure, values: &CellValues) -> Result<CellParams, EditError> {
     let constraints = cell_constraints(&structure.symmetry);
     let old = *structure.lattice.params();
@@ -1109,6 +1110,9 @@ fn constrained_cell(structure: &Structure, values: &CellValues) -> Result<CellPa
         Constraint::Equals(root) => Some(root),
         Constraint::Free => Some(param),
     };
+    // The cell the operations keep that is nearest the old one: its fixed
+    // angles are the values the operations require.
+    let ideal = CellParams::from_metric(symmetrized_metric(&structure.symmetry, old.metric()));
     // The value for each free parameter, and the parameter that gave it.
     let mut given: [Option<(CellParam, f64)>; 6] = [None; 6];
     for param in CellParam::ALL {
@@ -1119,7 +1123,7 @@ fn constrained_cell(structure: &Structure, values: &CellValues) -> Result<CellPa
             return Err(EditError::InvalidCell);
         }
         let Some(root) = root(param) else {
-            if (value - old.get(param).value()).abs() > SAME_VALUE {
+            if (value - ideal.get(param).value()).abs() > SAME_VALUE {
                 return Err(EditError::FixedCellParameter { param });
             }
             continue;
@@ -1132,14 +1136,33 @@ fn constrained_cell(structure: &Structure, values: &CellValues) -> Result<CellPa
             None => given[root as usize] = Some((param, value)),
         }
     }
+    // The result keeps the symmetry even where the old cell did not, as an
+    // imported one may not quite (design §7.3): a fixed angle takes the
+    // value the operations require, and a linked parameter left out takes
+    // the old value of the one it follows.
     let mut params = old;
     for param in CellParam::ALL {
-        let Some((_, value)) = root(param).and_then(|root| given[root as usize]) else {
+        let current = old.get(param);
+        let Some(root) = root(param) else {
+            let value = ideal.get(param).value();
+            if (value - current.value()).abs() > SAME_VALUE {
+                params.set(param, Measured::exact(value));
+            }
             continue;
         };
-        // A value given again keeps its uncertainty.
-        if value != old.get(param).value() {
-            params.set(param, Measured::exact(value));
+        match given[root as usize] {
+            // A value given again keeps its uncertainty.
+            Some((_, value)) => {
+                if value != current.value() {
+                    params.set(param, Measured::exact(value));
+                }
+            }
+            None => {
+                let followed = old.get(root);
+                if (followed.value() - current.value()).abs() > SAME_VALUE {
+                    params.set(param, followed);
+                }
+            }
         }
     }
     Ok(params)
@@ -1571,6 +1594,54 @@ mod tests {
             set(CellValues::default().with(CellParam::C, f64::NAN)),
             Some(EditError::InvalidCell)
         );
+    }
+
+    #[test]
+    fn cell_edits_align_a_cell_off_its_symmetry() {
+        // An imported cubic cell a little off: b and c written to other
+        // decimals, α off 90° (design §7.3).
+        let (mut srtio3, _) = load(SampleKey::StrontiumTitanate);
+        let off = CellParams::new(3.905, 3.9051, 3.9049, 90.01, 90.0, 90.0);
+        srtio3.lattice.set_params(off);
+        assert!(crate::cell_deviation(&srtio3.symmetry, &off).0 > 1e-5);
+
+        // No values align it: b and c follow a, α takes 90°. One step,
+        // undone exactly.
+        let aligned = round_trip(
+            &srtio3,
+            Edit::SetCell {
+                values: CellValues::default(),
+            },
+        );
+        let params = *aligned.structure.lattice.params();
+        assert_eq!(params.a, off.a);
+        assert_eq!(params.b, off.a);
+        assert_eq!(params.c, off.a);
+        assert_eq!(params.alpha, Measured::exact(90.0));
+        let (length, angle) = crate::cell_deviation(&aligned.structure.symmetry, &params);
+        assert!(length < 1e-12 && angle < 1e-12, "{length} Å, {angle}°");
+        // Giving a fixed angle the value the symmetry requires is fine; any
+        // other edit aligns the cell as well.
+        let edited = Edit::SetCell {
+            values: CellValues::default()
+                .with(CellParam::Alpha, 90.0)
+                .with(CellParam::A, 3.91),
+        }
+        .apply(&srtio3)
+        .unwrap();
+        assert_eq!(
+            cell(&edited.structure),
+            [3.91, 3.91, 3.91, 90.0, 90.0, 90.0]
+        );
+
+        // A cell that keeps its symmetry stays as it is.
+        let (rutile, _) = load(SampleKey::Rutile);
+        let same = Edit::SetCell {
+            values: CellValues::default(),
+        }
+        .apply(&rutile)
+        .unwrap();
+        assert_eq!(same.structure, rutile);
     }
 
     #[test]

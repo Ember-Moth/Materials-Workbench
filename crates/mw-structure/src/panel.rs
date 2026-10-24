@@ -11,13 +11,15 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_fle
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal::{
-    Axis, CellParam, Constraint, CoordinateConstraint, CrystalSystem, EditMode, Orientation,
-    Setting, SpaceGroupType,
+    Axis, CELL_DEVIATION, CellParam, CellParams, Constraint, CoordinateConstraint, CrystalSystem,
+    EditMode, Orientation, Setting, SpaceGroupType, Symmetry, cell_deviation,
 };
 
 use mw_project_file::{Operation, Provenance};
 
-use crate::actions::{AddMixedOccupant, AddSite, ConvertToP1, Symmetrize, TransformCell};
+use crate::actions::{
+    AddMixedOccupant, AddSite, AlignCell, ConvertToP1, Symmetrize, TransformCell,
+};
 use crate::format;
 use crate::workspace::{PanelTab, StructureWorkspace};
 
@@ -29,6 +31,22 @@ fn orientation_note(orientation: &Orientation) -> Option<SharedString> {
         _ if orientation.is_left_handed() => Some(tr!("panel.cell.left_handed")),
         Orientation::Explicit(_) => Some(tr!("panel.cell.oriented")),
     }
+}
+
+/// What the cell section says about a cell off its symmetry by more than
+/// rounding; nothing for a cell that keeps it.
+pub(crate) fn cell_deviation_note(
+    symmetry: &Symmetry,
+    params: &CellParams,
+) -> Option<SharedString> {
+    let (length, angle) = cell_deviation(symmetry, params);
+    (length > CELL_DEVIATION || angle > CELL_DEVIATION).then(|| {
+        tr!(
+            "panel.cell.off_symmetry",
+            length = format!("{length:.4}"),
+            angle = format!("{angle:.3}")
+        )
+    })
 }
 
 fn param_name(param: CellParam) -> &'static str {
@@ -291,6 +309,36 @@ impl StructureWorkspace {
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(text),
+                    )
+                },
+            )
+            // An imported cell a little off its symmetry, which the importer
+            // warned about (crystallography design §7.3): how far, and the
+            // one step that aligns it.
+            .when_some(
+                cell_deviation_note(&structure.symmetry, params),
+                |this, text| {
+                    this.child(
+                        h_flex()
+                            .gap_2()
+                            .items_start()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(text),
+                            )
+                            .child(
+                                Button::new("align-cell")
+                                    .outline()
+                                    .xsmall()
+                                    .label(tr!("panel.cell.align"))
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(Box::new(AlignCell), cx)
+                                    })),
+                            ),
                     )
                 },
             );

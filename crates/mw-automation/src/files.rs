@@ -165,7 +165,8 @@ pub fn diagnostic_message(diagnostic: &Diagnostic) -> String {
         InvalidCell => "The cell parameters describe no valid cell.".into(),
         CellInconsistent { length, angle } => format!(
             "The cell differs from what the symmetry operations allow by up to {length:.4} Å \
-             and {angle:.3}°."
+             and {angle:.3}°. Any structure.set_cell call aligns it, for example giving a its \
+             current value."
         ),
         InvalidSymop { text, error } => {
             format!("Symmetry operation '{text}' is invalid: {error}.")

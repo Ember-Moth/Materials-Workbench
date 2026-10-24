@@ -16,6 +16,7 @@ gpui_kit::actions!(
         Undo,
         Redo,
         ConvertToP1,
+        AlignCell,
         TransformCell,
         Symmetrize,
         MakeSupercell,

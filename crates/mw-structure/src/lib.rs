@@ -41,8 +41,8 @@ mod ui_tests;
 mod workspace;
 
 pub use actions::{
-    AddMixedOccupant, AddSite, ClearSelection, ConvertToP1, DeleteSelection, ExportStructure,
-    KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
+    AddMixedOccupant, AddSite, AlignCell, ClearSelection, ConvertToP1, DeleteSelection,
+    ExportStructure, KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
     ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel,
     ShowSitesPanel, ShowSpaceFilling, Symmetrize, ToggleMeasure, ToggleMoveAtoms, TogglePanel,
     TransformCell, Undo, bind_keys, palette_commands,

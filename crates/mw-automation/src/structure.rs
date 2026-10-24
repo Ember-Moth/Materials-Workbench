@@ -1286,7 +1286,8 @@ pub(crate) fn register(registry: &mut Registry) {
             "Change cell parameters: lengths in Å, angles in degrees. Fractional coordinates \
              stay, so the atoms scale with the cell. Under symmetry, a parameter linked to \
              another changes with it (setting a of a tetragonal cell sets b too) and a fixed one, \
-             such as a 90° angle, cannot change; structure.summary lists both. Undoable.",
+             such as a 90° angle, cannot change; structure.summary lists both. The result always \
+             keeps the symmetry, so it also aligns a cell imported slightly off it. Undoable.",
         ),
         |host: &mut dyn Host, input: SetCellInput| {
             let mut values = CellValues::default();

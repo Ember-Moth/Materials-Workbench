@@ -135,6 +135,13 @@ pub(crate) fn symmetrized_metric(symmetry: &Symmetry, metric: [[f64; 3]; 3]) -> 
     sum.map(|row| row.map(|v| v / rotations.len() as f64))
 }
 
+/// Differences between the cell and the nearest cell the operations
+/// preserve below this (Å or degrees) are rounding, not inconsistency: in
+/// the COD, a third of the cells that differ at all differ by less, such as
+/// b = 32.246 written for a = 32.2456(13). Above it the importer warns and
+/// the interface offers to align the cell (design §7.3).
+pub const CELL_DEVIATION: f64 = 1e-3;
+
 /// How far the cell parameters are from the nearest cell the operations
 /// preserve: the largest difference of a length in Å and of an angle in
 /// degrees. Both are zero, up to rounding, for a consistent cell.

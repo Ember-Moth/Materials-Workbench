@@ -429,6 +429,40 @@ fn delete_removes_whole_sites_and_undo_brings_them_back(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+fn a_cell_off_its_symmetry_is_aligned_in_one_step(cx: &mut TestAppContext) {
+    // SrTiO3 as a file might give it: b and c to other decimals, α off 90°
+    // (design §7.3).
+    let mut structure = mw_crystal::sample::load(SampleKey::StrontiumTitanate).structure;
+    let off = mw_crystal::CellParams::new(3.905, 3.9051, 3.9049, 90.01, 90.0, 90.0);
+    structure.lattice.set_params(off);
+    let (workspace, mut cx) = open_structure(cx, structure);
+    let note = |workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            let structure = workspace.document.structure();
+            crate::panel::cell_deviation_note(&structure.symmetry, structure.lattice.params())
+        })
+    };
+    assert!(note(&workspace, &mut cx).is_some());
+
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::AlignCell), cx));
+    draw(&mut cx);
+    let params = [CellParam::A, CellParam::B, CellParam::C, CellParam::Alpha]
+        .map(|param| cell(&workspace, param, &mut cx));
+    assert_eq!(params, [3.905, 3.905, 3.905, 90.0]);
+    assert_eq!(steps(&workspace, &mut cx), 1);
+    assert!(note(&workspace, &mut cx).is_none());
+    // Aligned already: nothing to do, no step.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::AlignCell), cx));
+    draw(&mut cx);
+    assert_eq!(steps(&workspace, &mut cx), 1);
+
+    cx.simulate_keystrokes("cmd-z");
+    draw(&mut cx);
+    assert_eq!(cell(&workspace, CellParam::B, &mut cx), 3.9051);
+    assert_eq!(cell(&workspace, CellParam::Alpha, &mut cx), 90.01);
+}
+
+#[gpui_kit::test]
 fn deleting_one_equivalent_atom_asks_instead(cx: &mut TestAppContext) {
     let (workspace, mut cx) = open(cx, SampleKey::StrontiumTitanate);
     // One of the three O atoms of the cell.

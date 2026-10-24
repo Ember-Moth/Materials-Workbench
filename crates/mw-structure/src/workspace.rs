@@ -14,7 +14,7 @@ use std::sync::Arc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use mw_crystal::{
-    AtomRef, CellParam, CellPreset, CellTransform, Checkpoint, CoordinateConstraint,
+    AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
     CrystalDocument, Edit, EditMode, SiteId, Structure, element,
 };
 use mw_crystal_io::ImportedBlock;
@@ -539,6 +539,18 @@ impl StructureWorkspace {
         dialogs::open_convert_to_p1(self, entity, window, cx);
     }
 
+    /// Aligns a cell that is a little off its symmetry, as an imported one
+    /// may be (crystallography design §7.3): linked parameters take the
+    /// value they follow and fixed angles the one the symmetry requires.
+    /// One undo step; nothing when the cell keeps its symmetry.
+    fn align_cell(&mut self, _: &AlignCell, window: &mut Window, cx: &mut Context<Self>) {
+        let edit = Edit::SetCell {
+            values: CellValues::default(),
+        };
+        // A refusal explains itself in a notification.
+        let _ = self.edit(edit, window, cx);
+    }
+
     fn open_transform_cell(
         &mut self,
         _: &TransformCell,
@@ -876,6 +888,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::convert_to_p1))
+            .on_action(cx.listener(Self::align_cell))
             .on_action(cx.listener(Self::open_transform_cell))
             .on_action(cx.listener(Self::open_symmetrize))
             .on_action(cx.listener(Self::make_supercell))

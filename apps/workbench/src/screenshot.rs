@@ -10,8 +10,8 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomRef, Axis, CellParam, CellPreset, CellValues, Command, Edit, Measured, SiteId, Species,
-    Target,
+    AtomRef, Axis, CellParam, CellParams, CellPreset, CellValues, Command, Edit, Measured, SiteId,
+    Species, Target,
 };
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
@@ -572,6 +572,23 @@ const TOUR: &[(&str, Step)] = &[
                 workspace.symmetrize(None, true, window, cx)
             });
         }
+    }),
+    // The rutile cell as a careless file gives it: b in other decimals, γ
+    // off 90° (RestoreCell sets parameters without the constraints). Under
+    // the cell parameters, how far it is off and Align.
+    ("55-cell-off-symmetry", |workbench, window, cx| {
+        let params = CellParams::new(4.594, 4.5941, 2.959, 90.0, 90.0, 90.02);
+        execute(
+            workbench,
+            Command::Edit(Edit::RestoreCell { params }),
+            window,
+            cx,
+        );
+    }),
+    // Aligned in one step: b = a, γ = 90°, and the note is gone.
+    ("56-cell-aligned", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::AlignCell), cx);
     }),
 ];
 

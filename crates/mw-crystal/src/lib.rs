@@ -50,7 +50,7 @@ pub use cell_transform::{
     CellPreset, CellTransform, MAX_VOLUME_FACTOR, SettingChoice, TransformError, find_setting,
     other_settings,
 };
-pub use constraints::cell_deviation;
+pub use constraints::{CELL_DEVIATION, cell_deviation};
 pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
     DETECTION_LIMIT, Derived, DisplayAtom, SymmetryAnalysis,

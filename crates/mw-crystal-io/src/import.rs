@@ -17,8 +17,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::PI;
 
 use mw_crystal::{
-    Adp, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId, SpaceGroup,
-    SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, Tolerances,
+    Adp, CELL_DEVIATION, CellParams, Disorder, Lattice, Measured, Occupant, Site, SiteId,
+    SpaceGroup, SpaceGroupType, Species, Structure, SymOp, Symmetry, SymmetryError, Tolerances,
     UNKNOWN_ELEMENT, element,
 };
 
@@ -74,12 +74,6 @@ enum AdpGiven {
     B,
     Beta,
 }
-
-/// Differences between the cell and the nearest cell the operations
-/// preserve below this (Å or degrees) are rounding, not inconsistency: in
-/// the COD, a third of the cells that differ at all differ by less, such as
-/// b = 32.246 written for a = 32.2456(13).
-const CELL_DEVIATION: f64 = 1e-3;
 
 /// U = B / 8π².
 fn b_to_u(b: Measured) -> Measured {

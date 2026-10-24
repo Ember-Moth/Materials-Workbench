@@ -135,6 +135,12 @@ panel:
     left_handed:
       en: The cell axes keep the directions they were given; a, b and c form a left-handed set.
       zh-CN: 晶胞轴保持给定的方向，a、b、c 构成左手系。
+    off_symmetry:
+      en: "The cell parameters are a little off the symmetry: lengths by up to %{length} Å, angles by up to %{angle}°. Align makes the linked parameters equal and the fixed angles exact."
+      zh-CN: "晶胞参数与对称性略有出入：边长最多差 %{length} Å，夹角最多差 %{angle}°。对齐后联动的参数相等，固定的角取精确值。"
+    align:
+      en: Align
+      zh-CN: 对齐
   symmetry:
     title:
       en: Symmetry
@@ -816,8 +822,8 @@ diagnostic:
       en: The cell parameters form no cell; lengths must be positive and the angles must close a parallelepiped.
       zh-CN: 晶胞参数无法构成晶胞：边长须为正数，三个夹角须能围成平行六面体。
     inconsistent:
-      en: "The cell parameters do not match the symmetry: lengths differ by up to %{length} Å and angles by up to %{angle}° from a cell the operations keep."
-      zh-CN: "晶胞参数与对称性不一致：与对称操作所要求的晶胞相比，边长最多相差 %{length} Å，夹角最多相差 %{angle}°。"
+      en: "The cell parameters do not match the symmetry: lengths differ by up to %{length} Å and angles by up to %{angle}° from a cell the operations keep. Use Align under the cell parameters to fix it."
+      zh-CN: "晶胞参数与对称性不一致：与对称操作所要求的晶胞相比，边长最多相差 %{length} Å，夹角最多相差 %{angle}°。可以用晶胞参数下的「对齐」修正。"
   symmetry:
     invalid_operation:
       component_count:
