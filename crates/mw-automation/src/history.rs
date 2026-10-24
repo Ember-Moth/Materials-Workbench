@@ -43,7 +43,8 @@ pub(crate) fn register(registry: &mut Registry) {
         ),
         |host: &mut dyn Host, input: StructureInput| {
             let command = document(host, input.structure)?.undo_command().map(kind);
-            let changed = host.undo(input.structure)?.is_some();
+            let agent = host.agent();
+            let changed = host.undo(input.structure, agent)?.is_some();
             let output = HistoryOutput {
                 changed,
                 revision: document(host, input.structure)?.revision(),
@@ -65,7 +66,8 @@ pub(crate) fn register(registry: &mut Registry) {
         ),
         |host: &mut dyn Host, input: StructureInput| {
             let command = document(host, input.structure)?.redo_command().map(kind);
-            let changed = host.redo(input.structure)?.is_some();
+            let agent = host.agent();
+            let changed = host.redo(input.structure, agent)?.is_some();
             let output = HistoryOutput {
                 changed,
                 revision: document(host, input.structure)?.revision(),

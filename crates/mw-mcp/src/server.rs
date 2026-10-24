@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use mw_automation::{
-    Availability, CallError, CallResult, Capability, Client, Context, Effect, Host, Registry,
-    resource_uri,
+    Availability, CallError, CallResult, Capability, Client, Confirmation, Context, Effect, Host,
+    Registry, resource_uri,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequest,
@@ -35,8 +35,6 @@ use crate::dispatch::{Dispatcher, Job};
 /// files, so every result about a structure carries it.
 pub const UNTRUSTED: &str = "materials-workbench/untrusted";
 const CIF_MIME: &str = "chemical/x-cif";
-/// How long the application's confirmation waits for the user.
-const ASK_TIMEOUT: Duration = Duration::from_secs(600);
 /// How long a 2026-07-28 client has to come back with the user's answer.
 const PENDING_TIMEOUT: Duration = Duration::from_secs(600);
 /// The key of the confirmation among a multi-round request's inputs.
@@ -427,7 +425,7 @@ impl Server {
         capability: &'static str,
         input: Value,
         client: Client,
-    ) -> Result<Option<String>, CallError> {
+    ) -> Result<Option<Confirmation>, CallError> {
         self.with_host(move |registry, host| {
             let permissions = host.permissions(&client);
             if !permissions.write_files {
@@ -459,7 +457,7 @@ impl Server {
     }
 
     /// Asks the user in the application; `None` when the host cannot ask.
-    async fn ask_host(&self, client: Client, question: String) -> Option<bool> {
+    async fn ask_host(&self, client: Client, question: Confirmation) -> Option<bool> {
         let (answer, answered) = oneshot::channel();
         let asked = self
             .with_host(move |_, host| {
@@ -473,9 +471,9 @@ impl Server {
         if !asked {
             return None;
         }
-        // No answer in time, or the window closed: no.
-        let answer = tokio::time::timeout(ASK_TIMEOUT, answered).await;
-        Some(matches!(answer, Ok(Ok(true))))
+        // The host answers no when the user does not answer in time; a
+        // dropped answer, the window gone, is no too.
+        Some(answered.await == Ok(true))
     }
 
     /// Calls a tool as a client would, without a transport: for hosts that
@@ -564,10 +562,10 @@ impl Server {
             Ok(None) => return Ok(done(self.invoke(capability, input, client, false).await)),
             Err(error) => return Ok(done((Err(error), false))),
         };
-        let question = format!("{} asks: {question}", client.display_name());
         let accepted = match (&self.inner.place, asking) {
             (Place::Dispatched { .. }, _) => self.ask_host(client.clone(), question).await,
             (Place::Owned(_), Asking::Client(context)) => {
+                let question = format!("{} asks: {}", client.display_name(), question.message());
                 if !elicits(context) {
                     None
                 } else if stateless(context) {
@@ -947,14 +945,16 @@ mod tests {
         fn undo(
             &mut self,
             id: mw_automation::StructureEntryId,
+            agent: Option<mw_crystal::Agent>,
         ) -> Result<Option<mw_crystal::Outcome>, CallError> {
-            self.0.undo(id)
+            self.0.undo(id, agent)
         }
         fn redo(
             &mut self,
             id: mw_automation::StructureEntryId,
+            agent: Option<mw_crystal::Agent>,
         ) -> Result<Option<mw_crystal::Outcome>, CallError> {
-            self.0.redo(id)
+            self.0.redo(id, agent)
         }
         fn has_window(&self) -> bool {
             true

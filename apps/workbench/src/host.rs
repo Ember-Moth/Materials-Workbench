@@ -1,36 +1,34 @@
 //! The application as the host MCP clients work on
-//! (`docs/design/ai-integration.md` §5.1): the projects open in the window
-//! and their structures. Calls run on the main thread with the workbench at
-//! hand (`mcp.rs`), so what they open appears in the window as the user's
-//! own opening would.
+//! (`docs/design/ai-integration.md` §5.1, §5.3): the projects open in the
+//! window and their structures. Calls run on the main thread with the
+//! workbench at hand (`mcp.rs`), so what they open or change appears in the
+//! window as the user's own would.
 //!
-//! Read-only for now: capabilities read the open structures' documents but
-//! do not get to edit them, since edits must go through the workspace,
-//! which updates what it shows (v0.3).
+//! Edits go through the structure's workspace, onto the same undo stack as
+//! the user's, marked as the client's. New structures, imported or derived,
+//! join their project unsaved, as the user's would; the user saves. A file
+//! is written only once the user confirmed it in the window.
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui_kit::*;
 use mw_automation::{
-    CallError, EntryInfo, Host, Opening, ProjectInfo, Projects, RecentProject, RecentProjects,
-    StructureEntryId, StructureInfo, duplicate_project, read_error, unknown_structure,
+    Answer, CallError, Client, Confirmation, EntryInfo, Host, OpenedFile, Opening, Permissions,
+    ProjectInfo, Projects, RecentProject, RecentProjects, StructureEntryId, StructureInfo,
+    duplicate_project, parse_import, read_error, unknown_structure,
 };
-use mw_crystal::{Agent, Command, CrystalDocument, Outcome};
+use mw_crystal::{Agent, Command, CrystalDocument, Outcome, Structure};
 use mw_crystal_io::ImportedBlock;
 use mw_mcp::Access;
-use mw_project_file::ProjectId;
+use mw_project::ImportedEntry;
+use mw_project_file::{AuditRecord, ProjectId};
 use mw_structure::StructureWorkspace;
 
 use crate::config::AppPaths;
 use crate::projects::same_dir;
+use crate::settings::AiSetting;
 use crate::workbench::Workbench;
-
-/// Edits from MCP clients reach the workspace with phase 4 of M18
-/// (ai-integration design §5.3); until then the application refuses them.
-fn read_only(id: StructureEntryId) -> CallError {
-    CallError::new(
-        "read_only",
-        format!("structure {} cannot be edited from here", id.0),
-    )
-}
 
 /// The workbench during one call, with what the calling client may open.
 pub(crate) struct AppHost<'a, 'c> {
@@ -59,6 +57,11 @@ impl<'a, 'c> AppHost<'a, 'c> {
         self.cx
     }
 
+    fn workspace_entity(&self, id: StructureEntryId) -> Option<Entity<StructureWorkspace>> {
+        let opened = self.workbench.opened.iter().find(|o| o.id == id)?;
+        Some(opened.workspace.clone())
+    }
+
     fn workspace(&self, id: StructureEntryId) -> Option<&StructureWorkspace> {
         let opened = self.workbench.opened.iter().find(|o| o.id == id)?;
         Some(opened.workspace.read(self.app()))
@@ -66,6 +69,30 @@ impl<'a, 'c> AppHost<'a, 'c> {
 
     fn is_open(&self, id: StructureEntryId) -> bool {
         self.workbench.opened.iter().any(|o| o.id == id)
+    }
+
+    /// The open projects' directories, where clients may read and write as
+    /// in the directories they allow (design §7.2).
+    fn project_dirs(&self) -> Vec<PathBuf> {
+        self.workbench
+            .catalog(self.app())
+            .projects()
+            .iter()
+            .filter_map(|p| p.path()?.canonicalize().ok())
+            .collect()
+    }
+
+    /// Runs `change` on the open structure's workspace.
+    fn on_workspace<T>(
+        &mut self,
+        id: StructureEntryId,
+        change: impl FnOnce(&mut StructureWorkspace, &mut Window, &mut Context<StructureWorkspace>) -> T,
+    ) -> Result<T, CallError> {
+        let workspace = self
+            .workspace_entity(id)
+            .ok_or_else(|| unknown_structure(id))?;
+        let window = &mut *self.window;
+        Ok(workspace.update(self.cx, |workspace, cx| change(workspace, window, cx)))
     }
 }
 
@@ -92,18 +119,34 @@ impl Host for AppHost<'_, '_> {
     fn execute(
         &mut self,
         id: StructureEntryId,
-        _command: Command,
-        _agent: Option<Agent>,
+        command: Command,
+        agent: Option<Agent>,
     ) -> Result<Outcome, CallError> {
-        Err(read_only(id))
+        let outcome = self.on_workspace(id, |workspace, window, cx| match agent {
+            Some(agent) => workspace.execute_by(command, agent, window, cx),
+            None => workspace.execute(command, window, cx),
+        })?;
+        Ok(outcome?)
     }
 
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
-        Err(read_only(id))
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        agent: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        self.on_workspace(id, |workspace, window, cx| {
+            workspace.undo_by(agent, window, cx)
+        })
     }
 
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
-        Err(read_only(id))
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        agent: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        self.on_workspace(id, |workspace, window, cx| {
+            workspace.redo_by(agent, window, cx)
+        })
     }
 
     fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
@@ -120,6 +163,30 @@ impl Host for AppHost<'_, '_> {
 
     fn projects_mut(&mut self) -> Option<&mut dyn Projects> {
         Some(self)
+    }
+
+    /// Kept with the project until it is saved, closed or the application
+    /// quits (`ai_log.rs`); the client joins the settings' list.
+    fn audit(&mut self, project: Option<ProjectId>, record: AuditRecord) {
+        log::info!("audit: {}", record.to_line());
+        let client = Client::new(record.client.name.clone(), record.client.title.clone());
+        AiSetting::remember(&client, self.cx);
+        if let Some(project) = project {
+            self.workbench.keep_audit(project, record, self.cx);
+        }
+    }
+
+    fn writable(&self, path: &str) -> Result<PathBuf, CallError> {
+        self.access.writable(path, &self.project_dirs())
+    }
+
+    fn permissions(&self, client: &Client) -> Permissions {
+        AiSetting::permissions(client, self.app())
+    }
+
+    fn ask(&mut self, client: &Client, question: &Confirmation, answer: Answer) -> bool {
+        crate::mcp::ask(client, question, answer, self.window, self.cx);
+        true
     }
 }
 
@@ -188,7 +255,7 @@ impl Projects for AppHost<'_, '_> {
         let id = manifest.id;
         let view = dir.read_view().unwrap_or_default();
         self.workbench
-            .add_project(&path, dir, manifest, view, self.cx);
+            .add_project(&path, dir, manifest, view, self.window, self.cx);
         self.workbench.session.save(self.cx.global::<AppPaths>());
         self.workbench.refresh_status(self.cx);
         self.cx.notify();
@@ -207,5 +274,86 @@ impl Projects for AppHost<'_, '_> {
             .open_structure_now(id, self.window, self.cx)
             .map_err(read_error)?;
         Ok(Opening::Opened)
+    }
+
+    /// Imports the file into the project as the user's "Open file…" would:
+    /// the structures join it unsaved, open, and the first is shown.
+    fn import_file(&mut self, project: ProjectId, path: &str) -> Result<OpenedFile, CallError> {
+        let target = self
+            .workbench
+            .catalog(self.app())
+            .projects()
+            .iter()
+            .find(|p| p.file_id() == project)
+            .map(|p| p.id())
+            .ok_or_else(|| {
+                CallError::new(
+                    "unknown_project",
+                    format!("no open project has the id {project}; project.list lists them"),
+                )
+            })?;
+        let (path, bytes) = self.access.read_in(path, &self.project_dirs())?;
+        let parsed = parse_import(&path, bytes)?;
+        let (format, bytes) = (parsed.format, parsed.bytes.clone());
+        let entries: Vec<ImportedEntry> = parsed
+            .structures
+            .into_iter()
+            .map(|(name, block)| {
+                ImportedEntry::new(name, path.clone(), format, bytes.clone(), Arc::new(block))
+            })
+            .collect();
+        let ids = if entries.is_empty() {
+            Vec::new()
+        } else {
+            self.workbench.sidebar.update(self.cx, |sidebar, cx| {
+                sidebar.update_catalog(cx, |catalog| catalog.add_imported(target, entries))
+            })
+        };
+        // Each is opened, so that the client can use it; the first is shown.
+        for id in ids.iter().rev() {
+            self.workbench
+                .open_structure_now(*id, self.window, self.cx)
+                .map_err(read_error)?;
+        }
+        self.workbench.refresh_status(self.cx);
+        Ok(OpenedFile::new(
+            path,
+            ids,
+            parsed.skipped,
+            parsed.diagnostics,
+        ))
+    }
+
+    /// Adds the supercell to the project after its source, unsaved, and
+    /// shows it, as the supercell dialog does.
+    fn add_derived(
+        &mut self,
+        from: StructureEntryId,
+        name: Option<&str>,
+        structure: Structure,
+        matrix: [[i32; 3]; 3],
+    ) -> Result<StructureEntryId, CallError> {
+        let source = self
+            .workspace(from)
+            .map(|workspace| workspace.crystal().snapshot())
+            .ok_or_else(|| unknown_structure(from))?;
+        let from_name = self
+            .workbench
+            .catalog(self.app())
+            .structure(from)
+            .map(|(_, entry)| entry.name().to_string())
+            .unwrap_or_default();
+        let name = name.map_or_else(
+            || mw_structure::supercell_name(&from_name, matrix).to_string(),
+            str::to_owned,
+        );
+        let id = self
+            .workbench
+            .add_derived_structure(from, name, structure, matrix, &source, self.cx)
+            .ok_or_else(|| unknown_structure(from))?;
+        self.workbench
+            .open_structure_now(id, self.window, self.cx)
+            .map_err(read_error)?;
+        Ok(id)
     }
 }

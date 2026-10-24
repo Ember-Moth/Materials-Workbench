@@ -127,11 +127,19 @@ impl Host for TestHost {
         Ok(self.document_mut(id)?.execute_by(command, agent)?)
     }
 
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
         Ok(self.document_mut(id)?.undo())
     }
 
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
         Ok(self.document_mut(id)?.redo())
     }
 

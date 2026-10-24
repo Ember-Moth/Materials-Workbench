@@ -59,6 +59,9 @@ command:
   settings:
     en: Settings…
     zh-CN: 设置…
+  export_ai_log:
+    en: Export AI log…
+    zh-CN: 导出 AI 操作记录…
 sidebar:
   show:
     en: Show sidebar
@@ -93,12 +96,75 @@ settings:
     en: Allow MCP clients
     zh-CN: 允许 MCP 客户端连接
   mcp_description:
-    en: AI tools such as Claude Code that start materials-workbench mcp can list, open and read the projects and structures here, but not edit them.
-    zh-CN: Claude Code 等 AI 工具启动 materials-workbench mcp 后，可以列出、打开和读取这里的项目与结构，但不能编辑。
+    en: AI tools such as Claude Code that start materials-workbench mcp work with the projects open here. Their edits show in the window and can be undone; you save them.
+    zh-CN: Claude Code 等 AI 工具启动 materials-workbench mcp 后，使用这里打开的项目。它们的改动实时显示、可以撤销，由你保存。
+  ai_modify:
+    en: Let AI modify data
+    zh-CN: 允许 AI 修改数据
+  ai_modify_description:
+    en: Edit structures, import files, make supercells. All of it can be undone.
+    zh-CN: 编辑结构、导入文件、生成超胞，都可以撤销。
+  ai_write:
+    en: Let AI write files
+    zh-CN: 允许 AI 写文件
+  ai_write_description:
+    en: Export structures to files. You confirm every file before it is written.
+    zh-CN: 把结构导出到文件。每次写入前都由你确认。
+  ai_clients:
+    en: Clients that connected
+    zh-CN: 连接过的客户端
+  ai_clients_modify:
+    en: Modify data
+    zh-CN: 修改数据
+  ai_clients_write:
+    en: Write files
+    zh-CN: 写文件
 mcp:
   listen_failed:
     en: "Couldn't let MCP clients connect: %{reason}"
     zh-CN: "无法让 MCP 客户端连接：%{reason}"
+  confirm:
+    title:
+      en: "Let %{client} write a file?"
+      zh-CN: "允许 %{client} 写入文件？"
+    write:
+      en: "Exports “%{structure}” as %{format} to this file. Writing a file can’t be undone."
+      zh-CN: "把「%{structure}」导出为 %{format}，写入这个文件。写入后无法撤销。"
+    replace:
+      en: "Exports “%{structure}” as %{format}, replacing this file. This can’t be undone."
+      zh-CN: "把「%{structure}」导出为 %{format}，替换这个已有的文件。替换后无法撤销。"
+    write_ok:
+      en: Write
+      zh-CN: 写入
+    replace_ok:
+      en: Replace
+      zh-CN: 替换
+    cancel:
+      en: Cancel
+      zh-CN: 取消
+    timed_out:
+      en: "%{client}’s request timed out. No file was written."
+      zh-CN: "%{client} 的请求已超时，没有写入文件。"
+lock:
+  holder:
+    en: "%{program} (process %{pid})"
+    zh-CN: "%{program}（进程 %{pid}）"
+  someone:
+    en: another program
+    zh-CN: 另一个程序
+  opened:
+    en: "%{holder} is writing “%{name}”. It can’t be saved here until that ends."
+    zh-CN: "%{holder} 正在修改「%{name}」，在它结束前这里不能保存。"
+ai_log:
+  empty:
+    en: "“%{name}” has no AI operations yet."
+    zh-CN: "「%{name}」还没有 AI 操作记录。"
+  exported:
+    en: "Exported %{count} AI operations to %{file}."
+    zh-CN: "已把 %{count} 条 AI 操作记录导出到 %{file}。"
+  failed:
+    en: "Couldn’t export the AI log: %{reason}"
+    zh-CN: "无法导出 AI 操作记录：%{reason}"
 project:
   untitled:
     en: Untitled project
@@ -141,6 +207,12 @@ save:
   failed:
     en: "Couldn’t save the project: %{reason}"
     zh-CN: "无法保存项目：%{reason}"
+  locked:
+    en: "Couldn’t save “%{name}”: %{holder} is writing it. Save once that ends, or use Save project as…"
+    zh-CN: "无法保存「%{name}」：%{holder} 正在修改它。等它结束后再保存，或者用“项目另存为…”。"
+  changed:
+    en: "Couldn’t save “%{name}” in place: another program saved it after it was opened here. Use Save project as… to keep your changes."
+    zh-CN: "无法在原处保存「%{name}」：它在这里打开之后被另一个程序保存过。用“项目另存为…”保留你的更改。"
 unsaved:
   close_title:
     en: "Save changes to “%{name}” before closing?"

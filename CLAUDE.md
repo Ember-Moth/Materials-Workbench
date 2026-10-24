@@ -65,7 +65,7 @@ cargo fmt --all
 
 工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。新 crate 的 `[package]` 要写 `edition.workspace = true`、`publish.workspace = true`、`license.workspace = true`。项目按 MIT OR Apache-2.0 双许可发布，不引入 GPL 类许可的依赖，也不复制 GPL 代码。依赖只能从上往下：
 
-- **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源；第一个参数是 `mcp` 时在初始化 GPUI 之前转给 `mw_mcp::main`（`src/mcp.rs`），不开窗口。设置里允许 MCP 客户端连接时，`Workbench` 监听并在主线程上逐个运行它们的调用，宿主是借用工作台的 `AppHost`（`src/host.rs`）：列出和打开窗口里的项目与结构，读工作区里的 `CrystalDocument`，不给可变文档（编辑要经 `StructureWorkspace::execute`，留给 v0.3）。
+- **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源；第一个参数是 `mcp` 时在初始化 GPUI 之前转给 `mw_mcp::main`（`src/mcp.rs`），不开窗口。设置里允许 MCP 客户端连接时，`Workbench` 监听并在主线程上逐个运行它们的调用，宿主是借用工作台的 `AppHost`（`src/host.rs`）：列出和打开窗口里的项目与结构，读工作区里的 `CrystalDocument`，编辑经 `StructureWorkspace::execute_by` 进同一个撤销栈并记下客户端，写文件前弹确认（`mcp::ask`）；权限是设置里的 `AiSetting`，审计记录在保存、关闭、退出时追加进项目（`src/ai_log.rs`），打开的项目由应用持锁（`projects.rs`）。
 - **能力 crate（依赖 GPUI）**：
   - `mw-project`：打开着的项目（`ProjectCatalog`：清单、目录、导入或派生后还没保存的结构）和左侧边栏；
   - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区；移动模式（在视口里拖动原子）在 `src/moving.rs`，拖动中只画预览（`scene::Preview`，不做对称性分析），松手才执行一条 `MoveSite`；"对称化…"对话框在 `src/symmetrize_dialog.rs`，在后台运行 `DetectSymmetry` 预览，确认后执行一条 `Symmetrize`。

@@ -35,11 +35,19 @@ impl Host for Desk {
     ) -> Result<Outcome, CallError> {
         self.documents.execute(id, command, agent)
     }
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
-        self.documents.undo(id)
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        self.documents.undo(id, None)
     }
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
-        self.documents.redo(id)
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        self.documents.redo(id, None)
     }
     fn audit(&mut self, project: Option<ProjectId>, record: AuditRecord) {
         self.documents.audit(project, record);
@@ -151,7 +159,8 @@ fn files_are_written_only_once_confirmed() {
     let question = registry
         .confirmation(&desk, "structure.export_file", input(false))
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .message();
     assert!(question.starts_with("Write Rutile as POSCAR"), "{question}");
     assert!(question.contains(path.to_str().unwrap()), "{question}");
     assert!(!path.exists());
@@ -183,7 +192,8 @@ fn files_are_written_only_once_confirmed() {
     let question = registry
         .confirmation(&desk, "structure.export_file", input(true))
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .message();
     assert!(
         question.ends_with("replacing the file there."),
         "{question}"

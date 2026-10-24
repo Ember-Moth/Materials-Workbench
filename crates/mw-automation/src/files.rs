@@ -13,6 +13,7 @@ use std::path::Path;
 
 use mw_crystal_io::{Diagnostic, DiagnosticKind, ExportError, Severity, cif, poscar, xyz};
 
+use crate::policy::Confirmation;
 use crate::registry::{CallError, Effect, Host, Output, Registry, Spec, StructureEntryId};
 use crate::schema::{schema_struct, string_enum};
 use crate::structure::{document, invalid};
@@ -581,19 +582,15 @@ pub(crate) fn register(registry: &mut Registry) {
             Effect::External,
         ),
         |host: &dyn Host, input: ExportFileInput| {
-            let (path, exists) = export_target(host, &input)?;
-            let (text, _, name) = export_text(host, input.structure, input.format)?;
-            Ok(format!(
-                "Write {name} as {} ({} bytes) to {}{}.",
-                input.format.name(),
-                text.len(),
-                path.display(),
-                if exists {
-                    ", replacing the file there"
-                } else {
-                    ""
-                }
-            ))
+            let (path, replaces) = export_target(host, &input)?;
+            let (text, _, structure) = export_text(host, input.structure, input.format)?;
+            Ok(Confirmation::WriteFile {
+                structure,
+                format: input.format.name().into(),
+                path,
+                bytes: text.len(),
+                replaces,
+            })
         },
         |host: &mut dyn Host, input: ExportFileInput| {
             let (path, replaced) = export_target(host, &input)?;

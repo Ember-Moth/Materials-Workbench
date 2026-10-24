@@ -590,6 +590,39 @@ const TOUR: &[(&str, Step)] = &[
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::AlignCell), cx);
     }),
+    // An MCP client's edit (M18): the same undo step, and a notification
+    // that names the client.
+    ("57-ai-edit", |workbench, window, cx| {
+        if let Some(workspace) = workbench.workspace().cloned() {
+            let values = mw_crystal::CellValues::default().with(mw_crystal::CellParam::C, 3.0);
+            let edit = Command::Edit(Edit::SetCell { values });
+            let claude = mw_crystal::Agent::new("Claude Code");
+            workspace.update(cx, |workspace, cx| {
+                workspace.execute_by(edit, claude, window, cx).ok();
+            });
+        }
+    }),
+    // Writing a file waits for the user in the window.
+    ("58-ai-confirm", |_, window, cx| {
+        window.clear_notifications(cx);
+        let client = mw_automation::Client::new("claude-code", Some("Claude Code".into()));
+        let question = mw_automation::Confirmation::WriteFile {
+            structure: "金红石".into(),
+            format: "POSCAR".into(),
+            path: PathBuf::from("/Users/me/dft/rutile/POSCAR"),
+            bytes: 342,
+            replaces: false,
+        };
+        crate::mcp::ask(&client, &question, Box::new(|_| {}), window, cx);
+    }),
+    // The client is remembered: the settings list it with its own
+    // permissions.
+    ("59-settings-ai-clients", |_, window, cx| {
+        window.close_dialog(cx);
+        let client = mw_automation::Client::new("claude-code", Some("Claude Code".into()));
+        settings::AiSetting::remember(&client, cx);
+        settings::open(window, cx)
+    }),
 ];
 
 /// A fresh directory for the tour's settings, session and sample projects

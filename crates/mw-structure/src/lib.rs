@@ -48,4 +48,4 @@ pub use actions::{
     TransformCell, Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
-pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell};
+pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell, supercell_name};

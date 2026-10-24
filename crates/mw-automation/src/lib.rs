@@ -27,7 +27,7 @@ pub mod schema;
 mod structure;
 
 pub use files::{MAX_EXPORT_BYTES, diagnostic_message};
-pub use policy::{Caller, Client, Context, Permissions};
+pub use policy::{Caller, Client, Confirmation, Context, Permissions};
 pub use project::{
     EntryInfo, ImportedFile, OpenedFile, Opening, ProjectInfo, Projects, RecentProject,
     RecentProjects, SkippedBlock, duplicate_project, parse_import, read_error, resource_uri,

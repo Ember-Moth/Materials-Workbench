@@ -30,7 +30,7 @@ use crate::moving::AtomDrag;
 use crate::scene::{self, DisplayModel, LineColors};
 use crate::selection::Selection;
 use crate::symmetrize_dialog::{self, SymmetrizeDialog};
-use crate::{dialogs, editing, format};
+use crate::{dialogs, format};
 
 /// Element symbols, the items of every element picker.
 pub(crate) type ElementList = SearchableVec<&'static str>;
@@ -94,6 +94,24 @@ pub struct Supercell {
     pub source: Arc<Structure>,
     /// Rows of the matrix M of the new lattice `A·M`.
     pub matrix: [[i32; 3]; 3],
+}
+
+/// The default name of a supercell of the structure `name` by `matrix`, in
+/// the interface language: `金红石 2×2×2 超胞`, or `金红石 超胞` when the
+/// matrix is not diagonal.
+pub fn supercell_name(name: &str, matrix: [[i32; 3]; 3]) -> SharedString {
+    let diagonal = (0..3).all(|i| (0..3).all(|j| i == j || matrix[i][j] == 0));
+    if diagonal {
+        tr!(
+            "supercell.name",
+            name = name,
+            a = matrix[0][0],
+            b = matrix[1][1],
+            c = matrix[2][2]
+        )
+    } else {
+        tr!("supercell.name_general", name = name)
+    }
 }
 
 /// What the workspace asks of the window that hosts it.
@@ -632,13 +650,7 @@ impl StructureWorkspace {
     ) {
         let [a, b, c] = repeats;
         let matrix = [[a, 0, 0], [0, b, 0], [0, 0, c]];
-        let name = tr!(
-            "supercell.name",
-            name = self.document.name.to_string(),
-            a = a,
-            b = b,
-            c = c
-        );
+        let name = supercell_name(&self.document.name, matrix);
         let source = self.document.crystal.snapshot();
         let make = cx.background_spawn(async move {
             mw_crystal::make_supercell(&source, matrix).map(|structure| (structure, source))
@@ -774,19 +786,7 @@ impl StructureWorkspace {
                     .small()
                     .icon(Icon::new(Lucide::Undo2))
                     .disabled(crystal.undo_command().is_none())
-                    .tooltip_with_action(
-                        crystal.undo_command().map_or_else(
-                            || tr!("header.undo"),
-                            |command| {
-                                tr!(
-                                    "header.undo_command",
-                                    command = editing::command_name(command)
-                                )
-                            },
-                        ),
-                        &Undo,
-                        Some(KEY_CONTEXT),
-                    )
+                    .tooltip_with_action(self.undo_tooltip(), &Undo, Some(KEY_CONTEXT))
                     .on_click(
                         cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(Undo), cx)),
                     ),
@@ -797,19 +797,7 @@ impl StructureWorkspace {
                     .small()
                     .icon(Icon::new(Lucide::Redo2))
                     .disabled(crystal.redo_command().is_none())
-                    .tooltip_with_action(
-                        crystal.redo_command().map_or_else(
-                            || tr!("header.redo"),
-                            |command| {
-                                tr!(
-                                    "header.redo_command",
-                                    command = editing::command_name(command)
-                                )
-                            },
-                        ),
-                        &Redo,
-                        Some(KEY_CONTEXT),
-                    )
+                    .tooltip_with_action(self.redo_tooltip(), &Redo, Some(KEY_CONTEXT))
                     .on_click(
                         cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(Redo), cx)),
                     ),

@@ -28,6 +28,12 @@ header:
   redo_command:
     en: "Redo %{command}"
     zh-CN: "重做「%{command}」"
+  undo_agent_command:
+    en: "Undo %{command} by AI (%{agent})"
+    zh-CN: "撤销 AI（%{agent}）的「%{command}」"
+  redo_agent_command:
+    en: "Redo %{command} by AI (%{agent})"
+    zh-CN: "重做 AI（%{agent}）的「%{command}」"
   export:
     en: Export…
     zh-CN: 导出…
@@ -583,6 +589,16 @@ move:
     en: "%{label} to (%{position}), multiplicity %{before} → %{after}"
     zh-CN: "%{label} 移到 (%{position})，多重度 %{before} → %{after}"
 edit:
+  agent:
+    title:
+      en: "AI (%{agent})"
+      zh-CN: "AI（%{agent}）"
+    undid:
+      en: "Undid %{command}"
+      zh-CN: "撤销了「%{command}」"
+    redid:
+      en: "Redid %{command}"
+      zh-CN: "重做了「%{command}」"
   expanded_and_deleted:
     en: "Converted to P1 and deleted %{count} atoms. You can undo both at once."
     zh-CN: "已转为 P1 并删除 %{count} 个原子，撤销一次即可全部恢复。"
@@ -1083,6 +1099,9 @@ supercell:
   name:
     en: "%{name} %{a}×%{b}×%{c} supercell"
     zh-CN: "%{name} %{a}×%{b}×%{c} 超胞"
+  name_general:
+    en: "%{name} supercell"
+    zh-CN: "%{name} 超胞"
   failed:
     en: "Couldn’t make the supercell: %{reason}"
     zh-CN: "无法生成超胞：%{reason}"

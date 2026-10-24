@@ -158,7 +158,7 @@ Capability
   - `project.open` 像"打开项目…"一样把项目加进边栏、记进最近项目，但不切换显示的结构；已打开的路径返回原来的 ID，复制的项目（ID 相同、路径不同）拒绝。错误的措辞与无界面时相同：`read_error`、`duplicate_project`、`unknown_structure` 从 `Headless` 移到 `mw_automation`，两个宿主共用；
   - `structure.open` 在窗口里显示这个结构，与点击边栏相同；没打开过的在主线程上同步读取（用户自己打开时在后台读），调用返回时结构已经可用。用户正在后台打开的同一个结构由这次读取代替；
   - 查询读的是工作区里的 `CrystalDocument`（`StructureWorkspace::crystal`），用户还没保存的编辑立刻可见。`Host::source` 给出导入时的数据块（`StructureWorkspace::source`）；外壳读结构时按清单里的哈希标明结构是否还是导入的那个，与 `Headless` 相同，所以 CIF 导出写回源文件字段的判断在两种模式下一致；
-  - 只读：`document_mut` 返回 `None`，因为编辑必须经工作区（`StructureWorkspace::execute`）才能同时更新字段、场景和选区。写操作、撤销栈和确认弹窗留给 v0.3。
+  - M12 时只读：编辑必须经工作区（`StructureWorkspace::execute`）才能同时更新字段、场景和选区。M18 起写操作经工作区执行、进同一个撤销栈，写文件前在窗口里确认（5.3 节"阶段 4 的实现"）。
 - **资源列表变化**：每次调用后与客户端上次知道的列表比较（`resources/list` 或上一次调用之后），不只比较这次调用前后，所以用户在界面里打开的结构会在下一次调用后通知。界面里打开、关闭结构时还不会立即通知。
 - **默认关**：监听是对本机同一用户的其他进程开放的入口，所以设置默认关。开关立即生效，保存在 `settings.json` 的 `mcp` 字段（没有这个字段的旧设置读作关）。启动时或打开开关时监听失败（另一个实例在监听、路径太长），用通知说明，应用照常使用。
 - **测试**：令牌、令牌文件和目录的权限、目录别人能进入时转发进程不信任它、令牌不对时拒绝、第二个实例不接管、停止后文件清掉、路径太长时什么都不留；用一个只回显的假应用确认转发进程把任意字节（含非 JSON、非 UTF-8、20 万字节）原样转发；经通道用 rmcp 的客户端调用宿主线程上的 `Headless`（`crates/mw-mcp/src/relay.rs`）；`Server::dispatching` 的调用在宿主线程上执行、线程不在时返回 `unavailable`（`src/server.rs`）。外壳的界面集成测试在无头窗口里打开示例项目，经 `Server::dispatching` 调用：只有只读工具、没有 `file_open`；列出打开的项目和结构；没打开的结构先报 `structure_not_open`，打开后窗口显示它；用户的编辑立刻读到；`project_open` 加进边栏而不切换显示、记进最近项目，允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不会让应用崩溃（`apps/workbench/src/ui_tests.rs`）。`apps/workbench/tests/mcp.rs` 在测试里启动监听端，用 rmcp 的客户端驱动 `materials-workbench mcp`：转接到监听端（相对路径从它的工作目录算）、读资源，监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用。另在真实的应用里手动走过一遍（打开设置的临时配置目录，按行发 JSON-RPC）。
@@ -308,6 +308,16 @@ Capability
 - 权限来源：`mw_mcp::main` 多一个参数 `PermissionSource`；`materials-workbench mcp` 每次调用读配置目录的 `settings.json`（`ai` 字段，7.2 节），只读不写；独立的 `mw-mcp` 用默认值。`file.open` 和 `file.import` 都读 CIF 和 POSCAR（`Access::read` 按 `SourceFormat::of_path` 认格式）；读写路径限制在 `--allow` 的目录和打开着的项目目录内（`Access::read_in`、`Access::writable`，后者在路径处有链接时替换链接而不是跟着它写）。
 - 服务器说明（`instructions`）改为可以编辑的版本：无界面时说明改动立刻存进项目文件、写文件要用户确认；连接应用时说明改动在窗口里实时可见、进同一个撤销栈、由用户保存。
 - 测试：`mw-mcp/src/headless.rs` 的单元测试（只读的会话不留锁、日志和备份；编辑立刻存进项目、编辑记录变长、备份只有被覆盖的文件且保持会话开始时的内容、撤销也存、审计日志从持锁前的调用开始；别的进程持锁时 `project_locked` 且内存不变；文件在读取之后被改过时 `project_changed` 且锁随之放开；导入和超胞写进清单、源文件副本在；写文件只在允许的范围内），`tests/stdio.rs`（全部工具和注解；编辑存进项目再撤销；超胞进项目、资源列表更新、审计日志写客户端名；两种生命周期下用户接受时写文件、拒绝时 `not_confirmed` 且没有文件；不支持 elicitation 的客户端 `confirmation_unavailable` 并记录；带恶意指令的 CIF：照着它写文件被用户拒绝、写到 `~/.ssh/config` 在问之前就被拒绝、删除位点只改内存里的未命名项目，允许目录下的文件一个字节都没变），`apps/workbench/tests/mcp.rs`（`materials-workbench mcp` 按 `settings.json` 拒绝没有权限的客户端，改设置后下一次调用就允许，改动存进项目，两次调用都在审计日志里，配置目录不变）。
+
+**阶段 4 的实现（连接应用时写入，2026-10-24，外壳、`mw-structure`）**：
+
+- `AppHost::execute` 调用 `StructureWorkspace::execute_by(command, agent, …)`：与 `execute` 一样更新字段、场景和选区，撤销步骤记在客户端名下；被拒绝的编辑只回给客户端，不弹错误通知。`undo_by` / `redo_by` 同理（`Host::undo`、`redo` 为此多了 `agent` 参数）。客户端每改一步弹一条通知，标题"AI（Claude Code）"，内容是这一步的名称；同一个结构的通知互相替换，不堆叠。顶栏撤销、重做按钮的提示写成"撤销 AI（Claude Code）的「修改晶胞参数」"（`undo_tooltip` / `redo_tooltip`）。
+- `structure.make_supercell` 和 `file.import` 加进项目的方式与界面相同：超胞经 `Workbench::add_derived_structure`（与超胞对话框共用，默认名用界面语言的 `mw_structure::supercell_name`），导入经 `ProjectCatalog::add_imported`；新结构都还没保存，立即打开（导入的第一个显示在窗口里），由用户保存。
+- 确认弹窗（`mcp::ask`）：标题"允许 Claude Code 写入文件？"，正文说明把哪个结构以什么格式写到哪里、会不会替换已有文件、写入后无法撤销；按钮"取消"和"写入"（替换时为"替换"）。Esc、"取消"、关掉对话框都算拒绝；5 分钟没有答复也算拒绝，之后再点"写入"只提示请求已超时。服务器那边不另计时：窗口关闭、答复丢失也算拒绝。
+- 权限：设置里的 `AiSetting` 全局量（`config.rs` 的 `AiSettings`），`AppHost::permissions` 每次调用读它；第一次调用的客户端由 `AppHost::audit` 记进设置，设置对话框在"允许 AI 修改数据""允许 AI 写文件"下面列出连接过的客户端，每个两列开关，改动立即生效、立即保存。
+- 审计记录挂在 `Workbench::audit` 的项目下，保存、关闭项目和退出时追加进 `audit.jsonl`（`ai_log.rs`）；命令面板的"导出 AI 操作记录…"把当前项目文件里的和还没写的记录写成一个 JSON Lines 文件。
+- 项目锁（项目文件设计稿第 15 节）：`add_project` 取锁，取不到时记下清单的摘要并用通知说明是谁在写；保存前 `ensure_writable` 补取锁并核对摘要，"另存为"之后锁跟着项目到新位置；关闭项目时放开。
+- 测试：外壳的界面集成测试 `mcp_clients_edit_in_the_window`（另一个进程拿不到应用打开着的项目的锁；客户端的编辑进工作区、撤销步骤记客户端名、项目变成未保存，客户端撤销；客户端被记进设置，单独关掉它的修改权限后被拒绝，别的客户端照旧；超胞排在来源的派生结构之后并显示；导入进客户端指定的项目；写文件时弹窗，Esc 拒绝、回车写入；保存后审计日志里有超胞、写文件和被拒绝的调用，写文件那条标为已确认），`mw-structure` 的 `ai_edits_say_whose_they_are`（撤销、重做提示的文字；被拒绝的编辑不留步骤）；截图巡览 57–59。
 
 **视图工具**（阶段 5，仅连接应用时）：新增副作用等级"视图"（7.1 节）：只改窗口里显示的内容，不改数据，不进撤销栈。
 

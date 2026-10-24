@@ -442,7 +442,11 @@ impl Host for Headless {
         )
     }
 
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
         self.change(
             id,
             |document| {
@@ -456,7 +460,11 @@ impl Host for Headless {
         )
     }
 
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
         self.change(
             id,
             |document| {

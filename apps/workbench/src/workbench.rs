@@ -17,8 +17,8 @@ use mw_project::{
     StructureEntryId,
 };
 use mw_project_file::{
-    EntryId, EntryView, Operation, ProjectDir, Provenance, ReadError, StructureFile,
-    structure_sha256,
+    AuditRecord, EntryId, EntryView, Operation, ProjectDir, ProjectLock, Provenance, ReadError,
+    Sha256, StructureFile, structure_sha256,
 };
 use mw_structure::import::OpenedFile;
 use mw_structure::{StructureDocument, StructureWorkspace, StructureWorkspaceEvent, Supercell};
@@ -68,6 +68,15 @@ pub struct Workbench {
     pub(crate) palette: Entity<CommandState>,
     /// Listening for MCP clients, while the setting is on (`mcp.rs`).
     pub(crate) mcp: Option<crate::mcp::Serving>,
+    /// Records of MCP clients' calls, until they are appended to their
+    /// project's audit log (`ai_log.rs`).
+    pub(crate) audit: HashMap<ProjectId, Vec<AuditRecord>>,
+    /// The open projects this process writes (`projects.rs`,
+    /// `docs/design/project-format.md` §15).
+    pub(crate) locks: HashMap<ProjectId, ProjectLock>,
+    /// For projects another process held when they were opened: their
+    /// manifest's digest then, to tell whether it saved them since.
+    pub(crate) unlocked: HashMap<ProjectId, Option<Sha256>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -98,6 +107,9 @@ impl Workbench {
             session: session.unwrap_or_default(),
             palette: cx.new(|cx| CommandState::new(window, cx)),
             mcp: None,
+            audit: HashMap::new(),
+            locks: HashMap::new(),
+            unlocked: HashMap::new(),
             _subscriptions: subscriptions,
         };
         this.focus_handle.focus(window, cx);
@@ -302,37 +314,50 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((project, _)) = self.catalog(cx).structure(from) else {
-            return;
-        };
+        let added = self.add_derived_structure(
+            from,
+            supercell.name.to_string(),
+            supercell.structure.clone(),
+            supercell.matrix,
+            &supercell.source,
+            cx,
+        );
+        if let Some(id) = added {
+            self.open_structure(id, window, cx);
+        }
+    }
+
+    /// Adds `structure`, the supercell by `matrix` of `from` as it is now
+    /// (`source`), to `from`'s project after it, under `name` or, when that
+    /// is taken, `name 2`, `name 3`, …; unsaved. For the supercell dialog
+    /// and for MCP clients (`host.rs`).
+    pub(crate) fn add_derived_structure(
+        &mut self,
+        from: StructureEntryId,
+        name: String,
+        structure: mw_crystal::Structure,
+        matrix: [[i32; 3]; 3],
+        source: &mw_crystal::Structure,
+        cx: &mut Context<Self>,
+    ) -> Option<StructureEntryId> {
+        let (project, _) = self.catalog(cx).structure(from)?;
         let names: Vec<&str> = project.structures().iter().map(|s| s.name()).collect();
-        let base = supercell.name.to_string();
         let name = (1..)
             .map(|n| {
                 if n == 1 {
-                    base.clone()
+                    name.clone()
                 } else {
-                    format!("{base} {n}")
+                    format!("{name} {n}")
                 }
             })
             .find(|name| !names.contains(&name.as_str()))
             .expect("some name is free");
-        let derived = DerivedEntry::new(
-            name,
-            supercell.structure.clone(),
-            Operation::MakeSupercell {
-                matrix: supercell.matrix,
-            },
-        );
+        let derived = DerivedEntry::new(name, structure, Operation::MakeSupercell { matrix });
         let added = self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.update_catalog(cx, |catalog| {
-                catalog.add_derived(from, &supercell.source, derived)
-            })
+            sidebar.update_catalog(cx, |catalog| catalog.add_derived(from, source, derived))
         });
-        if let Some(id) = added {
-            self.open_structure(id, window, cx);
-        }
         self.refresh_status(cx);
+        added
     }
 
     /// Tells the sidebar which structures have unsaved edits, and each open
@@ -699,6 +724,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::close_active_project))
             .on_action(cx.listener(Self::open_sample_projects))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::export_ai_log))
             .on_action(cx.listener(Self::toggle_dark_mode))
             .on_action(cx.listener(Self::switch_language))
             // Files and project folders dropped anywhere on the window are

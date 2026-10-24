@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::policy::{self, Client, Context, Permissions};
+use crate::policy::{self, Client, Confirmation, Context, Permissions};
 use crate::project::Projects;
 use crate::schema::Schema;
 
@@ -92,11 +92,20 @@ pub trait Host {
         command: Command,
         agent: Option<Agent>,
     ) -> Result<Outcome, CallError>;
-    /// Undoes the structure's last step, whoever made it; `None` when there
-    /// was none.
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError>;
-    /// Redoes the structure's last undone step; `None` when there was none.
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError>;
+    /// Undoes the structure's last step, whoever made it, for `agent` (`None`
+    /// for the user); `None` when there was none.
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        agent: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError>;
+    /// Redoes the structure's last undone step for `agent`; `None` when
+    /// there was none.
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        agent: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError>;
     /// The data block the structure was read from: its import diagnostics,
     /// and the CIF fields the structure does not hold. `None` for a
     /// structure that came from no file, such as a sample.
@@ -149,7 +158,7 @@ pub trait Host {
     /// `question` describes; the answer comes later, through `answer`.
     /// `false` when this host cannot ask, as without a window: then MCP's
     /// elicitation asks instead (design §5.3).
-    fn ask(&mut self, client: &Client, question: &str, answer: Answer) -> bool {
+    fn ask(&mut self, client: &Client, question: &Confirmation, answer: Answer) -> bool {
         let _ = (client, question, answer);
         false
     }
@@ -256,11 +265,19 @@ impl Host for Documents {
         Ok(self.document_mut(id)?.execute_by(command, agent)?)
     }
 
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
         Ok(self.document_mut(id)?.undo())
     }
 
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
         Ok(self.document_mut(id)?.redo())
     }
 
@@ -294,11 +311,19 @@ impl Host for Calling<'_> {
     ) -> Result<Outcome, CallError> {
         self.host.execute(id, command, agent)
     }
-    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
-        self.host.undo(id)
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        agent: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        self.host.undo(id, agent)
     }
-    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
-        self.host.redo(id)
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        agent: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        self.host.redo(id, agent)
     }
     fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
         self.host.source(id)
@@ -324,7 +349,7 @@ impl Host for Calling<'_> {
     fn permissions(&self, client: &Client) -> Permissions {
         self.host.permissions(client)
     }
-    fn ask(&mut self, client: &Client, question: &str, answer: Answer) -> bool {
+    fn ask(&mut self, client: &Client, question: &Confirmation, answer: Answer) -> bool {
         self.host.ask(client, question, answer)
     }
 }
@@ -461,7 +486,7 @@ impl Spec {
 }
 
 type Handler = Box<dyn Fn(&mut dyn Host, Value) -> Result<CallResult, CallError> + Send + Sync>;
-type Preflight = Box<dyn Fn(&dyn Host, Value) -> Result<String, CallError> + Send + Sync>;
+type Preflight = Box<dyn Fn(&dyn Host, Value) -> Result<Confirmation, CallError> + Send + Sync>;
 
 /// One operation that every entry point can call: the interface, scripts,
 /// the command line, MCP clients and the built-in assistant (design §4).
@@ -573,13 +598,13 @@ impl Registry {
     }
 
     /// Adds a capability that runs only once the user confirmed the call
-    /// (design §7.1): `preflight` checks the arguments and says, in one
-    /// English sentence for the user, what the call would do.
+    /// (design §7.1): `preflight` checks the arguments and says what the
+    /// call would do.
     pub fn register_confirmed<I, O, P, F>(&mut self, spec: Spec, preflight: P, handler: F)
     where
         I: Schema + DeserializeOwned,
         O: Schema + Serialize,
-        P: Fn(&dyn Host, I) -> Result<String, CallError> + Send + Sync + 'static,
+        P: Fn(&dyn Host, I) -> Result<Confirmation, CallError> + Send + Sync + 'static,
         F: Fn(&mut dyn Host, I) -> Result<Output<O>, CallError> + Send + Sync + 'static,
     {
         let preflight: Preflight =
@@ -720,16 +745,16 @@ impl Registry {
         error
     }
 
-    /// What the user is asked to confirm before `name` runs with `input`:
-    /// one English sentence, or `None` for a capability that needs no
-    /// confirmation. Checks the arguments first, so that the user is not
-    /// asked about a call that would fail.
+    /// What the user is asked to confirm before `name` runs with `input`,
+    /// or `None` for a capability that needs no confirmation. Checks the
+    /// arguments first, so that the user is not asked about a call that
+    /// would fail.
     pub fn confirmation(
         &self,
         host: &dyn Host,
         name: &str,
         input: Value,
-    ) -> Result<Option<String>, CallError> {
+    ) -> Result<Option<Confirmation>, CallError> {
         let capability = self.find(name)?;
         capability.available(host)?;
         let input = if input.is_null() { json!({}) } else { input };

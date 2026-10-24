@@ -4,6 +4,8 @@
 //! enforces this whatever a model says ([`crate::Registry::call_as`]), and
 //! records every call a client makes for the audit log (design §7.3).
 
+use std::path::PathBuf;
+
 use mw_crystal::Agent;
 use mw_project_file::{AuditClient, AuditEffect, AuditRecord, AuditResult, EntryId, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -72,6 +74,49 @@ impl Default for Permissions {
         Self {
             modify_data: true,
             write_files: true,
+        }
+    }
+}
+
+/// What the user is asked before an irreversible call runs (design
+/// §5.3): the facts, so that the application can word its own dialog, and
+/// [`Self::message`] for MCP elicitation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Confirmation {
+    /// Writing a structure to a file.
+    WriteFile {
+        /// The structure's name.
+        structure: String,
+        /// E.g. `POSCAR`.
+        format: String,
+        /// Canonical.
+        path: PathBuf,
+        bytes: usize,
+        /// A file is there and would be replaced.
+        replaces: bool,
+    },
+}
+
+impl Confirmation {
+    /// One English sentence for the user.
+    pub fn message(&self) -> String {
+        match self {
+            Self::WriteFile {
+                structure,
+                format,
+                path,
+                bytes,
+                replaces,
+            } => format!(
+                "Write {structure} as {format} ({bytes} bytes) to {}{}.",
+                path.display(),
+                if *replaces {
+                    ", replacing the file there"
+                } else {
+                    ""
+                }
+            ),
         }
     }
 }
