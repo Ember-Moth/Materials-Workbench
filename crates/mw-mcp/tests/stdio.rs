@@ -410,7 +410,7 @@ async fn stateless_clients_get_the_same_answers() {
     let projects = Projects::install();
     let client = start_stateless(&projects).await;
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 33);
+    assert_eq!(tools.len(), 34);
     let path = projects.tio2.to_str().unwrap();
     let opened = call(&client, "project_open", json!({ "path": path })).await;
     let id = output(&tools, "project_open", &opened)["structures"][0]["structure"].clone();

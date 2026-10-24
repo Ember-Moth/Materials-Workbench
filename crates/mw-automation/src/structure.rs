@@ -4,9 +4,9 @@
 
 use mw_crystal::{
     AtomRef, Axis, CellParam, CellPreset, CellTransform, CellValues, Command, Constraint,
-    CoordinateConstraint, CrystalDocument, DetectSymmetry, Edit, EditError, EditMode, Formula,
-    Measured, Measurement, Outcome, Rational, Setting, SiteId, SpaceGroupType, Species, Structure,
-    Symmetrization, Target, make_supercell,
+    CoordinateConstraint, CrystalDocument, DetectSymmetry, Disorder, Edit, EditError, EditMode,
+    Formula, Measured, Measurement, Outcome, Rational, Setting, SiteDisorder, SiteId,
+    SpaceGroupType, Species, Structure, Symmetrization, Target, make_supercell,
 };
 
 use crate::registry::{CallError, Effect, Host, Output, Registry, Spec, StructureEntryId};
@@ -139,6 +139,17 @@ schema_struct! {
 }
 
 schema_struct! {
+    pub struct DisorderOutput {
+        /// The disorder assembly, as CIF _atom_site_disorder_assembly; null
+        /// when the source names none.
+        pub assembly: Option<String>,
+        /// The disorder group within the assembly, as CIF
+        /// _atom_site_disorder_group, e.g. 1 or 2; 0 is the ordered part.
+        pub group: String,
+    }
+}
+
+schema_struct! {
     pub struct SiteOutput {
         pub site: SiteId,
         /// Label of the first occupant.
@@ -153,6 +164,9 @@ schema_struct! {
         pub coordinate_form: String,
         /// More than one for mixed occupancy.
         pub occupants: Vec<OccupantOutput>,
+        /// For a split site of positional disorder, the assembly and group
+        /// it belongs to; null for an ordered site.
+        pub disorder: Option<DisorderOutput>,
     }
 }
 
@@ -352,6 +366,30 @@ schema_struct! {
         /// New label: unique in the structure, non-empty, without white
         /// space, not starting with _ # $ ' " [ ] or ;.
         pub label: String,
+    }
+}
+
+schema_struct! {
+    pub struct DisorderInput {
+        /// The site's id, from structure.sites.
+        pub site: SiteId,
+        /// The disorder assembly, e.g. A; empty for none, as when a
+        /// structure has a single disordered part.
+        pub assembly: String,
+        /// The disorder group within the assembly, e.g. 1 or 2; empty takes
+        /// the site out of the disorder, and then assembly must be empty
+        /// too.
+        pub group: String,
+    }
+}
+
+schema_struct! {
+    pub struct SetDisorderInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// Sites to change, each with all its equivalent atoms; each site
+        /// once.
+        pub sites: NonEmpty<DisorderInput>,
     }
 }
 
@@ -776,6 +814,19 @@ fn site_text(document: &CrystalDocument, site: SiteId) -> String {
     )
 }
 
+/// A site's disorder in words, e.g. `group 2 of assembly A`.
+fn disorder_text(disorder: Option<&Disorder>) -> String {
+    match disorder {
+        None => "not disordered".into(),
+        Some(Disorder {
+            assembly: Some(assembly),
+            group,
+            ..
+        }) => format!("group {group} of assembly {assembly}"),
+        Some(disorder) => format!("group {}", disorder.group),
+    }
+}
+
 /// The change of cell a call asks for.
 fn cell_transform(
     document: &CrystalDocument,
@@ -1100,6 +1151,10 @@ pub(crate) fn register(registry: &mut Registry) {
                                 occupancy: o.occupancy.value(),
                             })
                             .collect(),
+                        disorder: site.disorder.as_ref().map(|d| DisorderOutput {
+                            assembly: d.assembly.clone(),
+                            group: d.group.clone(),
+                        }),
                     }
                 })
                 .collect();
@@ -1488,6 +1543,54 @@ pub(crate) fn register(registry: &mut Registry) {
                 &output,
                 format!("Renamed {} to {}.", input.occupant, input.label),
             );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.set_disorder",
+            "Put sites in a group of a disorder assembly, or take them out of the disorder, each \
+             site with all its equivalent atoms, in one undoable step. Sites in different groups \
+             of one assembly are alternative positions, never occupied together: they are not \
+             bonded, and the occupancies of such sites next to each other should add up to at \
+             most 1, which is checked with a warning. Group 0 is the ordered part, as in SHELX. \
+             Codes are text as in CIF _atom_site_disorder_assembly and \
+             _atom_site_disorder_group (e.g. A and 1; 1 and 01 differ), without white space, \
+             not . or ?. Also warns when sites that were alternatives are now taken to be \
+             present together closer than the short-contact distance. structure.sites shows \
+             each site's disorder.",
+        )
+        .idempotent(),
+        |host: &mut dyn Host, input: SetDisorderInput| {
+            let mut sites = Vec::with_capacity(input.sites.0.len());
+            for item in &input.sites.0 {
+                let assembly = (!item.assembly.is_empty()).then(|| item.assembly.clone());
+                let disorder = match (assembly, item.group.as_str()) {
+                    (None, "") => None,
+                    (Some(_), "") => {
+                        return Err(invalid(format!(
+                            "site {}: an assembly needs a group; leave both empty to take the \
+                             site out of the disorder",
+                            item.site.0
+                        )));
+                    }
+                    (assembly, group) => Some(Disorder::new(assembly, group.into())),
+                };
+                sites.push(SiteDisorder::new(item.site, disorder));
+            }
+            let ids: Vec<SiteId> = sites.iter().map(|s| s.site).collect();
+            let (document, outcome) = run(host, input.structure, Edit::SetDisorder { sites })?;
+            let structure = document.structure();
+            let done: Vec<String> = ids
+                .iter()
+                .map(|&id| {
+                    let disorder = structure.site(id).and_then(|s| s.disorder.as_ref());
+                    format!("{}: {}", label(structure, id), disorder_text(disorder))
+                })
+                .collect();
+            let output = edit_output(document, outcome, ids);
+            let summary = edit_summary(&output, format!("{}.", done.join("; ")));
             Ok(Output::new(output, summary))
         },
     );

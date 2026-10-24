@@ -133,6 +133,7 @@ fn effects() {
         // (ai-integration design §7.1): nothing there changes.
         "structure.make_supercell",
         "file.import",
+        "structure.set_disorder",
     ] {
         assert_eq!(effect(name), Effect::Undoable, "{name}");
     }
@@ -147,6 +148,7 @@ fn effects() {
     };
     assert_eq!(hints("structure.summary"), (false, true));
     assert_eq!(hints("structure.set_cell"), (false, true));
+    assert_eq!(hints("structure.set_disorder"), (false, true));
     assert_eq!(hints("structure.add_site"), (true, false));
     assert_eq!(hints("structure.make_supercell"), (true, false));
     assert_eq!(hints("file.import"), (true, false));
@@ -464,6 +466,107 @@ fn mixed_occupancy() {
     .unwrap_err();
     assert_eq!(last.code, "last_occupant");
     assert_eq!(last.guidance.len(), 1);
+}
+
+#[test]
+fn disorder_groups() {
+    let (registry, mut documents, [rutile, _, supercell]) = session();
+    let set = |documents: &mut Documents, structure, sites: Value| {
+        call(
+            &registry,
+            documents,
+            "structure.set_disorder",
+            json!({ "structure": structure, "sites": sites }),
+        )
+    };
+    let disorder = |documents: &mut Documents, structure, site: usize| {
+        let sites = call(
+            &registry,
+            documents,
+            "structure.sites",
+            json!({ "structure": structure, "offset": 0, "limit": 500 }),
+        )
+        .unwrap();
+        sites.output["sites"][site]["disorder"].clone()
+    };
+
+    // Whole sites, in one step: Ti1 is site 1, O1 site 2.
+    let done = set(
+        &mut documents,
+        rutile,
+        json!([
+            { "site": 2, "assembly": "A", "group": "1" },
+            { "site": 1, "assembly": "", "group": "2" },
+        ]),
+    )
+    .unwrap();
+    assert_eq!(done.output["changed"], true);
+    assert_eq!(done.output["sites"], json!([2, 1]));
+    assert_eq!(
+        done.summary, "O1: group 1 of assembly A; Ti1: group 2.",
+        "{}",
+        done.summary
+    );
+    assert_eq!(
+        disorder(&mut documents, rutile, 1),
+        json!({ "assembly": "A", "group": "1" })
+    );
+    assert_eq!(
+        disorder(&mut documents, rutile, 0),
+        json!({ "assembly": null, "group": "2" })
+    );
+    let again = set(
+        &mut documents,
+        rutile,
+        json!([{ "site": 2, "assembly": "A", "group": "1" }]),
+    )
+    .unwrap();
+    assert_eq!(again.output["changed"], false);
+    let undone = call(
+        &registry,
+        &mut documents,
+        "history.undo",
+        json!({ "structure": rutile }),
+    )
+    .unwrap();
+    assert_eq!(undone.output["changed"], true);
+    assert_eq!(disorder(&mut documents, rutile, 1), Value::Null);
+
+    // Empty codes take a site out of the disorder; this one has none.
+    let cleared = set(
+        &mut documents,
+        supercell,
+        json!([{ "site": 1, "assembly": "", "group": "" }]),
+    )
+    .unwrap();
+    assert_eq!(cleared.output["changed"], false);
+    assert!(cleared.summary.starts_with("Nothing changed"));
+
+    let error =
+        |documents: &mut Documents, sites: Value| set(documents, rutile, sites).unwrap_err();
+    let refused = error(
+        &mut documents,
+        json!([{ "site": 2, "assembly": "A", "group": "." }]),
+    );
+    assert_eq!(refused.code, "invalid_disorder_code");
+    let refused = error(
+        &mut documents,
+        json!([{ "site": 2, "assembly": "A", "group": "" }]),
+    );
+    assert_eq!(refused.code, "invalid_arguments");
+    let refused = error(
+        &mut documents,
+        json!([
+            { "site": 2, "assembly": "", "group": "1" },
+            { "site": 2, "assembly": "", "group": "2" },
+        ]),
+    );
+    assert_eq!(refused.code, "repeated_site");
+    let refused = error(
+        &mut documents,
+        json!([{ "site": 9, "assembly": "", "group": "1" }]),
+    );
+    assert_eq!(refused.code, "unknown_site");
 }
 
 #[test]

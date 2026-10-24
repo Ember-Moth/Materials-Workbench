@@ -7,8 +7,8 @@ mod common;
 use std::path::Path;
 
 use mw_crystal::{
-    CellParams, Lattice, Measured, Occupant, Orientation, Rotation, Site, SiteId, Species,
-    Structure, SymOp, Symmetry,
+    CellParams, Disorder, Edit, Lattice, Measured, Occupant, Orientation, Rotation, Site,
+    SiteDisorder, SiteId, Species, Structure, SymOp, Symmetry,
 };
 use mw_crystal_io::{ExportError, ImportReport, cif, poscar, xyz};
 
@@ -172,6 +172,70 @@ fn kept_fields_are_written_back_while_the_structure_is_unchanged() {
     assert!(changed.text.contains("_journal_name_full"));
     assert!(!changed.text.contains("_atom_type_symbol"));
     assert!(!changed.text.contains("_Custom_Note"));
+}
+
+#[test]
+fn edited_disorder_is_written_back() {
+    // C5 and C6 are group 1 of assembly A, C5A group 2.
+    let report = fixture("zero_occupancy.cif");
+    let (block, structure) = report.structures().next().unwrap();
+    let id = |label: &str| {
+        let site = structure.sites.iter().find(|s| s.label() == label);
+        site.expect(label).id
+    };
+    let disorder = |assembly: Option<&str>, group: &str| {
+        Some(Disorder::new(assembly.map(Into::into), group.into()))
+    };
+    let set = |structure: &Structure, changes: Vec<(&str, Option<Disorder>)>| {
+        let sites = changes
+            .into_iter()
+            .map(|(label, disorder)| SiteDisorder::new(id(label), disorder))
+            .collect();
+        Edit::SetDisorder { sites }
+            .apply(structure)
+            .unwrap()
+            .structure
+    };
+    let read_back = |edited: &Structure| {
+        let written = cif::write(edited, &block.write_options(edited));
+        let report = cif::read_str(&written.text);
+        let again = report.structures().next().unwrap().1.clone();
+        (written.text, again)
+    };
+    let disorders = |structure: &Structure| -> Vec<(String, Option<Disorder>)> {
+        let sites = structure.sites.iter();
+        sites
+            .map(|s| (s.label().to_string(), s.disorder.clone()))
+            .collect()
+    };
+
+    // Without an assembly, out of the disorder, and a negative SHELX part.
+    let edited = set(
+        structure,
+        vec![
+            ("C5", disorder(Some("A"), "-1")),
+            ("C6", disorder(None, "major")),
+            ("C5A", None),
+        ],
+    );
+    let (text, again) = read_back(&edited);
+    assert_eq!(disorders(&again), disorders(&edited));
+    for line in [
+        "C5  C 1 a 0.2  0.2  0.2  0.6 0.05 Uiso A -1",
+        "C6  C 1 a 0.35 0.25 0.3  0.6 0.05 Uiso . major",
+        "C5A C 1 a 0.22 0.15 0.25 0.4 0.05 Uiso . .",
+    ] {
+        assert!(
+            text.lines().any(|l| l == line),
+            "{line:?} missing in\n{text}"
+        );
+    }
+
+    // With no disorder left, the columns go.
+    let ordered = set(structure, vec![("C5", None), ("C6", None), ("C5A", None)]);
+    let (text, again) = read_back(&ordered);
+    assert!(!text.contains("_atom_site_disorder"), "{text}");
+    assert!(again.sites.iter().all(|s| s.disorder.is_none()));
 }
 
 #[test]
