@@ -1970,3 +1970,250 @@ fn polyhedra_of_large_ranges_are_prepared_in_the_background(cx: &mut TestAppCont
         started.elapsed()
     );
 }
+
+/// What the viewport draws now.
+fn drawn(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) -> mw_viewport::Scene {
+    workspace.read_with(cx, |workspace, cx| {
+        workspace.viewport.read(cx).scene().clone()
+    })
+}
+
+/// Rutile with an isotropic Ti and an anisotropic O, as a refinement gives
+/// them.
+fn rutile_with_adps() -> mw_crystal::Structure {
+    use mw_crystal::{Adp, Measured};
+    let mut structure = mw_crystal::sample::load(SampleKey::Rutile).structure;
+    structure.sites[0].occupants[0].adp = Some(Adp::Isotropic(Measured::exact(0.006)));
+    structure.sites[1].occupants[0].adp = Some(Adp::Anisotropic(
+        [0.007, 0.007, 0.004, -0.002, 0.0, 0.0].map(Measured::exact),
+    ));
+    structure
+}
+
+/// Milestone M16: the ellipsoids model draws each atom as its displacement
+/// ellipsoid; atoms are picked on them as on balls; the popover sets the
+/// probability, refusing what is not a whole percent; it is view state,
+/// saved with the view.
+#[gpui_kit::test]
+fn the_ellipsoids_model_draws_displacement_ellipsoids(cx: &mut TestAppContext) {
+    use crate::scene::DisplayModel;
+    let (rutile, mut cx) = open_structure(cx, rutile_with_adps());
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowEllipsoids), cx));
+    draw(&mut cx);
+    let scene = drawn(&rutile, &mut cx);
+    assert!(scene.spheres.is_empty());
+    assert_eq!(scene.ellipsoids.len(), shown_atoms(&rutile, &mut cx).len());
+    let largest = |scene: &mw_viewport::Scene| {
+        scene
+            .ellipsoids
+            .iter()
+            .map(|e| e.center_radius[3])
+            .fold(0.0, f32::max)
+    };
+    let at_50 = largest(&scene);
+    // Along [1 −1 0], U11 − U12 = 0.009 Å².
+    assert!((at_50 - 1.53817 * 0.009f32.sqrt()).abs() < 1e-4, "{at_50}");
+    // Every site has parameters: nothing to note.
+    assert_eq!(rutile.read_with(&cx, |w, _| w.ellipsoid_info()), None);
+    // Atoms are hovered on their ellipsoids.
+    let (o, _) = hover_atom_of(&rutile, SiteId(2), &mut cx);
+    assert_eq!(o.site, SiteId(2));
+
+    // The palette's command opens the popover at 50 %.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditEllipsoids), cx));
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |w, _| w.ellipsoids_open));
+    let panel = rutile.read_with(&cx, |w, _| w.ellipsoids_panel.clone());
+    let probability = panel.read_with(&cx, |panel, _| panel.probability.clone());
+    assert_eq!(text(&probability, &mut cx), "50");
+    type_into(&mut cx, &probability, "90");
+    assert_eq!(rutile.read_with(&cx, |w, _| w.ellipsoid_probability()), 0.9);
+    let at_90 = largest(&drawn(&rutile, &mut cx));
+    assert!((at_90 / at_50 - 2.50028 / 1.53817).abs() < 1e-4);
+    // Refused: not a whole percent from 1 to 99. The probability stays.
+    for refused in ["0", "100", "half"] {
+        type_into(&mut cx, &probability, refused);
+        assert!(panel.read_with(&cx, |panel, _| panel.error()).is_some());
+        assert_eq!(rutile.read_with(&cx, |w, _| w.ellipsoid_probability()), 0.9);
+    }
+    // The stepper goes by tens, and clears the error.
+    cx.update(|_, cx| {
+        probability.update(cx, |_, cx| {
+            cx.emit(NumberInputEvent::Step(StepAction::Decrement))
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(rutile.read_with(&cx, |w, _| w.ellipsoid_probability()), 0.8);
+    assert_eq!(text(&probability, &mut cx), "80");
+    assert_eq!(panel.read_with(&cx, |panel, _| panel.error()), None);
+    assert_eq!(steps(&rutile, &mut cx), 0);
+
+    // Saved with the view, and restored from it.
+    let view = cx.update(|_, cx| rutile.read(cx).view(cx));
+    assert_eq!(
+        view.display_model,
+        Some(mw_project_file::DisplayModel::Ellipsoids)
+    );
+    assert_eq!(view.ellipsoid_probability, Some(0.8));
+    rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_ellipsoid_probability(0.5, cx)
+    });
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowBallAndStick), cx));
+    draw(&mut cx);
+    // Leaving the model closes its popover.
+    assert!(!rutile.read_with(&cx, |w, _| w.ellipsoids_open));
+    assert!(drawn(&rutile, &mut cx).ellipsoids.is_empty());
+    rutile.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    let restored = rutile.read_with(&cx, |w, _| (w.display_model(), w.ellipsoid_probability()));
+    assert_eq!(restored, (DisplayModel::Ellipsoids, 0.8));
+    // The default probability is left out of the view.
+    rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_ellipsoid_probability(0.5, cx)
+    });
+    let view = cx.update(|_, cx| rutile.read(cx).view(cx));
+    assert_eq!(view.ellipsoid_probability, None);
+}
+
+/// Sites without displacement parameters are small spheres among the
+/// ellipsoids; the info chip and the popover say which.
+#[gpui_kit::test]
+fn sites_without_parameters_are_noted(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    assert_eq!(rutile.read_with(&cx, |w, _| w.ellipsoid_info()), None);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowEllipsoids), cx));
+    draw(&mut cx);
+    let note = rutile
+        .read_with(&cx, |w, _| w.ellipsoid_info())
+        .expect("a note in the ellipsoids model");
+    assert!(note.contains('2'), "{note}");
+    let scene = drawn(&rutile, &mut cx);
+    let radii: Vec<f32> = scene
+        .ellipsoids
+        .iter()
+        .map(|e| e.center_radius[3])
+        .collect();
+    assert!(radii.windows(2).all(|pair| pair[0] == pair[1]), "{radii:?}");
+}
+
+fn planes_panel(
+    workspace: &Entity<StructureWorkspace>,
+    cx: &mut VisualTestContext,
+) -> Entity<crate::planes::PlanesPanel> {
+    workspace.read_with(cx, |workspace, _| workspace.planes_panel.clone())
+}
+
+/// Milestone M16: the popover adds lattice planes by their Miller indices,
+/// one spacing from the origin, moves and removes them; each is drawn cut
+/// to the display range, in a color of its own. Refused values say why.
+/// Planes are view state, saved with the view, and stay through edits.
+#[gpui_kit::test]
+fn lattice_planes_are_added_moved_and_removed(cx: &mut TestAppContext) {
+    use mw_crystal::{DisplayRange, LatticePlane};
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    assert!(drawn(&rutile, &mut cx).polyhedra.is_empty());
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditPlanes), cx));
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |w, _| w.planes_open));
+    let panel = planes_panel(&rutile, &mut cx);
+    let miller = panel.read_with(&cx, |panel, _| panel.miller.clone());
+
+    // (1 1 0): typed, Enter in l adds it, and the fields empty.
+    type_text(&mut cx, &miller[0], "1");
+    type_text(&mut cx, &miller[1], "1");
+    type_into(&mut cx, &miller[2], "0");
+    let planes = rutile.read_with(&cx, |w, _| w.planes());
+    assert_eq!(planes, [LatticePlane::new([1, 1, 0], 1.0).unwrap()]);
+    assert_eq!(text(&miller[0], &mut cx), "");
+    let scene = drawn(&rutile, &mut cx);
+    assert_eq!(scene.polyhedra.len(), 1);
+    // x + y = 1 through the cell: a rectangle a√2 wide and c high.
+    let corners = &scene.polyhedra[0].vertices;
+    assert_eq!(corners.len(), 4);
+    // (0 0 1) in the next color, with a minus sign as typography writes it.
+    type_text(&mut cx, &miller[0], "0");
+    type_text(&mut cx, &miller[1], "0");
+    type_into(&mut cx, &miller[2], "\u{2212}1");
+    let colors = rutile.read_with(&cx, |w, _| {
+        w.planes.iter().map(|shown| shown.color).collect::<Vec<_>>()
+    });
+    assert_eq!(colors, [0, 1]);
+    // z = −c is below the cell: listed, not drawn.
+    assert_eq!(drawn(&rutile, &mut cx).polyhedra.len(), 1);
+
+    // Refused: not whole numbers, or all zero. Nothing is added.
+    type_text(&mut cx, &miller[0], "1.5");
+    type_text(&mut cx, &miller[1], "0");
+    type_into(&mut cx, &miller[2], "0");
+    assert!(panel.read_with(&cx, |panel, _| panel.error()).is_some());
+    type_text(&mut cx, &miller[0], "0");
+    type_into(&mut cx, &miller[2], "0");
+    assert!(panel.read_with(&cx, |panel, _| panel.error()).is_some());
+    assert_eq!(rutile.read_with(&cx, |w, _| w.planes().len()), 2);
+
+    // Moved to −1 spacing: (0 0 −1) at −1 is z = c, the top face.
+    let positions = panel.read_with(&cx, |panel, _| panel.positions.clone());
+    assert_eq!(positions.len(), 2);
+    assert_eq!(text(&positions[1].1, &mut cx), "1");
+    type_into(&mut cx, &positions[1].1, "-1");
+    assert_eq!(panel.read_with(&cx, |panel, _| panel.error()), None);
+    assert_eq!(drawn(&rutile, &mut cx).polyhedra.len(), 2);
+    type_into(&mut cx, &positions[1].1, "x");
+    assert!(panel.read_with(&cx, |panel, _| panel.error()).is_some());
+    assert_eq!(rutile.read_with(&cx, |w, _| w.planes()[1].position()), -1.0);
+
+    // A block of cells: the plane spans it.
+    let range = DisplayRange::Cells {
+        counts: [2, 2, 1],
+        boundary: true,
+    };
+    rutile
+        .update(&mut cx, |workspace, cx| {
+            workspace.set_display_range(range, cx)
+        })
+        .unwrap();
+    draw(&mut cx);
+    assert_eq!(drawn(&rutile, &mut cx).polyhedra.len(), 2);
+    // An edit keeps the planes; their spacing follows the cell.
+    let edit = mw_crystal::Edit::SetCell {
+        values: mw_crystal::CellValues::default().with(CellParam::C, 3.2),
+    };
+    rutile.update_in(&mut cx, |workspace, window, cx| {
+        workspace.execute(Command::Edit(edit), window, cx).unwrap()
+    });
+    draw(&mut cx);
+    assert_eq!(rutile.read_with(&cx, |w, _| w.planes().len()), 2);
+    assert_eq!(drawn(&rutile, &mut cx).polyhedra.len(), 2);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+
+    // Saved with the view, and restored from it.
+    let view = cx.update(|_, cx| rutile.read(cx).view(cx));
+    assert_eq!(view.planes.len(), 2);
+    assert_eq!(view.planes[1].miller, [0, 0, -1]);
+    assert_eq!(view.planes[1].color, 1);
+    // Removed with its button: the other stays, in its color.
+    let first = rutile.read_with(&cx, |w, _| w.planes[0].id);
+    rutile.update_in(&mut cx, |workspace, window, cx| {
+        workspace.remove_plane(first, window, cx)
+    });
+    draw(&mut cx);
+    let colors = rutile.read_with(&cx, |w, _| {
+        w.planes.iter().map(|shown| shown.color).collect::<Vec<_>>()
+    });
+    assert_eq!(colors, [1]);
+    assert_eq!(drawn(&rutile, &mut cx).polyhedra.len(), 1);
+    assert_eq!(panel.read_with(&cx, |panel, _| panel.positions.len()), 1);
+    // Escape closes the popover, which has the focus.
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(!rutile.read_with(&cx, |w, _| w.planes_open));
+    rutile.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    assert_eq!(rutile.read_with(&cx, |w, _| w.planes().len()), 2);
+    // Still view state: no undo step but the cell's.
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    // Opened again, the popover lists both.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditPlanes), cx));
+    draw(&mut cx);
+    assert_eq!(panel.read_with(&cx, |panel, _| panel.positions.len()), 2);
+}

@@ -9,7 +9,9 @@ use wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3};
 
 use crate::camera::CameraMatrices;
-use crate::scene::{BondInstance, HighlightRing, LineInstance, Scene, SphereInstance};
+use crate::scene::{
+    BondInstance, EllipsoidInstance, HighlightRing, LineInstance, Scene, SphereInstance,
+};
 
 /// sRGB so that the bytes read back match what GPUI expects from a decoded
 /// image: sRGB-encoded BGRA.
@@ -32,12 +34,16 @@ const PICK_RADIUS: u32 = 4;
 // Must match the constants in common.wgsl.
 const SPHERE_ID: u32 = 1 << 30;
 const BOND_ID: u32 = 2 << 30;
+const ELLIPSOID_ID: u32 = 3 << 30;
 const ID_INDEX_MASK: u32 = (1 << 30) - 1;
 
 const SPHERE_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
 const BOND_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+const ELLIPSOID_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4
+];
 const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 const TRIANGLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
@@ -99,19 +105,22 @@ pub struct PickRequest {
     pub y: u32,
 }
 
-/// An object found under the pointer: the index of a sphere or bond in the
-/// current [`Scene`].
+/// An object found under the pointer in the current [`Scene`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pick {
+    /// The index of an atom: a sphere, or after the spheres an ellipsoid
+    /// ([`Scene::atom`]).
     Sphere(usize),
     Bond(usize),
 }
 
 impl Pick {
-    fn decode(id: u32) -> Option<Self> {
+    /// The object of an ID drawn for a scene with `spheres` spheres.
+    fn decode(id: u32, spheres: usize) -> Option<Self> {
         let index = (id & ID_INDEX_MASK) as usize;
         match id & !ID_INDEX_MASK {
             SPHERE_ID => Some(Self::Sphere(index)),
+            ELLIPSOID_ID => Some(Self::Sphere(spheres + index)),
             BOND_ID => Some(Self::Bond(index)),
             _ => None,
         }
@@ -258,6 +267,8 @@ pub struct PendingPick {
     height: u32,
     /// The pointer, relative to the region.
     target: (u32, u32),
+    /// The scene's spheres, which come before its ellipsoids.
+    spheres: usize,
 }
 
 impl PendingPick {
@@ -271,7 +282,7 @@ impl PendingPick {
             let row = padded_bytes_per_row(self.width) / 4;
             for y in 0..self.height {
                 for x in 0..self.width {
-                    let Some(pick) = Pick::decode(ids[(y * row + x) as usize]) else {
+                    let Some(pick) = Pick::decode(ids[(y * row + x) as usize], self.spheres) else {
                         continue;
                     };
                     let (dx, dy) = (x.abs_diff(self.target.0), y.abs_diff(self.target.1));
@@ -356,11 +367,19 @@ impl Instances {
     }
 }
 
+/// Å: flat polygons, such as lattice planes, are cut into triangles about
+/// this size, each sorted on its own. A plane spanning many cells then
+/// takes its place among the polyhedra in front of and behind it, and two
+/// crossing planes among each other; sorted whole by its centroid it would
+/// be blended over everything or under everything.
+const FLAT_TILE: f32 = 2.0;
+
 /// The scene's polyhedra, kept on the CPU so that their faces can be put in
 /// back-to-front order for each view (`docs/design/viewport-rendering.md`
 /// §5.6): polyhedra by the depth of their centroids, and within each, the
 /// faces turned away from the camera before those turned toward it, which
-/// is exact for a convex polyhedron.
+/// is exact for a convex polyhedron. Flat polygons are cut into tiles of
+/// [`FLAT_TILE`], each its own group.
 struct Polyhedra {
     /// Each polyhedron's centroid and its faces in `faces`.
     groups: Vec<([f32; 3], std::ops::Range<usize>)>,
@@ -389,17 +408,16 @@ impl Polyhedra {
             if corners.is_empty() {
                 continue;
             }
-            let centroid = corners.iter().sum::<Vec3>() / corners.len() as f32;
-            let start = faces.len();
-            for triangle in &polyhedron.triangles {
-                let corner = |i: u32| corners.get(i as usize).copied();
-                let (Some(a), Some(b), Some(c)) = (
-                    corner(triangle[0]),
-                    corner(triangle[1]),
-                    corner(triangle[2]),
-                ) else {
-                    continue;
-                };
+            let triangles: Vec<[Vec3; 3]> = polyhedron
+                .triangles
+                .iter()
+                .filter_map(|t| {
+                    let corner = |i: u32| corners.get(i as usize).copied();
+                    Some([corner(t[0])?, corner(t[1])?, corner(t[2])?])
+                })
+                .collect();
+            let mut push = |triangle: [Vec3; 3], faces: &mut Vec<TriangleInstance>| {
+                let [a, b, c] = triangle;
                 let point = |p: Vec3| [p.x, p.y, p.z, 0.0];
                 faces.push(TriangleInstance {
                     a: point(a),
@@ -408,8 +426,24 @@ impl Polyhedra {
                     color: polyhedron.color,
                 });
                 normals.push((b - a).cross(c - a).to_array());
+            };
+            if is_flat(&corners, &triangles) {
+                for triangle in triangles {
+                    for tile in tiles(triangle, FLAT_TILE) {
+                        let start = faces.len();
+                        push(tile, &mut faces);
+                        let centroid = (tile[0] + tile[1] + tile[2]) / 3.0;
+                        groups.push((centroid.to_array(), start..faces.len()));
+                    }
+                }
+            } else {
+                let centroid = corners.iter().sum::<Vec3>() / corners.len() as f32;
+                let start = faces.len();
+                for triangle in triangles {
+                    push(triangle, &mut faces);
+                }
+                groups.push((centroid.to_array(), start..faces.len()));
             }
-            groups.push((centroid.to_array(), start..faces.len()));
         }
         (!faces.is_empty()).then(|| Self {
             buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -467,13 +501,56 @@ impl Polyhedra {
     }
 }
 
+/// Whether every corner of a polyhedron lies in the plane of its first
+/// face, within a millionth of its size.
+fn is_flat(corners: &[Vec3], triangles: &[[Vec3; 3]]) -> bool {
+    let Some([a, b, c]) = triangles.first() else {
+        return false;
+    };
+    let normal = (*b - *a).cross(*c - *a);
+    let size = corners
+        .iter()
+        .map(|p| p.distance(*a))
+        .fold(0.0f32, f32::max);
+    if normal.length() <= f32::EPSILON * size * size {
+        return false;
+    }
+    let normal = normal.normalize();
+    corners
+        .iter()
+        .all(|p| normal.dot(*p - *a).abs() <= 1e-6 * size.max(1.0))
+}
+
+/// A triangle cut into n² triangles whose edges are at most about `size`:
+/// n parts along each edge, from a grid of points that neighbors share, so
+/// that no pixel is covered twice.
+fn tiles(triangle: [Vec3; 3], size: f32) -> Vec<[Vec3; 3]> {
+    let [a, b, c] = triangle;
+    let longest = a.distance(b).max(b.distance(c)).max(c.distance(a));
+    let n = ((longest / size).ceil() as usize).clamp(1, 256);
+    let point =
+        |i: usize, j: usize| a + (b - a) * (i as f32 / n as f32) + (c - a) * (j as f32 / n as f32);
+    let mut tiles = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n - i {
+            tiles.push([point(i, j), point(i + 1, j), point(i, j + 1)]);
+            if i + j + 1 < n {
+                tiles.push([point(i + 1, j), point(i + 1, j + 1), point(i, j + 1)]);
+            }
+        }
+    }
+    tiles
+}
+
 struct Pipelines {
     spheres: wgpu::RenderPipeline,
+    ellipsoids: wgpu::RenderPipeline,
     bonds: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     polyhedra: wgpu::RenderPipeline,
     rings: wgpu::RenderPipeline,
     sphere_ids: wgpu::RenderPipeline,
+    ellipsoid_ids: wgpu::RenderPipeline,
     bond_ids: wgpu::RenderPipeline,
 }
 
@@ -504,6 +581,7 @@ impl Pipelines {
             })
         };
         let sphere = shader("sphere.wgsl", include_str!("sphere.wgsl"));
+        let ellipsoid = shader("ellipsoid.wgsl", include_str!("ellipsoid.wgsl"));
         let bond = shader("bond.wgsl", include_str!("bond.wgsl"));
         let line = shader("line.wgsl", include_str!("line.wgsl"));
         let polyhedron = shader("polyhedron.wgsl", include_str!("polyhedron.wgsl"));
@@ -566,6 +644,17 @@ impl Pipelines {
             depth_write: true,
             blend: false,
         };
+        let ellipsoids = |label, fragment, ids| PipelineSpec {
+            label,
+            module: &ellipsoid,
+            vertex: "vs_main",
+            fragment,
+            stride: std::mem::size_of::<EllipsoidInstance>(),
+            attributes: &ELLIPSOID_ATTRIBUTES,
+            ids,
+            depth_write: true,
+            blend: false,
+        };
         let bonds = |label, fragment, ids| PipelineSpec {
             label,
             module: &bond,
@@ -580,6 +669,8 @@ impl Pipelines {
         Self {
             spheres: pipeline(spheres("spheres", "fs_main", false)),
             sphere_ids: pipeline(spheres("sphere ids", "fs_id", true)),
+            ellipsoids: pipeline(ellipsoids("ellipsoids", "fs_main", false)),
+            ellipsoid_ids: pipeline(ellipsoids("ellipsoid ids", "fs_id", true)),
             bonds: pipeline(bonds("bonds", "fs_main", false)),
             bond_ids: pipeline(bonds("bond ids", "fs_id", true)),
             lines: pipeline(PipelineSpec {
@@ -626,9 +717,12 @@ pub struct Renderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     spheres: Option<Instances>,
+    ellipsoids: Option<Instances>,
     bonds: Option<Instances>,
     lines: Option<Instances>,
     polyhedra: Option<Polyhedra>,
+    /// The scene's spheres, which come before its ellipsoids in picks.
+    sphere_count: usize,
     rings: Option<Instances>,
     /// Counts scene changes, so a stale ID texture is redrawn.
     scene_generation: u64,
@@ -738,6 +832,8 @@ impl Renderer {
             camera_buffer,
             camera_bind_group,
             spheres: None,
+            ellipsoids: None,
+            sphere_count: 0,
             bonds: None,
             lines: None,
             polyhedra: None,
@@ -759,6 +855,8 @@ impl Renderer {
     /// bounding radius in Å.
     pub fn set_scene(&mut self, scene: &Scene) -> f32 {
         self.spheres = Instances::upload(&self.device, "spheres", &scene.spheres);
+        self.ellipsoids = Instances::upload(&self.device, "ellipsoids", &scene.ellipsoids);
+        self.sphere_count = scene.spheres.len();
         self.bonds = Instances::upload(&self.device, "bonds", &scene.bonds);
         self.lines = Instances::upload(&self.device, "lines", &scene.lines);
         self.polyhedra = Polyhedra::new(&self.device, scene);
@@ -834,6 +932,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             let pipelines = &self.pipelines;
             Instances::draw(&self.spheres, &mut pass, &pipelines.spheres);
+            Instances::draw(&self.ellipsoids, &mut pass, &pipelines.ellipsoids);
             Instances::draw(&self.bonds, &mut pass, &pipelines.bonds);
             Instances::draw(&self.lines, &mut pass, &pipelines.lines);
             // Translucent, over everything opaque; rings stay on top.
@@ -934,6 +1033,7 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             Instances::draw(&self.spheres, &mut pass, &self.pipelines.sphere_ids);
+            Instances::draw(&self.ellipsoids, &mut pass, &self.pipelines.ellipsoid_ids);
             Instances::draw(&self.bonds, &mut pass, &self.pipelines.bond_ids);
             targets.drawn = Some(drawn);
         }
@@ -981,6 +1081,7 @@ impl Renderer {
             width: region_width,
             height: region_height,
             target: (request.x - x0, request.y - y0),
+            spheres: self.sphere_count,
         })
     }
 
@@ -1160,10 +1261,11 @@ mod tests {
 
     #[test]
     fn pick_ids_round_trip() {
-        assert_eq!(Pick::decode(0), None);
-        assert_eq!(Pick::decode(SPHERE_ID | 7), Some(Pick::Sphere(7)));
-        assert_eq!(Pick::decode(BOND_ID), Some(Pick::Bond(0)));
-        assert_eq!(Pick::decode(3 << 30), None);
+        assert_eq!(Pick::decode(0, 0), None);
+        assert_eq!(Pick::decode(SPHERE_ID | 7, 3), Some(Pick::Sphere(7)));
+        assert_eq!(Pick::decode(BOND_ID, 3), Some(Pick::Bond(0)));
+        // Ellipsoids follow the spheres.
+        assert_eq!(Pick::decode(ELLIPSOID_ID | 2, 3), Some(Pick::Sphere(5)));
     }
 
     const SIZE: u32 = 65;
@@ -1323,6 +1425,96 @@ mod tests {
         }
     }
 
+    /// An ellipsoid at `center` with semi-axes along x, y and z.
+    fn ellipsoid(center: [f32; 3], axes: [f32; 3], outlined: bool) -> EllipsoidInstance {
+        let [a, b, c] = axes;
+        EllipsoidInstance {
+            center_radius: [center[0], center[1], center[2], a.max(b).max(c)],
+            axes: [
+                [a, 0.0, 0.0, if outlined { 1.0 } else { 0.0 }],
+                [0.0, b, 0.0, 0.0],
+                [0.0, 0.0, c, 0.0],
+            ],
+            color: RED,
+        }
+    }
+
+    /// A long ellipsoid covers its length but not its width; it is picked
+    /// as the atom after the spheres, with the depth of its true surface:
+    /// a small sphere just inside its surface is hidden, one just outside
+    /// shows and wins the pick.
+    #[test]
+    fn ellipsoids_are_drawn_and_picked_as_atoms() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        // 13 pixels per unit from the front.
+        let elsewhere = SphereInstance {
+            center_radius: [0.0, 2.0, 0.0, 0.3],
+            color: BLUE,
+        };
+        // The surface over x = 1.5 is at z = 0.5·√(1 − 0.75²) ≈ 0.33.
+        let inside = SphereInstance {
+            center_radius: [1.5, 0.0, 0.0, 0.3],
+            color: BLUE,
+        };
+        let outside = SphereInstance {
+            center_radius: [-1.5, 0.0, 0.6, 0.2],
+            color: BLUE,
+        };
+        renderer.set_scene(&Scene {
+            spheres: vec![elsewhere, inside, outside],
+            ellipsoids: vec![ellipsoid([0.0; 3], [2.0, 0.5, 0.5], false)],
+            ..Scene::default()
+        });
+        let camera = from_front();
+        let frame = frame(&mut renderer, camera);
+        // Red, with some white from the highlight.
+        let red = |p: [u8; 4]| p[2] > 100 && p[2] > p[0] + 100 && p[0] == p[1];
+        let blue = |p: [u8; 4]| p[0] > 100 && p[0] > p[2] + 100 && p[2] == p[1];
+        let along = bgra(&frame, 32 + 12, 32);
+        assert!(red(along), "BGRA {along:?}");
+        // Across, 1.5 units up: background.
+        assert_eq!(bgra(&frame, 32, 32 - 20), [0, 0, 0, 255]);
+        // The sphere just inside is hidden; the one outside shows.
+        let hidden = bgra(&frame, 32 + 19, 32);
+        assert!(red(hidden), "BGRA {hidden:?}");
+        let shown = bgra(&frame, 32 - 19, 32);
+        assert!(blue(shown), "BGRA {shown:?}");
+
+        assert_eq!(pick(&mut renderer, camera, 32, 32), Some(Pick::Sphere(3)));
+        assert_eq!(
+            pick(&mut renderer, camera, 32 + 19, 32),
+            Some(Pick::Sphere(3))
+        );
+        assert_eq!(
+            pick(&mut renderer, camera, 32 - 19, 32),
+            Some(Pick::Sphere(2))
+        );
+        assert_eq!(pick(&mut renderer, camera, 32, 6), Some(Pick::Sphere(0)));
+    }
+
+    /// The principal ellipses darken the surface where they run: seen down
+    /// an axis, along the lines through the center.
+    #[test]
+    fn principal_ellipses_darken_the_surface() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let mut red_at = |outlined: bool, x: u32, y: u32| {
+            renderer.set_scene(&Scene {
+                ellipsoids: vec![ellipsoid([0.0; 3], [2.0, 1.5, 1.0], outlined)],
+                ..Scene::default()
+            });
+            bgra(&frame(&mut renderer, from_front()), x, y)[2]
+        };
+        let (plain, outlined) = (red_at(false, 32, 32), red_at(true, 32, 32));
+        assert!(outlined + 60 < plain, "{outlined} against {plain}");
+        // Off the lines the surface is as it was.
+        let (plain, outlined) = (red_at(false, 40, 26), red_at(true, 40, 26));
+        assert_eq!(outlined, plain);
+    }
+
     /// A square facing the z axis at height `z`, from −`half` to `half`.
     fn square(z: f32, half: f32, color: [f32; 4]) -> crate::Polyhedron {
         crate::Polyhedron {
@@ -1416,6 +1608,74 @@ mod tests {
         // Back to the front: the order follows the camera.
         let again = bgra(&frame(&mut renderer, from_front()), 32, 32);
         assert_eq!(again, front);
+    }
+
+    /// A triangle is cut into n² tiles that cover it once: their areas add
+    /// up, and every tile keeps the triangle's winding.
+    #[test]
+    fn flat_triangles_are_cut_into_tiles() {
+        let triangle = [
+            Vec3::ZERO,
+            Vec3::new(5.0, 0.0, 0.0),
+            Vec3::new(0.0, 5.0, 0.0),
+        ];
+        let cut = tiles(triangle, FLAT_TILE);
+        // The longest edge, 7.07 Å, in four parts.
+        assert_eq!(cut.len(), 16);
+        let area = |[a, b, c]: [Vec3; 3]| (b - a).cross(c - a).z / 2.0;
+        assert!((cut.iter().copied().map(area).sum::<f32>() - 12.5).abs() < 1e-4);
+        assert!(cut.iter().all(|&t| area(t) > 0.0));
+        assert_eq!(tiles(triangle, 10.0).len(), 1);
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 1e-9)];
+        assert!(is_flat(&corners, &[[corners[0], corners[1], corners[2]]]));
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z];
+        assert!(!is_flat(&corners, &[[corners[0], corners[1], corners[2]]]));
+    }
+
+    /// A large plane tilted through the scene is sorted piece by piece: an
+    /// octahedron behind it on one side is blended under it, although the
+    /// centers of the plane and of either of its two triangles are farther
+    /// than the octahedron's.
+    #[test]
+    fn large_planes_sort_among_polyhedra() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        // The plane z = x, red.
+        let plane = crate::Polyhedron {
+            vertices: vec![
+                [-2.4, -2.4, -2.4],
+                [2.4, -2.4, 2.4],
+                [2.4, 2.4, 2.4],
+                [-2.4, 2.4, -2.4],
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+            color: [1.0, 0.0, 0.0, 0.5],
+        };
+        // A blue octahedron around (1.5, 0, 1), where the plane is at
+        // z = 1.5: wholly behind it. The plane's triangle there has its
+        // center at z = 0.8.
+        let center = Vec3::new(1.5, 0.0, 1.0);
+        let mut octahedron = crate::synthetic_polyhedra(
+            &[SphereInstance {
+                center_radius: [center.x, center.y, center.z, 0.3],
+                color: BLUE,
+            }],
+            1,
+        )
+        .remove(0);
+        // Corners 2 Å out are too far; shrink them to 0.3 Å.
+        for v in &mut octahedron.vertices {
+            *v = (center + (Vec3::from_array(*v) - center) * 0.15).to_array();
+        }
+        renderer.set_scene(&Scene {
+            polyhedra: vec![plane, octahedron],
+            ..Scene::default()
+        });
+        // Red over blue: about 0.5 red and 0.375 blue in linear light. The
+        // other way round it would be 0.125 red and 0.75 blue.
+        let pixel = bgra(&frame(&mut renderer, from_front()), 51, 32);
+        assert!(pixel[2] > pixel[0], "BGRA {pixel:?}");
     }
 
     /// Viewport design §8.6: what translucent polyhedra cost per frame while

@@ -9,7 +9,8 @@
 //! from project files and give back what to save, with their view state.
 //! Converting to P1 and changing the cell are commands on the document; a
 //! supercell is a new structure the host adds to the project. The display
-//! models draw ball and stick, space filling, or coordination polyhedra.
+//! models draw ball and stick, space filling, coordination polyhedra, or
+//! displacement ellipsoids; lattice planes can be drawn in any of them.
 //! Anything mocked says so where it happens (see `docs/architecture.md`,
 //! "Mocks").
 
@@ -29,6 +30,7 @@ mod dialogs;
 mod display_range;
 mod document;
 mod editing;
+mod ellipsoids;
 mod export;
 mod format;
 pub mod import;
@@ -36,6 +38,7 @@ mod measure;
 mod moving;
 mod overlays;
 mod panel;
+mod planes;
 mod polyhedra;
 mod scene;
 mod selection;
@@ -46,10 +49,11 @@ mod workspace;
 
 pub use actions::{
     AddMixedOccupant, AddSite, AlignCell, ClearSelection, ConvertToP1, DeleteSelection,
-    EditDisplayRange, EditPolyhedra, ExportStructure, KEY_CONTEXT, MakeSupercell, PaletteCommand,
-    Redo, ResetView, ShowBallAndStick, ShowDiagnosticsPanel, ShowMeasurementsPanel, ShowPolyhedra,
-    ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling, Symmetrize, ToggleMeasure,
-    ToggleMoveAtoms, TogglePanel, TransformCell, Undo, bind_keys, palette_commands,
+    EditDisplayRange, EditEllipsoids, EditPlanes, EditPolyhedra, ExportStructure, KEY_CONTEXT,
+    MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick, ShowDiagnosticsPanel,
+    ShowEllipsoids, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel, ShowSitesPanel,
+    ShowSpaceFilling, Symmetrize, ToggleMeasure, ToggleMoveAtoms, TogglePanel, TransformCell, Undo,
+    bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use scene::DisplayModel;

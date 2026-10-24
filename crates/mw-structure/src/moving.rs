@@ -172,12 +172,14 @@ impl StructureWorkspace {
         // The region shown stays put, even around the atom being dragged.
         let range = self.display_range.fixed(&self.document.derived().orbits);
         let annotations = self.document.crystal.annotations().to_vec();
-        let (model, colors) = (self.display_model, self.line_colors(cx));
+        let mut style = self.style();
+        style.range = range;
+        let colors = self.line_colors(cx);
         let polyhedra = self.polyhedra_shown();
         let make = move || {
             let applied = edit.apply(&structure).ok()?;
             let preview = Preview::new(applied.structure, applied.ids, &range, polyhedra.as_ref());
-            let scene = scene::draw(&preview.atoms(), &annotations, model, colors);
+            let scene = scene::draw(&preview.atoms(), &annotations, &style, colors);
             let rings: Vec<usize> = preview
                 .displayed
                 .atoms

@@ -197,7 +197,7 @@ pub struct Viewport {
     /// Subtracted from scene positions so the camera orbits the scene center.
     scene_center: Vec3,
     scene_radius: f32,
-    /// The scene as drawn, centered; rings are built from its spheres.
+    /// The scene as drawn, centered; rings are built from its atoms.
     scene: Scene,
     /// Whether the camera has been framed on a scene yet.
     framed: bool,
@@ -283,6 +283,7 @@ impl Viewport {
             .spheres
             .iter()
             .map(|s| &s.center_radius[..3])
+            .chain(scene.ellipsoids.iter().map(|e| &e.center_radius[..3]))
             .chain(scene.lines.iter().map(|l| &l.start_width[..3]))
             .chain(scene.lines.iter().map(|l| &l.end_dash[..3]))
             .map(Vec3::from_slice);
@@ -326,9 +327,14 @@ impl Viewport {
         cx.notify();
     }
 
-    /// Spheres of the current scene that show the selection ring.
+    /// Atoms of the current scene that show the selection ring.
     pub fn selection(&self) -> &[usize] {
         &self.selected
+    }
+
+    /// What is drawn, moved so that its center is at the origin.
+    pub fn scene(&self) -> &Scene {
+        &self.scene
     }
 
     /// Whether the image on screen is the last frame submitted, no frame is
@@ -531,7 +537,7 @@ impl Viewport {
         if self.selected.contains(&index) {
             return None;
         }
-        let [x, y, z, radius] = self.scene.spheres.get(index)?.center_radius;
+        let [x, y, z, radius] = self.scene.atom(index)?;
         let geometry = self.geometry?;
         let view = self.view_on_screen(geometry);
         let viewport = geometry.bounds.size;
@@ -581,9 +587,9 @@ impl Viewport {
         let rings: Vec<HighlightRing> = self
             .selected
             .iter()
-            .filter_map(|&index| self.scene.spheres.get(index))
-            .map(|sphere| HighlightRing {
-                center_radius: sphere.center_radius,
+            .filter_map(|&index| self.scene.atom(index))
+            .map(|center_radius| HighlightRing {
+                center_radius,
                 color_width: [r, g, b, SELECTION_RING_WIDTH],
             })
             .collect();

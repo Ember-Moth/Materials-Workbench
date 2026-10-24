@@ -14,6 +14,23 @@ pub struct SphereInstance {
     pub color: [f32; 4],
 }
 
+/// One impostor ellipsoid: the points `center + a·u₁ + b·u₂ + c·u₃` with
+/// |u| ≤ 1, such as an atom's displacement ellipsoid. Drawn, picked and
+/// highlighted like a sphere ([`Scene::atom`]).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct EllipsoidInstance {
+    /// Center in Å (xyz) and the longest semi-axis in Å (w), which the
+    /// highlight rings go around.
+    pub center_radius: [f32; 4],
+    /// The three semi-axes in Å (xyz). The first's w is 1 to darken the
+    /// principal ellipses, where the planes of two axes cut the surface,
+    /// and 0 for a plain surface.
+    pub axes: [[f32; 4]; 3],
+    /// Linear RGB; alpha is unused.
+    pub color: [f32; 4],
+}
+
 /// One impostor cylinder: a bond drawn from `start` to `end`, each half in
 /// the color of the atom at its end.
 #[repr(C)]
@@ -70,15 +87,36 @@ pub struct Polyhedron {
 }
 
 /// Everything drawn in one frame, apart from highlights.
+///
+/// The atoms are the spheres followed by the ellipsoids: a picked
+/// `Pick::Sphere(i)` and the highlights name the i-th of them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub spheres: Vec<SphereInstance>,
+    pub ellipsoids: Vec<EllipsoidInstance>,
     pub bonds: Vec<BondInstance>,
     pub lines: Vec<LineInstance>,
     pub polyhedra: Vec<Polyhedron>,
 }
 
 impl Scene {
+    /// The `index`-th atom, a sphere or (after the spheres) an ellipsoid,
+    /// as its center in Å (xyz) and the radius of a sphere around it (w).
+    pub fn atom(&self, index: usize) -> Option<[f32; 4]> {
+        match self.spheres.get(index) {
+            Some(sphere) => Some(sphere.center_radius),
+            None => self
+                .ellipsoids
+                .get(index - self.spheres.len())
+                .map(|e| e.center_radius),
+        }
+    }
+
+    /// The spheres and ellipsoids.
+    pub fn atom_count(&self) -> usize {
+        self.spheres.len() + self.ellipsoids.len()
+    }
+
     /// Radius of a sphere around the origin that contains everything drawn.
     pub fn bounding_radius(&self) -> f32 {
         let point = |p: &[f32]| Vec3::from_slice(&p[..3]).length();
@@ -86,6 +124,10 @@ impl Scene {
             .spheres
             .iter()
             .map(|s| point(&s.center_radius) + s.center_radius[3]);
+        let ellipsoids = self
+            .ellipsoids
+            .iter()
+            .map(|e| point(&e.center_radius) + e.center_radius[3]);
         let bonds = self
             .bonds
             .iter()
@@ -99,6 +141,7 @@ impl Scene {
             .iter()
             .flat_map(|p| p.vertices.iter().map(|v| point(v)));
         spheres
+            .chain(ellipsoids)
             .chain(bonds)
             .chain(lines)
             .chain(corners)
@@ -114,6 +157,9 @@ impl Scene {
         self.spheres
             .iter_mut()
             .for_each(|s| shift(&mut s.center_radius));
+        self.ellipsoids
+            .iter_mut()
+            .for_each(|e| shift(&mut e.center_radius));
         for bond in &mut self.bonds {
             shift(&mut bond.start_radius);
             shift(&mut bond.end);
@@ -275,6 +321,35 @@ mod tests {
         scene.translate(Vec3::new(0.0, -3.0, -4.0));
         assert_eq!(scene.lines[0].start_width, [0.0, -3.0, -4.0, 1.0]);
         assert_eq!(scene.bounding_radius(), 5.0);
+    }
+
+    #[test]
+    fn atoms_are_spheres_then_ellipsoids() {
+        let sphere = SphereInstance {
+            center_radius: [1.0, 0.0, 0.0, 0.5],
+            color: [0.0; 4],
+        };
+        let ellipsoid = EllipsoidInstance {
+            center_radius: [0.0, 4.0, 0.0, 2.0],
+            axes: [
+                [2.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.5, 0.0],
+            ],
+            color: [0.0; 4],
+        };
+        let mut scene = Scene {
+            spheres: vec![sphere],
+            ellipsoids: vec![ellipsoid],
+            ..Scene::default()
+        };
+        assert_eq!(scene.atom_count(), 2);
+        assert_eq!(scene.atom(0), Some(sphere.center_radius));
+        assert_eq!(scene.atom(1), Some(ellipsoid.center_radius));
+        assert_eq!(scene.atom(2), None);
+        assert_eq!(scene.bounding_radius(), 6.0);
+        scene.translate(Vec3::new(0.0, -4.0, 0.0));
+        assert_eq!(scene.atom(1), Some([0.0, 0.0, 0.0, 2.0]));
     }
 
     #[test]

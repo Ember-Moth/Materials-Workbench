@@ -94,6 +94,16 @@ impl CellParams {
         [0, 1, 2].map(|i| inverse[(i, i)].sqrt())
     }
 
+    /// The interplanar spacing d of the planes (hkl) in Å, from the
+    /// reciprocal metric: `1/d² = hᵀ·G⁻¹·h`. Independent of the
+    /// orientation; infinite for (000).
+    pub fn d_spacing(&self, miller: [i32; 3]) -> f64 {
+        let g = Matrix3::from(self.metric()).transpose();
+        let inverse = g.try_inverse().unwrap_or_else(Matrix3::identity);
+        let h = nalgebra::Vector3::from(miller.map(f64::from));
+        1.0 / (h.transpose() * inverse * h)[(0, 0)].max(0.0).sqrt()
+    }
+
     /// Basis vectors a, b, c in Å in the standard orientation (design §4.2):
     /// a along x, b in the xy plane, right-handed. `m[i]` is the i-th basis
     /// vector, i.e. the i-th column of `A_std`. Cartesian positions come
@@ -447,6 +457,38 @@ mod tests {
         let m = CellParams::new(3.0, 3.0, 5.0, 90.0, 90.0, 120.0).standard_matrix();
         assert_eq!(m[1][0], -1.5);
         assert!(close(m[1][1], 3.0 * (3.0f64).sqrt() / 2.0));
+    }
+
+    /// Rutile's strongest reflections, the hexagonal (100) and a
+    /// monoclinic plane against the textbook formulas.
+    #[test]
+    fn interplanar_spacings() {
+        let (a, c) = (4.594, 2.959);
+        let rutile = CellParams::new(a, a, c, 90.0, 90.0, 90.0);
+        assert!(close(rutile.d_spacing([1, 1, 0]), a / 2f64.sqrt()));
+        assert!(close(
+            rutile.d_spacing([1, 0, 1]),
+            1.0 / (1.0 / (a * a) + 1.0 / (c * c)).sqrt()
+        ));
+        assert!(close(rutile.d_spacing([-2, 0, 0]), a / 2.0));
+        let hexagonal = CellParams::new(3.0, 3.0, 5.0, 90.0, 90.0, 120.0);
+        assert!(close(
+            hexagonal.d_spacing([1, 0, 0]),
+            3.0 * 3f64.sqrt() / 2.0
+        ));
+        assert!(close(hexagonal.d_spacing([0, 0, 2]), 2.5));
+        let (a, b, c, beta) = (5.1, 6.2, 7.3, 101.5f64);
+        let monoclinic = CellParams::new(a, b, c, 90.0, beta, 90.0);
+        let [h, k, l] = [1.0, 2.0, -3.0];
+        let (sin, cos) = (beta.to_radians().sin(), beta.to_radians().cos());
+        let inverse_square = (h * h / (a * a) + k * k * sin * sin / (b * b) + l * l / (c * c)
+            - 2.0 * h * l * cos / (a * c))
+            / (sin * sin);
+        assert!(close(
+            monoclinic.d_spacing([1, 2, -3]),
+            1.0 / inverse_square.sqrt()
+        ));
+        assert_eq!(monoclinic.d_spacing([0, 0, 0]), f64::INFINITY);
     }
 
     #[test]
