@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）已实现、只差 Inspector 和 Claude Code / Claude Desktop 的手动检查；第 9 节的模拟已全部替换。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）已实现、只差 Inspector 和 Claude Code / Claude Desktop 的手动检查，三个平台的 CI 都通过；M16（晶面与热振动椭球）、M17（编辑补充）、M20（发布）还没开始，下一步是 M16；第 9 节的模拟已全部替换。
 
 ## 文档是设计的依据
 
