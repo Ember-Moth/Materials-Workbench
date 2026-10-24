@@ -1,9 +1,7 @@
 use crate::expand::{self, Orbit};
 use crate::site::Stabilizer;
 use crate::space_group::{self, DetectedSymmetry, SpaceGroupType};
-use crate::{
-    AtomRef, Bond, BondRules, SiteId, SiteSymmetry, Structure, bonds, constraints, element,
-};
+use crate::{Bond, BondRules, SiteId, SiteSymmetry, Structure, bonds, constraints, element};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrystalSystem {
@@ -114,15 +112,6 @@ pub enum CoordinateConstraint {
     Fixed,
 }
 
-/// One atom of the displayed structure, in Cartesian Å.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct DisplayAtom {
-    pub atom: AtomRef,
-    pub element: String,
-    pub position: [f64; 3],
-}
-
 /// What the operation set implies (design §5.2, §7.3): the space group
 /// type, the cell constraints and every site's symmetry.
 #[derive(Clone, Debug, PartialEq)]
@@ -186,18 +175,15 @@ impl SymmetryAnalysis {
     }
 }
 
-/// Data derived from the structure (design §5).
+/// Data derived from the structure (design §5). What a display range shows
+/// of it comes from [`Derived::display`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Derived {
     pub symmetry: SymmetryAnalysis,
     pub orbits: Vec<Orbit>,
-    /// Atoms in the displayed range, including boundary images.
-    pub atoms: Vec<DisplayAtom>,
     /// Bonds of the crystal, once per unit cell, under the default rules.
     pub bonds: Vec<Bond>,
-    /// Bonds between displayed atoms, as index pairs into `atoms`.
-    pub display_bonds: Vec<[usize; 2]>,
     /// g/cm³; `None` when a species has no known atomic weight.
     pub density: Option<f64>,
 }
@@ -208,16 +194,12 @@ impl Derived {
     /// Expands the structure, finds its bonds and analyzes its symmetry.
     pub fn compute(structure: &Structure) -> Self {
         let orbits = expand::orbits(structure);
-        let atoms = expand::display_atoms(structure, &orbits);
         let bonds = bonds::bonds(structure, &orbits, &BondRules::default());
-        let display_bonds = bonds::display_bonds(&atoms, &bonds);
         let density = density(structure, &orbits);
         Self {
             symmetry: SymmetryAnalysis::compute(structure, &orbits),
             orbits,
-            atoms,
             bonds,
-            display_bonds,
             density,
         }
     }
@@ -238,7 +220,7 @@ impl Derived {
         self.orbit(id).map(|orbit| orbit.positions.len())
     }
 
-    /// Number of atoms in the unit cell, without boundary images.
+    /// Number of atoms in the unit cell.
     pub fn atoms_in_cell(&self) -> usize {
         self.orbits.iter().map(|orbit| orbit.positions.len()).sum()
     }

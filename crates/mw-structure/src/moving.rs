@@ -8,9 +8,10 @@
 
 use gpui_kit::*;
 use mw_crystal::{AtomFate, AtomRef, Edit, Lattice};
-use mw_viewport::Pick;
+use mw_viewport::{Pick, Scene};
 
 use crate::actions::ToggleMoveAtoms;
+use crate::display_range::BACKGROUND_ATOMS;
 use crate::format;
 use crate::scene::{self, Preview};
 use crate::selection::Selection;
@@ -26,6 +27,18 @@ pub(crate) struct AtomDrag {
     leave: bool,
     /// The structure if the atom were dropped now.
     preview: Option<Preview>,
+    /// A preview being worked out in the background, for a large range.
+    job: Option<Task<()>>,
+    /// Whether the drag changed since that preview was started.
+    moved: bool,
+}
+
+#[cfg(test)]
+impl AtomDrag {
+    /// Where the preview shown puts a site.
+    pub(crate) fn previewed_position(&self, site: mw_crystal::SiteId) -> Option<[f64; 3]> {
+        Some(self.preview.as_ref()?.structure.site(site)?.position)
+    }
 }
 
 /// The key that leaves the special position, as the platform names it.
@@ -90,7 +103,9 @@ impl StructureWorkspace {
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
-        if !self.moving {
+        // The spheres on screen are not yet those of the structure while a
+        // large range is worked out.
+        if !self.moving || self.is_preparing_display() {
             return;
         }
         if self.drag.is_none() {
@@ -102,6 +117,8 @@ impl StructureWorkspace {
                 offset,
                 leave: false,
                 preview: None,
+                job: None,
+                moved: false,
             });
         }
         if let Some(drag) = &mut self.drag {
@@ -131,30 +148,74 @@ impl StructureWorkspace {
     }
 
     /// Shows the structure as dropping the atom now would leave it, with
-    /// every atom of the dragged site ringed, since they all move.
+    /// every atom of the dragged site ringed, since they all move. For a
+    /// large range the preview is worked out in the background, one at a
+    /// time: moves made meanwhile are previewed together once it is shown.
     fn preview_drag(&mut self, cx: &mut Context<Self>) {
         let Some(drag) = &self.drag else {
             return;
         };
+        if drag.job.is_some() {
+            if let Some(drag) = &mut self.drag {
+                drag.moved = true;
+            }
+            return;
+        }
+        let structure = self.document.crystal.snapshot();
+        let edit = self.move_edit(drag);
         let site = drag.atom.site;
-        let applied = self.move_edit(drag).apply(self.document.structure());
-        let preview = applied
-            .ok()
-            .map(|applied| Preview::new(applied.structure, applied.ids));
-        if let Some(preview) = &preview {
-            let colors = self.line_colors(cx);
-            let scene = scene::draw(&preview.atoms(), &self.document, self.display_model, colors);
+        // The region shown stays put, even around the atom being dragged.
+        let range = self.display_range.fixed(&self.document.derived().orbits);
+        let annotations = self.document.crystal.annotations().to_vec();
+        let (model, colors) = (self.display_model, self.line_colors(cx));
+        let make = move || {
+            let applied = edit.apply(&structure).ok()?;
+            let preview = Preview::new(applied.structure, applied.ids, &range);
+            let scene = scene::draw(&preview.atoms(), &annotations, model, colors);
             let rings: Vec<usize> = preview
+                .displayed
                 .atoms
                 .iter()
                 .enumerate()
                 .filter_map(|(ix, atom)| (atom.atom.site == site).then_some(ix))
                 .collect();
+            Some((preview, scene, rings))
+        };
+        if self.display.shown.atoms.len() <= BACKGROUND_ATOMS {
+            self.show_preview(make(), cx);
+            return;
+        }
+        let work = cx.background_spawn(async move { make() });
+        let job = cx.spawn(async move |this, cx| {
+            let made = work.await;
+            this.update(cx, |this, cx| {
+                let Some(drag) = &mut this.drag else {
+                    return;
+                };
+                drag.job = None;
+                let moved = std::mem::take(&mut drag.moved);
+                this.show_preview(made, cx);
+                if moved {
+                    this.preview_drag(cx);
+                }
+            })
+            .ok();
+        });
+        if let Some(drag) = &mut self.drag {
+            drag.job = Some(job);
+        }
+    }
+
+    /// Shows a preview made for the drag; `None` when the move would be
+    /// refused, which leaves the last one shown.
+    fn show_preview(&mut self, made: Option<(Preview, Scene, Vec<usize>)>, cx: &mut Context<Self>) {
+        let preview = made.map(|(preview, scene, rings)| {
             self.viewport.update(cx, |viewport, cx| {
                 viewport.preview_scene(scene, cx);
                 viewport.set_selection(rings, cx);
             });
-        }
+            preview
+        });
         if let Some(drag) = &mut self.drag {
             drag.preview = preview;
         }

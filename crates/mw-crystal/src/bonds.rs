@@ -4,7 +4,7 @@
 //!
 //! Each bond of the crystal is stored once per unit cell, as a pair of
 //! [`AtomRef`]s whose first atom lies in the cell at the origin. The bonds
-//! drawn are those between displayed atoms ([`display_bonds`]).
+//! drawn are those between displayed atoms (design §5.5).
 
 use std::collections::HashMap;
 
@@ -244,8 +244,9 @@ pub fn bonds(structure: &Structure, orbits: &[Orbit], rules: &BondRules) -> Vec<
     bonds
 }
 
-/// The bonds between displayed atoms, as index pairs into `atoms`.
-pub fn display_bonds(atoms: &[DisplayAtom], bonds: &[Bond]) -> Vec<[usize; 2]> {
+/// The bonds between displayed atoms, as index pairs into `atoms`: from
+/// each atom, its bonds translated to its cell whose other atom is shown.
+pub(crate) fn display_bonds(atoms: &[DisplayAtom], bonds: &[Bond]) -> Vec<[usize; 2]> {
     let index: HashMap<AtomRef, usize> = atoms
         .iter()
         .enumerate()
@@ -394,12 +395,14 @@ mod tests {
     #[test]
     fn displayed_bonds_join_displayed_atoms() {
         let sample = sample::load(SampleKey::StrontiumTitanate);
-        let derived = &sample.derived;
+        let shown = sample
+            .derived
+            .display(&sample.structure, &crate::DisplayRange::default());
         // The body-center Ti bonds to the six face-center O. Sr–O bonds run
         // from each face center to the four corners of its face.
-        assert_eq!(derived.display_bonds.len(), 6 + 6 * 4);
-        for [i, j] in &derived.display_bonds {
-            let (a, b) = (&derived.atoms[*i], &derived.atoms[*j]);
+        assert_eq!(shown.bonds.len(), 6 + 6 * 4);
+        for [i, j] in &shown.bonds {
+            let (a, b) = (&shown.atoms[*i], &shown.atoms[*j]);
             let length = crate::atom_ref::distance(a.position, b.position);
             assert!(length < 2.8, "{a:?} {b:?}");
         }

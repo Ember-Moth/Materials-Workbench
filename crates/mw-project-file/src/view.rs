@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use mw_crystal::AtomRef;
 use serde::{Deserialize, Serialize};
 
 use crate::EntryId;
@@ -26,6 +27,9 @@ pub struct EntryView {
     pub camera: Option<Camera>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_model: Option<DisplayModel>,
+    /// Since `view.json` version 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_range: Option<DisplayRange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<PanelTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,9 +46,15 @@ impl EntryView {
         Self {
             camera,
             display_model,
+            display_range: None,
             panel,
             panel_open,
         }
+    }
+
+    pub fn with_display_range(mut self, range: DisplayRange) -> Self {
+        self.display_range = Some(range);
+        self
     }
 }
 
@@ -77,6 +87,25 @@ pub enum DisplayModel {
     BallAndStick,
     SpaceFilling,
     Polyhedra,
+}
+
+/// What part of the crystal is shown (crystallography design §5.5).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayRange {
+    /// `counts` cells along a, b and c; `boundary`, whether atoms on the
+    /// range's faces are repeated on the opposite ones.
+    Cells { counts: [u32; 3], boundary: bool },
+    /// Atoms within `radius` Å of the center.
+    Sphere { center: SphereCenter, radius: f64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SphereCenter {
+    Atom(AtomRef),
+    /// Fractional coordinates.
+    Point([f64; 3]),
 }
 
 /// The side panel's tabs (interface design §4.3).

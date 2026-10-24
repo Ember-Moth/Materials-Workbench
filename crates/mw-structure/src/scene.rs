@@ -1,11 +1,11 @@
+use std::collections::HashMap;
+
 use gpui_kit::{Hsla, Rgba};
 use mw_crystal::{
-    AtomFate, AtomRef, BondRules, DisplayAtom, IdMap, Orbit, Structure, covalent_radius,
-    display_atoms, display_bonds,
+    Annotation, AtomFate, AtomRef, BondRules, DisplayRange, Displayed, IdMap, Orbit, Structure,
+    covalent_radius,
 };
 use mw_viewport::{BondInstance, LineInstance, Scene, SphereInstance, srgb_to_linear};
-
-use crate::document::StructureDocument;
 
 /// How atoms are drawn.
 ///
@@ -184,30 +184,18 @@ pub(crate) struct LineColors {
     pub measurement: Hsla,
 }
 
-/// The atoms of a structure as drawn: its orbits, the atoms displayed and
-/// the bonds between them, as index pairs into the atoms.
+/// The atoms of a structure as drawn: its orbits, and the atoms its display
+/// range shows with the bonds between them.
 pub(crate) struct Atoms<'a> {
     pub structure: &'a Structure,
     pub orbits: &'a [Orbit],
-    pub atoms: &'a [DisplayAtom],
-    pub display_bonds: &'a [[usize; 2]],
+    pub displayed: &'a Displayed,
     /// How references in the document's measurements map to these atoms;
     /// `None` for the document's own.
     pub ids: Option<&'a IdMap>,
 }
 
 impl<'a> Atoms<'a> {
-    pub fn of(document: &'a StructureDocument) -> Self {
-        let derived = document.derived();
-        Self {
-            structure: document.structure(),
-            orbits: &derived.orbits,
-            atoms: &derived.atoms,
-            display_bonds: &derived.display_bonds,
-            ids: None,
-        }
-    }
-
     /// Fractional coordinates of an atom the document refers to, as
     /// `Derived::fractional` gives; `None` for an atom these atoms do not
     /// have, or no longer name the same way.
@@ -231,22 +219,22 @@ pub(crate) struct Preview {
     /// What the edit would do to references into the document.
     pub ids: IdMap,
     pub orbits: Vec<Orbit>,
-    pub atoms: Vec<DisplayAtom>,
-    pub display_bonds: Vec<[usize; 2]>,
+    pub displayed: Displayed,
 }
 
 impl Preview {
-    pub fn new(structure: Structure, ids: IdMap) -> Self {
+    /// The edited structure as `range` shows it. A sphere around an atom
+    /// should be [fixed](DisplayRange::fixed) first, so that the region
+    /// stays put while its atom moves.
+    pub fn new(structure: Structure, ids: IdMap, range: &DisplayRange) -> Self {
         let orbits = mw_crystal::orbits(&structure);
-        let atoms = display_atoms(&structure, &orbits);
         let bonds = mw_crystal::bonds(&structure, &orbits, &BondRules::default());
-        let display_bonds = display_bonds(&atoms, &bonds);
+        let displayed = Displayed::new(&structure, &orbits, &bonds, range);
         Self {
             structure,
             ids,
             orbits,
-            atoms,
-            display_bonds,
+            displayed,
         }
     }
 
@@ -254,40 +242,36 @@ impl Preview {
         Atoms {
             structure: &self.structure,
             orbits: &self.orbits,
-            atoms: &self.atoms,
-            display_bonds: &self.display_bonds,
+            displayed: &self.displayed,
             ids: Some(&self.ids),
         }
     }
 }
 
-/// What the viewport draws for a document: one sphere per displayed atom,
-/// in the order of `derived.atoms`, so a picked sphere's index is the
-/// atom's index; the bonds between displayed atoms; the unit-cell edges;
-/// and a dashed line along each measurement.
-pub(crate) fn scene(
-    document: &StructureDocument,
-    model: DisplayModel,
-    colors: LineColors,
-) -> Scene {
-    draw(&Atoms::of(document), document, model, colors)
-}
-
-/// The scene for `atoms`, with the document's measurements drawn between
-/// them where their atoms still exist.
+/// What the viewport draws: one sphere per displayed atom, in the order of
+/// `shown.displayed.atoms`, so a picked sphere's index is the atom's index;
+/// the bonds between displayed atoms; the edges of the cell at the origin;
+/// and a dashed line along each of the document's measurements
+/// (`annotations`) whose atoms still exist.
 pub(crate) fn draw(
     shown: &Atoms,
-    document: &StructureDocument,
+    annotations: &[Annotation],
     model: DisplayModel,
     colors: LineColors,
 ) -> Scene {
     let lattice = &shown.structure.lattice;
+    // Looked up once per element rather than once per atom: a range of many
+    // cells repeats a few elements thousands of times.
+    let mut styles: HashMap<&str, ([f32; 3], f32)> = HashMap::new();
     let spheres: Vec<SphereInstance> = shown
+        .displayed
         .atoms
         .iter()
         .map(|atom| {
-            let (srgb, radius) = element_style(&atom.element);
-            let [r, g, b] = srgb.map(|c| srgb_to_linear(f32::from(c) / 255.0));
+            let ([r, g, b], radius) = *styles.entry(&atom.element).or_insert_with(|| {
+                let (srgb, radius) = element_style(&atom.element);
+                (srgb.map(|c| srgb_to_linear(f32::from(c) / 255.0)), radius)
+            });
             let [x, y, z] = point(atom.position);
             SphereInstance {
                 center_radius: [x, y, z, radius * model.radius_scale()],
@@ -298,7 +282,8 @@ pub(crate) fn draw(
 
     let bonds = if model.shows_bonds() {
         shown
-            .display_bonds
+            .displayed
+            .bonds
             .iter()
             .map(|&[i, j]| {
                 let (a, b) = (&spheres[i], &spheres[j]);
@@ -333,7 +318,7 @@ pub(crate) fn draw(
         .collect();
     let measurement_color = linear(colors.measurement);
     // Stale measurements may refer to atoms that are gone or moved.
-    for annotation in document.crystal.annotations().iter().filter(|a| !a.stale) {
+    for annotation in annotations.iter().filter(|a| !a.stale) {
         let measurement = &annotation.measurement;
         let points: Option<Vec<[f64; 3]>> = measurement
             .atoms()

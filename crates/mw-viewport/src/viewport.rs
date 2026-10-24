@@ -402,6 +402,21 @@ impl Viewport {
         self.request_frame(cx);
     }
 
+    /// Frames the scene from the current angle: the zoom and center of
+    /// [`Self::reset_camera`], with the turn kept. For a scene of another
+    /// size, such as a new display range.
+    pub fn frame_scene(&mut self, cx: &mut Context<Self>) {
+        let turned = self.camera.pose();
+        let framed = OrbitCamera::framing(self.scene_radius).pose();
+        self.camera.set_pose(CameraPose::new(
+            turned.yaw,
+            turned.pitch,
+            framed.half_height,
+            framed.target,
+        ));
+        self.request_frame(cx);
+    }
+
     /// Why the viewport cannot draw, if it cannot.
     pub fn renderer_error(&self) -> Option<&SharedString> {
         self.renderer.as_ref().err()

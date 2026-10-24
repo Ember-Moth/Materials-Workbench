@@ -24,6 +24,7 @@ gpui_kit::actions!(
         ShowBallAndStick,
         ShowSpaceFilling,
         ShowPolyhedra,
+        EditDisplayRange,
         ShowPropertiesPanel,
         ShowSitesPanel,
         ShowMeasurementsPanel,
@@ -211,6 +212,20 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             &["polyhedra", "duomianti"],
             Lucide::Box,
             Box::new(ShowPolyhedra),
+        ),
+        command(
+            tr!("command.display_range"),
+            &[
+                "display range",
+                "unit cells",
+                "boundary atoms",
+                "sphere",
+                "xianshi fanwei",
+                "jingbao",
+                "bianjie yuanzi",
+            ],
+            Lucide::Boxes,
+            Box::new(EditDisplayRange),
         ),
         command(
             tr!("command.reset_view"),

@@ -161,7 +161,10 @@ fn a_project_comes_back_as_it_was_saved(cx: &mut TestAppContext) {
     execute(&rutile, Command::Edit(Edit::SetCell { values: a }), &mut cx);
     let (file, _) = rutile.read_with(&cx, |workspace, _| workspace.file_to_save());
     let document = CrystalDocument::new(file.structure);
-    let atoms: Vec<_> = document.derived().atoms.iter().map(|a| a.atom).collect();
+    let one_cell = document
+        .derived()
+        .display(document.structure(), &Default::default());
+    let atoms: Vec<_> = one_cell.atoms.iter().map(|a| a.atom).collect();
     let distance = Measurement::Distance([atoms[0], atoms[1]]);
     execute(&rutile, Command::AddMeasurement(distance), &mut cx);
     let view = EntryView::new(
