@@ -10,7 +10,7 @@ mw-automation.workspace = true
 mw-crystal.workspace = true
 mw-crystal-io.workspace = true
 mw-project-file.workspace = true
-rmcp = { workspace = true, features = ["server", "transport-io"] }
+rmcp = { workspace = true, features = ["server", "transport-io", "elicitation"] }
 tokio = { workspace = true, features = ["io-std", "io-util", "net"] }
 serde.workspace = true
 # Random tokens for the channel to the running application.

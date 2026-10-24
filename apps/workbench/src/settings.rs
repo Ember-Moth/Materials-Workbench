@@ -48,15 +48,17 @@ pub fn apply_saved(cx: &mut App) {
     Theme::change(mode(settings.dark), None, cx);
 }
 
-/// Saves the current appearance and language.
+/// Saves the current appearance, language and MCP switch, keeping the
+/// rest of the file.
 fn save(cx: &App) {
+    let paths = cx.global::<AppPaths>();
     let settings = Settings {
         dark: cx.theme().is_dark(),
         language: locale().to_string(),
         mcp: McpSetting::get(cx),
-        ..Settings::default()
+        ..Settings::load(paths)
     };
-    settings.save(cx.global::<AppPaths>());
+    settings.save(paths);
 }
 
 pub fn set_dark_mode(dark: bool, window: &mut Window, cx: &mut App) {

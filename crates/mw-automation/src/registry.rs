@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::policy::{self, Context};
+use crate::policy::{self, Client, Context, Permissions};
 use crate::project::Projects;
 use crate::schema::Schema;
 
@@ -139,7 +139,24 @@ pub trait Host {
             "writing files is not available in this mode",
         ))
     }
+    /// What the user lets `client` do, as the settings say now (design
+    /// §7.2).
+    fn permissions(&self, client: &Client) -> Permissions {
+        let _ = client;
+        Permissions::default()
+    }
+    /// Asks the user in the application whether `client` may make the call
+    /// `question` describes; the answer comes later, through `answer`.
+    /// `false` when this host cannot ask, as without a window: then MCP's
+    /// elicitation asks instead (design §5.3).
+    fn ask(&mut self, client: &Client, question: &str, answer: Answer) -> bool {
+        let _ = (client, question, answer);
+        false
+    }
 }
+
+/// Takes the user's answer to [`Host::ask`]: `true` to go ahead.
+pub type Answer = Box<dyn FnOnce(bool) + Send>;
 
 /// Documents held in memory, without a window: for tests, and later for the
 /// command line. Records of clients' calls are kept ([`Self::audit_log`]).
@@ -303,6 +320,12 @@ impl Host for Calling<'_> {
     }
     fn writable(&self, path: &str) -> Result<PathBuf, CallError> {
         self.host.writable(path)
+    }
+    fn permissions(&self, client: &Client) -> Permissions {
+        self.host.permissions(client)
+    }
+    fn ask(&mut self, client: &Client, question: &str, answer: Answer) -> bool {
+        self.host.ask(client, question, answer)
     }
 }
 
@@ -663,11 +686,38 @@ impl Registry {
                 &input,
                 capability.effect,
                 context.confirmed,
-                &result,
+                result.as_ref(),
             );
             host.audit(project, record);
         }
         result
+    }
+
+    /// Records that a client's call of `name` was refused before it could
+    /// run, e.g. because its arguments did not pass the confirmation's
+    /// checks or the user could not be asked; returns the error.
+    pub fn refuse(
+        &self,
+        host: &mut dyn Host,
+        context: &Context,
+        name: &str,
+        input: &Value,
+        error: CallError,
+    ) -> CallError {
+        if let (Some(capability), Some(client)) = (self.get(name), context.client_info()) {
+            let (project, entry) = audit_target(host, input, None);
+            let record = policy::record(
+                client,
+                name,
+                entry,
+                input,
+                capability.effect,
+                context.confirmed,
+                Err(&error),
+            );
+            host.audit(project, record);
+        }
+        error
     }
 
     /// What the user is asked to confirm before `name` runs with `input`:

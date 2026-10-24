@@ -183,7 +183,7 @@ pub(crate) fn record(
     arguments: &Value,
     effect: Effect,
     confirmed: bool,
-    result: &Result<CallResult, CallError>,
+    result: Result<&CallResult, &CallError>,
 ) -> AuditRecord {
     let result = match result {
         Ok(result) => AuditResult::done(cut(&result.summary, MAX_RESULT_CHARS)),

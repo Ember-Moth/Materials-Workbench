@@ -34,7 +34,7 @@ pub use project::{
     unknown_structure,
 };
 pub use registry::{
-    Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output, Registry,
-    Spec, StructureEntryId, StructureInfo,
+    Answer, Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output,
+    Registry, Spec, StructureEntryId, StructureInfo,
 };
 pub use structure::{MAX_SUPERCELL_ATOMS, supercell_name};

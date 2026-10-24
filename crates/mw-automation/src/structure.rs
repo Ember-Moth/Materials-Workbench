@@ -1199,7 +1199,7 @@ pub(crate) fn register(registry: &mut Registry) {
              an atom moves, and whether the cell, its orientation or the origin change. Atoms of \
              different elements, occupancies or disorder groups are never equivalent. Keeps the \
              cell, or with standardize uses the conventional cell of the standard setting. \
-             Nothing changes.",
+             Nothing changes; structure.symmetrize does it with the same arguments.",
         ),
         |host: &mut dyn Host, input: SymmetrizeInput| {
             let document = document(host, input.structure)?;

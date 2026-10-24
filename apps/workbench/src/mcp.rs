@@ -15,7 +15,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use mw_mcp::{Calls, Listening, RecentProject};
 
-use crate::config::{AppPaths, Session};
+use crate::config::{AppPaths, Session, Settings};
 use crate::host::AppHost;
 use crate::workbench::Workbench;
 
@@ -27,6 +27,9 @@ pub const COMMAND: &str = "mcp";
 pub fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
     let paths = AppPaths::from_environment();
     let endpoint = paths.mcp_endpoint();
+    let settings = paths.clone();
+    let permissions =
+        move |client: &mw_automation::Client| Settings::load(&settings).ai.permissions(client);
     let recent = move || {
         Session::load(&paths)
             .map(|session| session.recent)
@@ -39,6 +42,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         "materials-workbench mcp",
         args,
         Box::new(recent),
+        Box::new(permissions),
         Some(endpoint),
     )
 }

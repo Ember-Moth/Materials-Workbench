@@ -492,7 +492,7 @@ fn mcp_clients_work_on_the_open_projects(cx: &mut TestAppContext) {
     let tools: Vec<String> = server.tools().iter().map(|t| t.name.to_string()).collect();
     assert!(tools.contains(&"structure_summary".to_string()));
     assert!(!tools.contains(&"file_open".to_string()));
-    assert!(!tools.contains(&"structure_set_cell".to_string()));
+    assert!(tools.contains(&"structure_set_cell".to_string()));
 
     let list = call(&server, "project_list", json!({}), &mut cx);
     assert_eq!(list["open"].as_array().unwrap().len(), 1);

@@ -123,6 +123,64 @@ async fn recent_project_to_exported_text() {
     assert_eq!(fs::read(config.join("state.json")).unwrap(), session);
 }
 
+/// Milestone M18: without a window, what clients may change comes from the
+/// application's settings, read on every call; changes go to the project's
+/// files at once, and the configuration directory stays as it was.
+#[tokio::test]
+async fn settings_decide_what_clients_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let projects = temp.path().join("projects");
+    fs::create_dir(&projects).unwrap();
+    let installed = mw_project_file::samples::install(&projects).unwrap();
+    let tio2 = installed[0].canonicalize().unwrap();
+    let config = temp.path().join("config");
+    configuration(&config, &tio2);
+    // rmcp's client calls itself rmcp; the user has not let it change data.
+    let settings = |modify: bool| {
+        let settings = json!({
+            "version": 1,
+            "dark": false,
+            "language": "zh-CN",
+            "mcp": false,
+            "ai": {
+                "modify_data": true,
+                "write_files": true,
+                "clients": [{ "name": "rmcp", "modify_data": modify }],
+            },
+        });
+        fs::write(config.join("settings.json"), settings.to_string()).unwrap();
+    };
+    settings(false);
+    let client = start(&config, &projects, &projects).await;
+    call(&client, "project_open", json!({ "path": "tio2.mwproj" })).await;
+    call(&client, "structure_open", json!({ "structure": 1 })).await;
+    let edit = json!({ "structure": 1, "values": [{ "parameter": "a", "value": 4.7 }] });
+    let Value::Object(arguments) = edit else {
+        unreachable!()
+    };
+    let params = CallToolRequestParams::new("structure_set_cell").with_arguments(arguments);
+    let refused = client.call_tool(params.clone()).await.unwrap();
+    assert_eq!(refused.is_error, Some(true));
+    let text = serde_json::to_string(&refused.content).unwrap();
+    assert!(text.contains("not_permitted"), "{text}");
+
+    // The user allows it; the next call may.
+    settings(true);
+    let before = fs::read(config.join("settings.json")).unwrap();
+    let session = fs::read(config.join("state.json")).unwrap();
+    let edited = client.call_tool(params).await.unwrap();
+    assert_ne!(edited.is_error, Some(true), "{edited:#?}");
+    client.cancel().await.unwrap();
+    let rutile = fs::read_to_string(tio2.join(format!("structures/{RUTILE}.json"))).unwrap();
+    assert!(rutile.contains("4.7"), "{rutile}");
+    // Both calls are in the project's audit log; the refusal too.
+    let log = fs::read_to_string(tio2.join("audit.jsonl")).unwrap();
+    let edits = log.matches(r#""capability":"structure.set_cell""#).count();
+    assert_eq!(edits, 2, "{log}");
+    assert_eq!(fs::read(config.join("settings.json")).unwrap(), before);
+    assert_eq!(fs::read(config.join("state.json")).unwrap(), session);
+}
+
 /// The client of `materials-workbench mcp`, with the configuration
 /// directory `config` and the directory `allow`, started in `cwd`.
 async fn start(config: &Path, allow: &Path, cwd: &Path) -> Client {
