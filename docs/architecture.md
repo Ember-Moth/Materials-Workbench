@@ -1,6 +1,6 @@
 # 架构
 
-> 状态：v0.1 框架已搭好，M1 CIF 导入、M2 对称性、M3 渲染（键、晶胞边框、拾取、测量）、M4 基础编辑与能力注册表、M5 中的导出（CIF、POSCAR、扩展 XYZ）、M5b 转为 P1 与超胞、M6 持久化（项目文件、最近项目、设置）已实现，v0.1 的里程碑都已完成，验收标准逐条通过；v0.2 的里程碑 M7–M12（对称模式下的几何编辑、晶胞变换、对称性检测与对称化、POSCAR 导入与晶格朝向、MCP 读项目文件、MCP 连接运行中的应用）都已实现 · 2026-10-23
+> 状态：v0.1 框架已搭好，M1 CIF 导入、M2 对称性、M3 渲染（键、晶胞边框、拾取、测量）、M4 基础编辑与能力注册表、M5 中的导出（CIF、POSCAR、扩展 XYZ）、M5b 转为 P1 与超胞、M6 持久化（项目文件、最近项目、设置）已实现，v0.1 的里程碑都已完成，验收标准逐条通过；v0.2 的里程碑 M7–M12（对称模式下的几何编辑、晶胞变换、对称性检测与对称化、POSCAR 导入与晶格朝向、MCP 读项目文件、MCP 连接运行中的应用）都已实现，验收标准逐条核对完毕（在 Claude Code 里手动检查 MCP 暂缓） · 2026-10-23
 > 相关设计：[界面外壳](design/ui-shell.md) · [晶体学数据模型](design/crystallography-model.md) · [项目文件](design/project-format.md) · [3D 视口](design/viewport-rendering.md) · [AI 集成](design/ai-integration.md)
 > 开发流程与约定见 [开发指南](development.md)；版本规划见 [产品路线图](roadmap.md)。
 
@@ -214,3 +214,5 @@ v0.2（[路线图](roadmap.md)第 6 节）拆成六个里程碑。M7、M10、M11
 | M12 MCP 连接运行中的应用 | MCP 客户端操作打开着的应用 | `mw-mcp`、外壳 | 已实现（AI 集成设计稿 5.1 节）。设置里新增"允许 MCP 客户端连接"，默认关，开关立即生效；打开时应用在用户运行目录（macOS 的用户临时目录、Linux 的 `$XDG_RUNTIME_DIR`，`MW_CONFIG_DIR` 下的 `run/`）的 Unix 域套接字上监听，Windows 用命名管道；目录 0700，套接字和令牌文件 0600，令牌每次监听新生成 256 位，两端核对对方进程属于同一用户。`materials-workbench mcp` 先找这个通道：找到就发令牌、允许的目录和工作目录握手，然后在 stdio 和通道之间原样转发字节，不解析 MCP；找不到、连不上或被拒绝时照 M11 无界面运行。应用里每个连接跑同一个 `mw_mcp::Server`（`Server::dispatching`），调用派发到 GPUI 主线程，由外壳的 `AppHost` 实现 `Host` 和 `Projects`：列出窗口里打开着的项目和结构，`project_open` 把项目加进边栏，`structure_open` 在窗口里显示结构，查询读到用户未保存的编辑；只读能力 12 个，没有 `file_open`，宿主不给可变文档，写操作、撤销栈和确认弹窗留给 v0.3。测试：通道的权限、令牌、遗留套接字、第二个实例、原样转发和经通道调用（`mw-mcp/src/relay.rs`），派发的调用（`src/server.rs`）；外壳的界面集成测试经 `Server` 调用应用端的宿主、检查设置开关和启动时监听失败（`apps/workbench/src/ui_tests.rs`）；rmcp 的客户端驱动 `materials-workbench mcp` 连接测试里启动的监听端，监听停止后退回无界面（`apps/workbench/tests/mcp.rs`）；另在真实应用里手动走过一遍。Windows 只做过编译检查；MCP Inspector 和 Claude Code 还没连过运行中的应用 |
 
 v0.2 的实验性 MCP Server 先做出原型（`mw-mcp`，2026-10-22：无界面、只读、stdio，独立可执行文件；能力注册表为此加了 `structure.diagnostics` 和 `structure.export`），M11（2026-10-23）让它只读地打开项目文件并并入主程序，M12（2026-10-23）让它连接运行中的应用（见上表）。
+
+**v0.2 验收**（2026-10-23）：路线图第 6 节的验收标准逐条核对完毕，结果见上表。第一条，晶体学设计稿第 7 节的每条编辑语义都有对应测试；核对时发现 4 条没有做到：同一无序组合里相邻 split site 的占位率之和检查（7.7 节）和导入时晶胞与对称性不一致的修正（7.3 节，原先"提示对称化"行不通，改为改晶胞参数的结果总与对称性一致，属性面板给出"对齐"）已补上；`SetDisorder` 和在约束平面上点击添加位点推到 v0.3（设计稿第 10 节）。删除位点后的反馈原先只有截图覆盖，也补了测试。第二条，P1 结构对称化后再转回 P1 在容差内不变，由 `mw-crystal/src/symmetrize.rs` 的测试覆盖全部 530 个表列设定（含转过朝向、左手系、带位移参数和不确定度的结构）。保留：MCP 只有自动化测试（rmcp 客户端经 stdio 驱动 `mw-mcp` 和 `materials-workbench mcp`，含转接到测试里启动的监听端），在 Claude Code 里的手动检查和 MCP Inspector（要从 npm 下载）暂缓；M12 在 Windows 上只做过编译检查，Linux 和 Windows 都没有实际运行过（属于路线图 v0.3 的验证）；POSCAR 仍只用 pymatgen 和 ASE 验证。仍是模拟的部分（第 9 节）都属于之后的版本。
