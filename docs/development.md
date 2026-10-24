@@ -231,13 +231,13 @@ MW_LLM_PROVIDER=ollama MW_LLM_MODEL=qwen3 MW_LLM_TOOLS=1 cargo run -p mw-llm --e
 
 加上 `RUST_LOG=mw_llm=debug` 可以看到请求地址和重试；日志里没有请求内容和密钥。
 
-实验性 MCP Server（[AI 集成设计稿](design/ai-integration.md)第 5 节）是应用的子命令 `materials-workbench mcp`，由 MCP 客户端启动，经 stdio 通信，不开窗口；日志写到标准错误，用 `RUST_LOG` 调整级别。它只读：打开项目和 CIF 文件，不写任何文件。`--allow 目录` 给出客户端可以打开项目和 CIF 文件的目录，可以重复；不给时用工作目录，工作目录是 `/` 时不允许任何目录。最近项目来自应用的配置目录（`MW_CONFIG_DIR` 可以改位置），只列 `--allow` 范围内的。客户端的配置里用绝对路径。先构建：
+实验性 MCP Server（[AI 集成设计稿](design/ai-integration.md)第 5 节）是应用的子命令 `materials-workbench mcp`，由 MCP 客户端启动，经 stdio 通信，不开窗口；日志写到标准错误，用 `RUST_LOG` 调整级别。`--allow 目录` 给出客户端可以打开、导入和写入文件的目录，可以重复；不给时用工作目录，工作目录是 `/` 时不允许任何目录。客户端能编辑（M18，AI 集成设计稿 5.3 节）：没有窗口时每次编辑、超胞和导入立刻写回项目文件（服务器持项目的锁，被覆盖的文件先备份进项目的 `backup/`，调用记进项目的 `audit.jsonl`），写文件（`structure_export_file`）每次都经 MCP 的 elicitation 问用户，客户端不支持 elicitation 时拒绝。客户端能做什么由配置目录里 `settings.json` 的 `ai` 字段决定（"允许 AI 修改数据""允许 AI 写文件"，默认都开，可以按客户端设置），服务器每次调用时读、从不写。最近项目也来自配置目录（`MW_CONFIG_DIR` 可以改位置），只列 `--allow` 范围内的。客户端的配置里用绝对路径。先构建：
 
 ```bash
 cargo build --release --bin materials-workbench
 ```
 
-应用开着、并且在设置里打开了"允许 MCP 客户端连接"（默认关）时，同一条命令不再自己读项目，而是连接正在运行的应用（M12，AI 集成设计稿 5.1 节）：客户端看到的是窗口里打开着的项目和结构，`structure_open` 在窗口里显示结构，查询读到还没保存的编辑；没有 `file_open`。`--allow` 的含义不变，限制的是从磁盘打开项目。应用在当前用户的运行目录里监听（macOS 是用户临时目录下的 `materials-workbench/`，Linux 是 `$XDG_RUNTIME_DIR/materials-workbench/`），设置了 `MW_CONFIG_DIR` 时在它下面的 `run/`，所以客户端启动命令时要带上同一个 `MW_CONFIG_DIR`，才找得到这个实例；Unix 域套接字的路径不能超过 103 字节（macOS），这个目录太深时应用不监听，并用通知说明。标准错误里有 `connected to the running application`（`RUST_LOG=info`）就是连上了。在终端里试：
+应用开着、并且在设置里打开了"允许 MCP 客户端连接"（默认关）时，同一条命令不再自己读项目，而是连接正在运行的应用（M12，AI 集成设计稿 5.1 节）：客户端看到的是窗口里打开着的项目和结构，`structure_open` 在窗口里显示结构，查询读到还没保存的编辑；编辑出现在窗口里、进同一个撤销栈（撤销提示写明"AI（客户端名）"），由用户保存；写文件在应用里弹确认；另有视图工具（选中、显示模型、重置视角、截图）；没有 `file_open`。`--allow` 的含义不变，限制的是从磁盘打开项目。应用在当前用户的运行目录里监听（macOS 是用户临时目录下的 `materials-workbench/`，Linux 是 `$XDG_RUNTIME_DIR/materials-workbench/`），设置了 `MW_CONFIG_DIR` 时在它下面的 `run/`，所以客户端启动命令时要带上同一个 `MW_CONFIG_DIR`，才找得到这个实例；Unix 域套接字的路径不能超过 103 字节（macOS），这个目录太深时应用不监听，并用通知说明。标准错误里有 `connected to the running application`（`RUST_LOG=info`）就是连上了。在终端里试：
 
 ```bash
 MW_CONFIG_DIR=/tmp/mw-dev cargo run --bin materials-workbench
@@ -247,20 +247,25 @@ MW_CONFIG_DIR=/tmp/mw-dev cargo run --bin materials-workbench
 
 `crates/mw-mcp` 另有独立的可执行文件 `mw-mcp`（`cargo run -p mw-mcp -- --allow 目录`），参数相同，但不读配置目录、没有最近项目，留给开发和协议测试用。
 
-用 MCP Inspector 检查。它要从 npm 下载，需要 Node 22.19 或更新，运行前先问用户。下面的命令按 Inspector 2.12.0 的用法写：2026-10-22 用它对原型（独立的 `mw-mcp`、只能打开 CIF 文件）跑过命令行和 `mcpdo` 的写法；改成 `materials-workbench mcp` 和项目工具之后还没有重跑。网页界面的命令按它的文档写，没有打开过。网页界面默认在 `http://localhost:6274`，`--` 之后的参数交给服务器。例子里允许的是仓库里的示例项目，服务器只读，不会改动它们：
+用 MCP Inspector 检查。它要从 npm 下载，需要 Node 22.19 或更新，运行前先问用户。下面的命令按 Inspector 2.12.0 的用法写：2026-10-22 用它对原型（独立的 `mw-mcp`、只能打开 CIF 文件）跑过命令行和 `mcpdo` 的写法；改成 `materials-workbench mcp` 和项目工具之后还没有重跑。网页界面的命令按它的文档写，没有打开过。网页界面默认在 `http://localhost:6274`，`--` 之后的参数交给服务器。服务器会把编辑写回允许目录里的项目，所以例子允许的是示例项目在临时目录里的副本，不要允许仓库里的 `samples`：
 
 ```bash
-npx @modelcontextprotocol/inspector target/release/materials-workbench -- mcp --allow "$PWD/crates/mw-project-file/samples"
+mkdir -p /tmp/mw-mcp-try && cp -R crates/mw-project-file/samples/*.mwproj /tmp/mw-mcp-try/
+```
+
+
+```bash
+npx @modelcontextprotocol/inspector target/release/materials-workbench -- mcp --allow /tmp/mw-mcp-try
 ```
 
 命令行模式下，目标命令在前，`--` 之后是 Inspector 自己的选项。每条命令启动一个新的服务器进程，打开的项目不会留到下一条，所以只适合列工具或调用一次工具：
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/release/materials-workbench mcp --allow "$PWD/crates/mw-project-file/samples" -- --method tools/list
+npx @modelcontextprotocol/inspector --cli target/release/materials-workbench mcp --allow /tmp/mw-mcp-try -- --method tools/list
 ```
 
 ```bash
-npx @modelcontextprotocol/inspector --cli target/release/materials-workbench mcp --allow "$PWD/crates/mw-project-file/samples" -- --method tools/call --tool-name project_open --tool-arg path="$PWD/crates/mw-project-file/samples/tio2.mwproj"
+npx @modelcontextprotocol/inspector --cli target/release/materials-workbench mcp --allow /tmp/mw-mcp-try -- --method tools/call --tool-name project_open --tool-arg path=/tmp/mw-mcp-try/tio2.mwproj
 ```
 
 `tools/list` 后面加 `--strict` 会逐条列出 Schema 的可移植性提示（AI 集成设计稿 5.2 节）。
@@ -274,13 +279,13 @@ eval "$(npx -p @modelcontextprotocol/inspector mcpdo private)"
 连接服务器。`--era legacy` 走 `initialize` 握手，`--era modern` 走 2026-07-28 的无状态生命周期：
 
 ```bash
-npx -p @modelcontextprotocol/inspector mcpdo connect --era legacy --connection mw "$PWD/target/release/materials-workbench" -- mcp --allow "$PWD/crates/mw-project-file/samples"
+npx -p @modelcontextprotocol/inspector mcpdo connect --era legacy --connection mw "$PWD/target/release/materials-workbench" -- mcp --allow /tmp/mw-mcp-try
 ```
 
 然后逐条调用，例如打开示例项目、打开其中的金红石，再看摘要（结构 ID 以 `project_open` 的结果为准）：
 
 ```bash
-npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name project_open --tool-args-json "{\"path\":\"$PWD/crates/mw-project-file/samples/tio2.mwproj\"}"
+npx -p @modelcontextprotocol/inspector mcpdo tools/call --connection mw --tool-name project_open --tool-args-json "{\"path\":\"/tmp/mw-mcp-try/tio2.mwproj\"}"
 ```
 
 ```bash
@@ -317,6 +322,16 @@ claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/mat
 ```
 
 用 `claude mcp get materials-workbench` 或会话里的 `/mcp` 确认已连接。工具在 Claude Code 里叫 `mcp__materials-workbench__project_open` 这样的名字；打开结构后，它的 CIF 文本可以用 `@materials-workbench:mw://project/{项目 ID}/structure/{条目 ID}.cif` 引用，URI 在 `project_open` 和 `structure_open` 的结果里。Claude Desktop 的 `claude_desktop_config.json` 也是同样的 `mcpServers` 写法，但它可能在 `/` 启动服务器，所以必须给 `--allow`；这一点还没有按 Claude Desktop 当前的文档核对。
+
+**M18 的手动检查**（AI 集成设计稿第 8 节的 MCP 验收，要你配合；自动化测试覆盖的部分见第 4 节）。都在示例项目的临时副本上做（上面的 `cp`），做完用 `rm -rf /tmp/mw-mcp-try` 清掉：
+
+1. **Inspector**（先问用户，要从 npm 下载）：`tools/list` 无界面时是 33 个工具，`--strict` 只应有输出 Schema 里可空字段的可移植性提示；用 `mcpdo` 依次 `project_open`、`structure_open`、`structure_set_cell`（看 `/tmp/mw-mcp-try/tio2.mwproj/backup/` 里出现被覆盖的文件、`audit.jsonl` 多一行）、`history_undo`、`structure_make_supercell`（`resources/list` 多一个结构）、`structure_export_file`（Inspector 支持 elicitation 时弹出确认；不支持时应得到 `confirmation_unavailable`，不写文件）。`--era legacy` 和 `--era modern` 各走一遍。连接应用时（下面第 3 步的设置）再 `tools/list` 一次：36 个工具，有 `view_*`、没有 `file_open`。
+2. **Claude Code，无界面**：按上面的 `claude mcp add` 配好（`--allow /tmp/mw-mcp-try`），在会话里说"打开 /tmp/mw-mcp-try/tio2.mwproj，总结金红石的结构，生成 2×2×2 超胞，把超胞导出成 POSCAR 写到 /tmp/mw-mcp-try/POSCAR"。核对：写文件前 Claude Code 弹出确认（elicitation），拒绝时没有文件、接受后有；`tio2.mwproj/project.json` 里多了超胞；`audit.jsonl` 里每次调用一行，`client` 是 Claude Code，写文件那行 `confirmed` 为真。
+3. **Claude Code，连接应用**：`MW_CONFIG_DIR=/tmp/mw-dev cargo run --release --bin materials-workbench` 启动应用，在设置里打开"允许 MCP 客户端连接"并打开 `/tmp/mw-mcp-try/tio2.mwproj`；Claude Code 的服务器配置里加 `"env": {"MW_CONFIG_DIR": "/tmp/mw-dev"}`（或两边都不设）。同样的请求，核对：结构和超胞在窗口里实时出现，超胞在边栏里带未保存的圆点；每步有"AI（Claude Code）"的通知，顶栏撤销按钮的提示是"撤销 AI（Claude Code）的「…」"，⌘Z 能撤销；导出时应用里弹出"允许 Claude Code 写入文件？"；设置里出现 Claude Code 这一行，关掉它的"修改数据"后编辑被拒绝；⌘S 之后 `audit.jsonl` 里有这些调用；命令面板的"导出 AI 操作记录…"写出同样的记录。再说"选中所有 Ti，换成多面体，截一张图"，核对窗口里的选区和显示模型，Claude Code 收到图片。
+4. **Claude Desktop**：配置文件 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers` 写法同 `.mcp.json`（`command` 用绝对路径，`args` 里必须有 `--allow`，因为它可能在 `/` 启动服务器；这个位置和写法还没有按它当前的文档核对），重启 Claude Desktop 后工具出现在列表里，走一遍第 2 步。
+5. **提示注入**：把 `crates/mw-mcp/tests/fixtures/injection.cif` 复制进 `/tmp/mw-mcp-try`，让客户端用 `file_open`（无界面）或 `file_import`（连接应用）打开它并总结。核对：模型不照文件里的指令做；即使它去写文件，也必须先经你确认，写到 `~/.ssh/config` 在问你之前就被拒绝（`not_allowed`）。
+
+工具质量的评测集（AI 集成设计稿第 8 节）要调用真实模型并计费，还没有建，运行前先问用户。
 
 命令行 `mw`（`crates/mw-cli`，[命令行与 Python 设计稿](design/scripting.md)第 4 节）不开窗口、不链接 GPUI。文件按界面的规则认格式，一次可以给多个；结构写到标准输出、`-o 文件`（一个结构）或 `--out-dir 目录`（按结构名命名，不覆盖已有文件，`--force` 覆盖）；`--json` 在标准输出上给一个 JSON 文档。退出码 0 是全部完成，1 是有文件或结构失败（其余照常完成），2 是用法错误。`mw --help` 和 `mw 子命令 --help` 列出全部选项：
 
@@ -421,18 +436,18 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号）、空间群号与 Wyckoff 位置、吸附与合并、P1 结构的对称性检测 | `crates/mw-crystal-io/tests/fixtures.rs` |
 | 导出测试 | 每个 fixture CIF 的"导入 → 导出 → 再导入"往返（结构、保留字段、二次导出文本相同）；保留字段在结构修改后的去留；其他设定的空间群名称；POSCAR 与扩展 XYZ 对照手写的期望文件，显式朝向按基矢写出，左手系写成 CIF 不变成镜像；部分占位和未知元素的拒绝 | `crates/mw-crystal-io/tests/export.rs` |
 | POSCAR 导入 | `fixtures/poscar/` 的手写文件（VASP 5、Cartesian 与显式朝向、负缩放因子、CONTCAR、VASP 4、左手系）；每种错误和警告的行号；能写成 POSCAR 的结构"导出 → 导入"后原子、晶格矢量和手性相同，再导出文本相同 | `crates/mw-crystal-io/tests/poscar.rs` |
-| 项目文件 | 全部内置示例、每个 fixture 能导入的结构和一个左手系显式朝向的结构写成项目再读回，结构、测量（含已失效的）、编辑记录、来源记录、视图状态（含两种显示范围和多面体的中心）逐项相同，重写一遍字节相同；版本 1 的 `view.json` 照常读入，写回时是当前版本，多面体的中心排序去重；只重写改过的文件、另存为、清理不再引用的文件、读不了的部分（损坏、朝向不正交、版本更新、源文件副本被改或缺失）；示例项目与重新生成的一致；旧版本的测试项目能打开、内容与当前示例相同，第一次保存时备份并写成当前版本 | `crates/mw-project-file/tests/roundtrip.rs`、`samples.rs`、`migration.rs` |
+| 项目文件 | 全部内置示例、每个 fixture 能导入的结构和一个左手系显式朝向的结构写成项目再读回，结构、测量（含已失效的）、编辑记录、来源记录、视图状态（含两种显示范围和多面体的中心）逐项相同，重写一遍字节相同；版本 1 的 `view.json` 照常读入，写回时是当前版本，多面体的中心排序去重；只重写改过的文件、另存为、清理不再引用的文件、读不了的部分（损坏、朝向不正交、版本更新、源文件副本被改或缺失）；示例项目与重新生成的一致；旧版本的测试项目能打开、内容与当前示例相同，第一次保存时备份并写成当前版本。M18：项目锁一次只有一个持有者，目录不存在时报错；会话备份只复制被覆盖的文件、每个文件一次，只保留最近的几个；审计日志一行一条 JSON、只追加、读时跳过认不出的行 | `crates/mw-project-file/tests/roundtrip.rs`、`samples.rs`、`migration.rs`、`src/lock.rs`、`src/backup.rs`、`src/audit.rs` |
 | 语料统计 | COD 批量导入与 CIF 往返，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs`、`cod_roundtrip.rs` |
 | 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡；半透明多面体透出背景和后面的球、被前面的球挡住、从远到近混合且随相机转向重排），以及拾取结果（点击穿过多面体）；没有适配器时跳过并打印原因，设了 `MW_REQUIRE_GPU` 时失败。多面体每帧耗时的测量默认忽略（第 2 节） | `mw-crystal-render` |
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
-| 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部只读能力放进一个严格请求也合规，其余每 20 个一组（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试。对称化的预览与执行（M9）用示例里 P1 的超胞测试；项目能力用一个内存里的假宿主测试：列出和打开项目、没打开的结构返回 `structure_not_open`、打开后可用、没有项目的 `Host` 上返回 `unavailable` | `crates/mw-automation/tests/capabilities.rs`、`tests/projects.rs` |
-| MCP Server | 用 rmcp 的客户端经 stdio 驱动开发用的 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）；打开装在临时目录里的示例项目（再开一次得到同样的 ID）、没打开的结构先报错、打开结构、摘要、测量、诊断、导出 POSCAR、按项目 ID 读 CIF 资源（没打开的结构读时打开）、对 P1 的超胞检测对称性（M9，结构不变）；项目之外的 CIF 用 `file_open` 打开，放在未命名项目里；结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、不是项目、非 CIF 的路径和错误的参数都是模型能读的工具错误。访问策略（含从另一个工作目录算相对路径）、无界面宿主（只读、副本缺失、格式更新的项目、复制的项目、最近项目的过滤）和参数解析另有单元测试。连接应用的通道（M12）：令牌随机、整个比较，令牌文件和目录的权限，别人能进入的目录不被信任，令牌不对时拒绝，第二个实例不接管，停止后清掉文件，路径太长时什么都不留，遗留的套接字算没有应用；一个只回显的假应用确认转发进程把任意字节原样转发；经通道用 rmcp 的客户端调用宿主线程上的宿主；派发的调用在宿主线程上执行，线程不在时返回 `unavailable` | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/headless.rs`、`src/server.rs`、`src/cli.rs`、`src/endpoint.rs`、`src/relay.rs` |
+| 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部只读能力放进一个严格请求也合规，其余每 20 个一组（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试。对称化的预览与执行（M9）用示例里 P1 的超胞测试；项目能力用一个内存里的假宿主测试：列出和打开项目、没打开的结构返回 `structure_not_open`、打开后可用、没有项目的 `Host` 上返回 `unavailable`。M18：客户端没有"修改数据"时编辑不执行、修订号不变，写文件要"写文件"的权限和这次调用的确认，确认前检查参数和路径，用户自己的调用不受限；每次客户端调用（包括被拒绝的）的审计记录；超胞和导入经 `Projects` 加进项目；视图工具交给有窗口的假宿主、不需要权限、不改数据，没有窗口时 `unavailable` | `crates/mw-automation/tests/capabilities.rs`、`tests/projects.rs`、`tests/policy.rs`、`tests/view.rs` |
+| MCP Server | 用 rmcp 的客户端经 stdio 驱动开发用的 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）；打开装在临时目录里的示例项目（再开一次得到同样的 ID）、没打开的结构先报错、打开结构、摘要、测量、诊断、导出 POSCAR、按项目 ID 读 CIF 资源（没打开的结构读时打开）、对 P1 的超胞检测对称性（M9，结构不变）；项目之外的 CIF 用 `file_open` 打开，放在未命名项目里；结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、不是项目、非 CIF 的路径和错误的参数都是模型能读的工具错误。访问策略（含从另一个工作目录算相对路径）、无界面宿主（只读、副本缺失、格式更新的项目、复制的项目、最近项目的过滤）和参数解析另有单元测试。连接应用的通道（M12）：令牌随机、整个比较，令牌文件和目录的权限，别人能进入的目录不被信任，令牌不对时拒绝，第二个实例不接管，停止后清掉文件，路径太长时什么都不留，遗留的套接字算没有应用；一个只回显的假应用确认转发进程把任意字节原样转发；经通道用 rmcp 的客户端调用宿主线程上的宿主；派发的调用在宿主线程上执行，线程不在时返回 `unavailable`。M18：全部工具和按副作用等级的注解，视图工具只在有窗口时列出；编辑存进项目再撤销，超胞进项目、资源列表更新；两种生命周期下 elicitation 接受时写文件、拒绝时没有文件，不支持 elicitation 的客户端被拒绝并记录；别的进程持锁、文件在读取后被改过时拒绝且内存不变；只读的会话不留锁、日志和备份；带恶意指令的 CIF 不能让任何没经确认的写操作发生；截图的图像内容块 | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/headless.rs`、`src/server.rs`、`src/cli.rs`、`src/endpoint.rs`、`src/relay.rs` |
 | 命令行与 Python 的共用层 | `mw-scripting` 的结果与注册表和领域函数直接调用的相同：摘要、对称性检测（含拒绝）、诊断与 `structure.diagnostics`；每个测试文件写成 CIF、POSCAR、扩展 XYZ 的文本与 `structure.export` 相同（含拒绝时的错误码）；超胞与 `make_supercell` 逐位相同、名字与界面相同、超大和行列式不为正时拒绝；晶胞变换与对称化可以撤销重做；分页的能力取全；按文件名认格式和给结构起名与界面的规则相同 | `crates/mw-scripting/src/` 各模块的测试 |
 | 命令行 | 运行 `mw` 可执行文件处理 `mw-crystal-io` 的测试文件，与直接读文件、在 `Documents` 里调用注册表或领域函数的结果逐项比较：`info`、`convert` 的三种格式、`supercell`（倍数和矩阵）、`transform`（预设、矩阵加原点、设定）、`symmetry` 和 `symmetrize`、`diagnostics`、`call`、`capabilities`；一批文件写进目录、不覆盖与 `--force`、按 `-o` 的文件名认格式、标准输入；错误输入的消息和退出码（读不了、认不出、导入错误带行号、格式装不下、多个结构写到一处、缺格式、错误的参数与互斥的选项、被拒绝的操作、JSON 模式下的错误）。参数解析另有单元测试 | `crates/mw-cli/tests/cli.rs`、`src/args.rs` |
 | Python 模块 | Rust 侧：参数的判断（超胞的三种写法与范围、晶胞变换的选择与矩阵形状、分数的文本、格式），不需要解释器。Python 侧的冒烟测试不在 `cargo test` 里：导入构建出的扩展模块，检查每个接口、每种错误，核对命令行写出同样的文本（第 2 节的命令）；CI 另用它测试 wheel | `crates/mw-python/src/lib.rs`、`tests/smoke.py` |
-| `materials-workbench mcp` | 经 stdio 驱动应用的可执行文件：用临时配置目录（`MW_CONFIG_DIR`）给出最近项目，只列出 `--allow` 范围内的，从它打开项目、打开结构、摘要、导出 POSCAR、读资源，结束后配置目录里的文件一字节不变；`mcp --help` 不开窗口。连接应用（M12）：测试里在 `MW_CONFIG_DIR` 下启动监听端，命令转接过去（只读工具里没有 `file_open`，相对路径从命令的工作目录算，读资源），监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用 | `apps/workbench/tests/mcp.rs` |
-| 外壳的界面集成测试 | 在无头窗口里用临时配置目录启动外壳：第一次启动打开示例项目；编辑、测量、换视角后 ⌘S、关闭项目、再打开，结构、测量、编辑记录和视图状态完整恢复（路线图 M6 的验收）；有未保存的更改时关闭和退出先问；导入的文件随项目保存，带源文件副本；POSCAR 和 CONTCAR 按文件名认出、以文件夹命名，随项目保存为 `.vasp` 副本，显式朝向存进结构文件，认不出的文件给通知；生成的超胞作为派生结构排在来源之后，保存后带着矩阵和来源记录；MCP 客户端连接应用（M12）：经 `Server::dispatching` 调用应用端的宿主，列出打开的项目和结构，打开没打开的结构时窗口显示它，读到用户的编辑，`project_open` 加进边栏而不切换显示、允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不崩溃 | `apps/workbench/src/ui_tests.rs` |
+| `materials-workbench mcp` | 经 stdio 驱动应用的可执行文件：用临时配置目录（`MW_CONFIG_DIR`）给出最近项目，只列出 `--allow` 范围内的，从它打开项目、打开结构、摘要、导出 POSCAR、读资源，结束后配置目录里的文件一字节不变；`mcp --help` 不开窗口。连接应用（M12）：测试里在 `MW_CONFIG_DIR` 下启动监听端，命令转接过去（只读工具里没有 `file_open`，相对路径从命令的工作目录算，读资源），监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用。M18：按配置目录的 `settings.json` 拒绝没有权限的客户端，改设置后下一次调用就允许，改动存进项目，两次调用都在审计日志里，配置目录不变 | `apps/workbench/tests/mcp.rs` |
+| 外壳的界面集成测试 | 在无头窗口里用临时配置目录启动外壳：第一次启动打开示例项目；编辑、测量、换视角后 ⌘S、关闭项目、再打开，结构、测量、编辑记录和视图状态完整恢复（路线图 M6 的验收）；有未保存的更改时关闭和退出先问；导入的文件随项目保存，带源文件副本；POSCAR 和 CONTCAR 按文件名认出、以文件夹命名，随项目保存为 `.vasp` 副本，显式朝向存进结构文件，认不出的文件给通知；生成的超胞作为派生结构排在来源之后，保存后带着矩阵和来源记录；MCP 客户端连接应用（M12）：经 `Server::dispatching` 调用应用端的宿主，列出打开的项目和结构，打开没打开的结构时窗口显示它，读到用户的编辑，`project_open` 加进边栏而不切换显示、允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不崩溃。M18：另一个进程拿不到应用打开着的项目的锁；客户端的编辑进工作区的撤销栈、记下客户端、项目变成未保存，客户端撤销；客户端被记进设置，单独关掉它的权限后被拒绝；超胞和导入加进项目；写文件时弹窗，Esc 拒绝、回车写入；保存后审计日志里有这些调用；视图工具（没有权限的客户端也能用）切到结构、选中、换显示模型、重置相机、返回 PNG，项目不变成未保存 | `apps/workbench/src/ui_tests.rs` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、转为 P1（选区跟随、撤销一步回到原样）与"转为 P1 后删除"、生成超胞交给外壳、坐标编辑（对称模式下的跟随坐标与吸附）、移动模式下用真实的鼠标事件拖动原子（沿特殊位置、⌥ 脱离且不移动指针也更新预览并保持视图不动、Esc 放回、按下后拾取还没回来就松手、移动模式外仍然旋转视图）、添加位点与重合时的对话框、晶胞变换对话框（预设填入 P、p，改动变成自定义，不成立的变换不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样）、对称化对话框（后台检测的预览，标准化改变预览，不是数的容差被拒绝且不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样；没有更高对称性时写明原因）、与对称性略有出入的晶胞（属性面板给出说明，"对齐"一步对齐、再对齐不产生一步、撤销回原样）、删除位点后的通知（写明位点和原子数）、显示范围（M14：浮层的字段设晶胞块、增减按钮的事件、去掉边界原子、拒绝的值写明原因且范围不变、Esc 关闭；以选中的原子为中心的球、别的晶胞里的原子被选中和测量、转为 P1 和删除位点后球跟着原子或留在原处；在 2 × 2 × 1 的晶胞块里拖动另一个晶胞的原子；10 × 10 × 10 在后台准备、编辑后重新准备、拖动预览在后台一次一个；随视图状态保存，存的范围不成立时用默认范围）、多面体（M15：多面体模型画出八面体和补画的配体、不再提示"尚未实现"、悬停穿过多面体拾取中心原子和补画的配体、拖动预览里的多面体、切回球棍；命令面板的"多面体的中心原子…"切到多面体并打开浮层，按元素开关中心，随视图状态保存和恢复，没有选择时用默认规则，换显示模型关闭浮层；10 × 10 × 10 的多面体在后台准备）。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |

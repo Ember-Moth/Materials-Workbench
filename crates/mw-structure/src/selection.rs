@@ -39,6 +39,15 @@ impl Selection {
         Self(vec![Selected::Atom(atom)])
     }
 
+    /// Whole sites and single atoms, in this order.
+    pub fn of(targets: &[Target]) -> Self {
+        let items = targets.iter().map(|target| match *target {
+            Target::Site(site) => Selected::Site(site),
+            Target::Atom(atom) => Selected::Atom(atom),
+        });
+        Self(items.collect())
+    }
+
     /// The site the properties panel shows: that of the item added last.
     pub fn primary_site(&self) -> Option<SiteId> {
         self.0.last().map(|item| item.site())

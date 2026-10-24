@@ -13,4 +13,4 @@ mod viewport;
 pub use mw_crystal_render::{
     BondInstance, CameraPose, LineInstance, Pick, Polyhedron, Scene, SphereInstance, srgb_to_linear,
 };
-pub use viewport::{Viewport, ViewportEvent};
+pub use viewport::{Snapshot, Viewport, ViewportEvent};

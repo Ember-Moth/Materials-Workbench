@@ -25,6 +25,7 @@ mod project;
 mod registry;
 pub mod schema;
 mod structure;
+mod view;
 
 pub use files::{MAX_EXPORT_BYTES, diagnostic_message};
 pub use policy::{Caller, Client, Confirmation, Context, Permissions};
@@ -34,7 +35,8 @@ pub use project::{
     unknown_structure,
 };
 pub use registry::{
-    Answer, Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output,
-    Registry, Spec, StructureEntryId, StructureInfo,
+    Answer, Availability, CallError, CallResult, Capability, Documents, Effect, Host, Image,
+    Output, Registry, Spec, StructureEntryId, StructureInfo, ViewChange,
 };
 pub use structure::{MAX_SUPERCELL_ATOMS, supercell_name};
+pub use view::{DisplayModel, MAX_SNAPSHOT_SIZE, MIN_SNAPSHOT_SIZE};

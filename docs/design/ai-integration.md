@@ -89,7 +89,7 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 33 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`，M18 加了下面最后两项里的四个）：
+- `Registry::standard()` 注册了 37 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`，M18 加了下面最后两项里的八个）：
   - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
   - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
@@ -98,18 +98,19 @@ Capability
   - 晶胞变换（M8，晶体学设计稿 7.8 节）：`structure.transform_cell`，`cell` 取 `primitive`、`conventional`、`niggli`、`setting`（`setting` 给出 H-M 符号，如 `P 1 1 21/a`、`R -3 c :R`）或 `matrix`（`matrix` 是 P 的三行分数文本，`origin` 是 p，空数组表示原点不动）；不用的字段给空字符串或空数组。结果有变换的 ITA 写法（如 `c, b, -a; 0, 0, 0`）、P 和 p、新的空间群设定、晶胞参数、晶胞内原子数和操作数。拒绝时返回 `transform_not_positive`、`transform_volume`、`transform_not_a_translation`、`transform_breaks_symmetry`、`transform_too_large`，名称不对时 `invalid_arguments`，别的类型的设定 `other_type`，moyo 给不出时 `no_transformation`；
   - 对称性检测与对称化（M9，晶体学设计稿 7.10 节）：只读的 `structure.detect_symmetry` 给出对称化的预览而不改结构：检测到的空间群类型、结果的空间群（保持的晶胞容纳不下全部对称性时是子群）、位点数、晶胞内原子数、操作数、原子的最大位移和移动最大的位点、是否换晶胞或转朝向、原点移了多远、结果的晶胞；可撤销的 `structure.symmetrize` 执行同样的对称化，输出 `changed`、`revision` 和同一份预览（`result`）。输入相同：`tolerance`（Å，0 表示用结构自己的容差，因为输入不用可空类型）和 `standardize`。拒绝时返回 `symmetrize_no_higher_symmetry`、`symmetrize_not_found`、`symmetrize_mismatch`、`symmetrize_position_tolerance`、`symmetrize_too_large`、`symmetrize_no_atoms`，容差为负时 `invalid_arguments`。只读的那个的说明不提 `structure.symmetrize`：MCP Server 不提供编辑工具，提了只会让客户端去找不存在的工具；
   - `history.undo`、`history.redo`；
-  - M18（5.3 节）：可撤销的 `structure.convert_to_p1`（已经是 P1 时返回 `already_p1`）、`structure.make_supercell`（`matrix` 是 M 的三行整数，`name` 为空时用默认名；行列式不为正时 `invalid_arguments`，超过 10 万个原子时 `too_large`）、`file.import`（`project` 给项目 ID，CIF 或 POSCAR），外部副作用的 `structure.export_file`（`overwrite` 为假而文件已存在时 `file_exists`，路径不在允许范围内时 `not_allowed`）。`file.open` 也能读 POSCAR 了：读文件、给结构命名都经 `parse_import`，规则与界面打开文件相同。
+  - M18（5.3 节）：可撤销的 `structure.convert_to_p1`（已经是 P1 时返回 `already_p1`）、`structure.make_supercell`（`matrix` 是 M 的三行整数，`name` 为空时用默认名；行列式不为正时 `invalid_arguments`，超过 10 万个原子时 `too_large`）、`file.import`（`project` 给项目 ID，CIF 或 POSCAR），外部副作用的 `structure.export_file`（`overwrite` 为假而文件已存在时 `file_exists`，路径不在允许范围内时 `not_allowed`）。`file.open` 也能读 POSCAR 了：读文件、给结构命名都经 `parse_import`，规则与界面打开文件相同；
+  - M18 的视图工具（5.3 节"阶段 5 的实现"），副作用等级为视图、只在有窗口时可用：`view.select`（`sites`、`atoms`，都空时清除选区；不存在的位点和原子返回 `unknown_site`、`unknown_atom`）、`view.set_display_model`（`ball_and_stick`、`space_filling`、`polyhedra`）、`view.reset`、`view.snapshot`（宽、高 64–2048 像素，或都为 0 表示视口的大小，否则 `invalid_arguments`；渲染失败时 `render_failed`），结果里带 PNG 图像。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
 - `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、视图、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。`Spec::new(name, description, effect)` 默认两种模式都可用；`additive()`、`idempotent()` 给出 MCP 注解要的两个标记（5.3 节），外部副作用的能力必须用 `register_confirmed` 注册，带一个说明"要确认的是什么"的检查函数，否则注册时就 panic。
 - **Schema 由 Rust 类型生成**：输入输出都是用 `schema_struct!` 声明的结构体，同一份字段列表同时生成 serde 类型和 Schema，字段的文档注释就是给模型看的说明，两者不会不一致。没有用 schemars：它生成的 Schema 带有严格子集之外的关键字（`format`、`minimum`、`$schema` 等），还得再改写一遍。
 - **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部只读能力（MCP Server 暴露的那些）放进一个严格请求也合规；能力总数已超过一个严格请求的 20 个工具，所以测试按每 20 个一组检查其余的。输出 Schema 同样在子集内，可以有可空字段。
-- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，编辑经 `Host::execute(id, command, agent)`、`undo`、`redo` 交给宿主执行（M18，5.3 节）；有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11；导入和加入派生结构，M18）。`Documents` 是放在内存里、没有项目的实现，供测试使用，命令行和 Python 也用它（`mw-scripting`，[命令行与 Python 设计稿](scripting.md)第 2 节），它留下客户端调用的审计记录（`audit_log`）；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），M18 起它把编辑交给工作区（5.3 节"阶段 4 的实现"）。处理函数用 `structure::run` 执行编辑：它取 `Host::agent()`（注册表在调用期间包一层宿主，告诉它是哪个客户端），所以客户端的编辑在撤销栈里记在它名下。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，编辑经 `Host::execute(id, command, agent)`、`undo`、`redo` 交给宿主执行（M18，5.3 节）；有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11；导入和加入派生结构，M18）；有窗口的 `Host` 经 `change_view`、`snapshot` 改变窗口显示的内容、给出视口的图像（M18，没有窗口的宿主默认返回 `unavailable`）。`Documents` 是放在内存里、没有项目的实现，供测试使用，命令行和 Python 也用它（`mw-scripting`，[命令行与 Python 设计稿](scripting.md)第 2 节），它留下客户端调用的审计记录（`audit_log`）；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），M18 起它把编辑交给工作区（5.3 节"阶段 4 的实现"）。处理函数用 `structure::run` 执行编辑：它取 `Host::agent()`（注册表在调用期间包一层宿主，告诉它是哪个客户端），所以客户端的编辑在撤销栈里记在它名下。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
 - **调用的上下文**（M18，7.2 节）：`Registry::call` 是用户自己的调用（脚本、命令行），什么都能做；`Registry::call_as(host, context, name, input)` 带着 `Context`（`Caller` 是用户或 `Client`，`Permissions`，是否已确认），先查可用性、再查权限，然后才运行处理函数。客户端的每次调用（包括被拒绝的）由 `policy::record` 生成 `AuditRecord`，按调用涉及的结构或项目交给 `Host::audit`。`Registry::confirmation` 给出外部副作用的能力要用户确认的那句话。
 - **参数先按类型反序列化**（拒绝多余字段），类型不对时返回 `invalid_arguments`；范围和单位由处理函数检查。元素符号不区分大小写（`zr` 即 Zr）。
 - **编辑的结果**：`EditOutput` 有 `changed`、`revision`、作用到的 `sites`、`warnings`，以及 `info`（M7）：编辑在要求之外做了什么，`snapped`（吸附到特殊位置）或 `multiplicity`（等效原子数变了）。摘要里写成 `Note: …`；移动位点的摘要写明它最后的位置、等效原子数和 Wyckoff 位置。
 - **错误可恢复**：`CallError` 有稳定的 `code`、英文的 `message` 和引导 `guidance`。例如对称模式下只给 Ti1 的一个等效原子换元素，返回 `breaks_symmetry`，引导为"改整个位点"或"转为 P1"（晶体学设计稿 7.1 节）。
-- **结果双份**：`CallResult` 是符合输出 Schema 的 JSON 加一句英文摘要。
+- **结果双份**：`CallResult` 是符合输出 Schema 的 JSON 加一句英文摘要；视口的截图另带一张 PNG（`CallResult::image`，M18）。
 - 界面不经过注册表：GPUI 动作直接调用同一批领域命令（`CrystalDocument::execute`），注册表包装的也是它们，所以两边的行为一致。
 - **v0.2 原型补充的内容（随 `mw-mcp`，2026-10-22，`src/files.rs`）**：
   - `structure.diagnostics`：结构导入时的诊断，分页；每条有严重程度、稳定代码（如 `atom.snapped`）、源文件行号和英文说明。英文说明由 `diagnostic_message` 生成，写在 `mw-automation` 里，因为它是给模型看的；界面仍用 `mw-structure/src/diagnostics.rs` 的本地化文案。不是从文件来的结构（例如示例）没有诊断。
@@ -162,7 +163,7 @@ Capability
 - **资源列表变化**：每次调用后与客户端上次知道的列表比较（`resources/list` 或上一次调用之后），不只比较这次调用前后，所以用户在界面里打开的结构会在下一次调用后通知。界面里打开、关闭结构时还不会立即通知。
 - **默认关**：监听是对本机同一用户的其他进程开放的入口，所以设置默认关。开关立即生效，保存在 `settings.json` 的 `mcp` 字段（没有这个字段的旧设置读作关）。启动时或打开开关时监听失败（另一个实例在监听、路径太长），用通知说明，应用照常使用。
 - **测试**：令牌、令牌文件和目录的权限、目录别人能进入时转发进程不信任它、令牌不对时拒绝、第二个实例不接管、停止后文件清掉、路径太长时什么都不留；用一个只回显的假应用确认转发进程把任意字节（含非 JSON、非 UTF-8、20 万字节）原样转发；经通道用 rmcp 的客户端调用宿主线程上的 `Headless`（`crates/mw-mcp/src/relay.rs`）；`Server::dispatching` 的调用在宿主线程上执行、线程不在时返回 `unavailable`（`src/server.rs`）。外壳的界面集成测试在无头窗口里打开示例项目，经 `Server::dispatching` 调用：只有只读工具、没有 `file_open`；列出打开的项目和结构；没打开的结构先报 `structure_not_open`，打开后窗口显示它；用户的编辑立刻读到；`project_open` 加进边栏而不切换显示、记进最近项目，允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不会让应用崩溃（`apps/workbench/src/ui_tests.rs`）。`apps/workbench/tests/mcp.rs` 在测试里启动监听端，用 rmcp 的客户端驱动 `materials-workbench mcp`：转接到监听端（相对路径从它的工作目录算）、读资源，监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用。另在真实的应用里手动走过一遍（打开设置的临时配置目录，按行发 JSON-RPC）。
-- **还没做**：Windows 的命名管道在 M13 改为通道测试在 Windows 上也运行（CI，开发指南 2.1 节），还没在 Windows 实机上和真实的客户端一起用过；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用。
+- **还没做**：Windows 的命名管道在 M13 改为通道测试在 Windows 上也运行（CI，开发指南 2.1 节），还没在 Windows 实机上和真实的客户端一起用过；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用（M18 的手动检查步骤见开发指南第 2 节）。
 
 ### 5.2 暴露的内容
 
@@ -196,7 +197,7 @@ Capability
 
 **M11 暴露的工具**（`mw-mcp`）：
 
-- 无界面时共 14 个，连接应用时没有 `file_open`，是 13 个（M12；M9 加了 `structure_detect_symmetry`）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_detect_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。M18 起注册表里当前模式下可用的能力全部是工具（5.3 节）：无界面 33 个，连接应用时没有 `file_open`、有视图工具。
+- 无界面时共 14 个，连接应用时没有 `file_open`，是 13 个（M12；M9 加了 `structure_detect_symmetry`）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_detect_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。M18 起注册表里当前模式下可用的能力全部是工具（5.3 节）：无界面 33 个；连接应用时没有 `file_open`、有四个视图工具，是 36 个。
 - **工具名**把注册表名称里的 `.` 换成 `_`（`structure.summary` → `structure_summary`）。MCP 允许点号，但不少客户端把工具名原样交给模型 API，而两家都不允许点号（6.2.6 节）。测试确认换名后互不重复。说明、Schema 描述、摘要和错误消息里提到的注册表名称（如"structure.list gives the ids"）一并换成工具名。
 - **注解**：`readOnlyHint: true`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`（M18 起按副作用等级给出，5.3 节的表）。`outputSchema` 就是注册表的输出 Schema，输入、输出都在 6.2.6 节的严格子集内（集成测试再查一遍）。
 - **结果**：第一块文本是英文摘要，第二块是输出的 JSON 文本，`structuredContent` 是同一份 JSON（规范要求带结构化内容的工具同时给出序列化的 JSON 文本）。失败时返回 `isError: true` 的工具结果，文本是 `{"code", "message", "guidance"}`，模型可以据此修正调用；只有调用不存在的工具才是协议错误。处理函数 panic 时返回 `internal_error`，不让请求悬空。
@@ -237,7 +238,7 @@ Capability
 
 ### 5.3 完整 MCP（v0.3 M18）
 
-> 状态：设计 · 2026-10-24。按下表分六个阶段实现，每个阶段单独提交；权限设置的默认值已由用户决定（7.2 节）。
+> 状态：阶段 1–5 已实现（2026-10-24），每个阶段单独提交；权限设置的默认值已由用户决定（7.2 节）。阶段 6 的文档已更新，Inspector、Claude Code 和 Claude Desktop 的手动检查要你配合（开发指南第 2 节）。
 
 | 阶段 | 内容 | 主要涉及 |
 |---|---|---|
@@ -327,6 +328,14 @@ Capability
 - `view.snapshot`：用当前相机和显示模型离屏渲染一帧（宽、高 64–2048 像素，0 表示视口当前的大小），结果里是 PNG 图像（MCP 的 `image` 内容块），结构化输出只有宽高。`CallResult` 为此新增可选的图像。渲染用视口自己的渲染线程，不另建 GPU 设备。
 
 视图工具都要先 `structure_open`：结构在窗口里显示时它们才有意义。
+
+**阶段 5 的实现（视图工具，2026-10-24，`mw-automation/src/view.rs`、`mw-viewport`、`mw-structure`、外壳）**：
+
+- 四个能力的副作用等级是 `Effect::View`、可用性 `Availability::Gui`，所以无界面的服务器不列出它们，连接应用时是工具；注解是 `readOnlyHint: false`、`destructiveHint: false`、`idempotentHint: true`。它们不需要权限（7.2 节），照样留审计记录（`effect` 为 `view`）。
+- 处理函数先读文档、检查参数（位点和原子存在，截图的尺寸），再交给宿主：`Host::change_view(id, ViewChange)`（`Select(Vec<Target>)`、`DisplayModel`、`ResetCamera`）和 `Host::snapshot(id, width, height)`。`AppHost` 先在窗口里显示这个结构（与点击边栏相同，所以用户看到 AI 在看哪个结构），再调用工作区：`StructureWorkspace::select`（与点选相同的选区，属性面板随之显示最后一个位点）、`set_display_model`（视图状态，随 `view.json` 保存，不算未保存的更改）、`reset_camera`（与"重置视角"相同）、`snapshot`。
+- 截图：`mw_viewport::Viewport::snapshot` 用视口自己的渲染器、当前的相机、选区圆圈和主题的背景色离屏渲染一帧，在主线程上等 GPU 完成（一帧的时间），编码成 PNG（`image` 的 `png` 特性），之后视口重画自己的一帧（排队中的帧被这一帧顶替，否则屏幕停在旧画面上）。线宽和圆圈按图像高度与视口高度之比缩放，看起来与屏幕上相同。宽、高都为 0 时用视口的物理像素大小，按比例缩到每边不超过 2048；视口还没有布局过时用 1024 × 768。
+- `CallResult` 新增 `image: Option<Image>`（PNG 字节和宽高），`Output::with_image` 交给它；服务器把它作为 MCP 的 `image` 内容块（base64，`image/png`）放在摘要和 JSON 之后。命令行 `mw capabilities` 和 Python 的 `capabilities()` 把这一等级写作 `view`。
+- 测试：`mw-automation/tests/view.rs`（假的有窗口宿主：四个工具交给宿主的改变、没有权限的客户端也能用、文档的修订号不变、每次调用都有审计记录；不存在的位点和原子、错误的显示模型、超出范围的尺寸都被拒绝而宿主什么都没收到；没有窗口时 `unavailable`），`mw-mcp/src/server.rs`（视图工具只在有窗口时列出、注解；图像内容块），外壳的界面集成测试 `mcp_clients_change_the_view`（没有任何权限的客户端选中位点和原子后窗口切到这个结构、选区相同；换成空间填充；转过的相机回到默认角度；320 × 240 和视口大小的 PNG；项目没有未保存的更改）。截图另在本机上看过：空间填充的金红石，选中的 O1 和 Ti 带圆圈。
 
 **测试**（阶段 2–5 各自带上）：
 

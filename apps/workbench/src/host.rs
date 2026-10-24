@@ -14,9 +14,10 @@ use std::sync::Arc;
 
 use gpui_kit::*;
 use mw_automation::{
-    Answer, CallError, Client, Confirmation, EntryInfo, Host, OpenedFile, Opening, Permissions,
-    ProjectInfo, Projects, RecentProject, RecentProjects, StructureEntryId, StructureInfo,
-    duplicate_project, parse_import, read_error, unknown_structure,
+    Answer, CallError, Client, Confirmation, DisplayModel, EntryInfo, Host, Image,
+    MAX_SNAPSHOT_SIZE, MIN_SNAPSHOT_SIZE, OpenedFile, Opening, Permissions, ProjectInfo, Projects,
+    RecentProject, RecentProjects, StructureEntryId, StructureInfo, ViewChange, duplicate_project,
+    parse_import, read_error, unknown_structure,
 };
 use mw_crystal::{Agent, Command, CrystalDocument, Outcome, Structure};
 use mw_crystal_io::ImportedBlock;
@@ -29,6 +30,20 @@ use crate::config::AppPaths;
 use crate::projects::same_dir;
 use crate::settings::AiSetting;
 use crate::workbench::Workbench;
+
+/// The size of a snapshot the client left to the viewport: the viewport's
+/// own, within the sizes a snapshot may have.
+fn snapshot_size(viewport: Option<(u32, u32)>) -> (u32, u32) {
+    let Some((width, height)) = viewport.filter(|&(w, h)| w > 0 && h > 0) else {
+        // Not laid out yet.
+        return (1024, 768);
+    };
+    let scale = (f64::from(MAX_SNAPSHOT_SIZE) / f64::from(width.max(height))).min(1.0);
+    let side = |v: u32| {
+        ((f64::from(v) * scale).round() as u32).clamp(MIN_SNAPSHOT_SIZE, MAX_SNAPSHOT_SIZE)
+    };
+    (side(width), side(height))
+}
 
 /// The workbench during one call, with what the calling client may open.
 pub(crate) struct AppHost<'a, 'c> {
@@ -80,6 +95,16 @@ impl<'a, 'c> AppHost<'a, 'c> {
             .iter()
             .filter_map(|p| p.path()?.canonicalize().ok())
             .collect()
+    }
+
+    /// Makes the open structure the one the window shows.
+    fn show(&mut self, id: StructureEntryId) -> Result<(), CallError> {
+        if !self.is_open(id) {
+            return Err(unknown_structure(id));
+        }
+        self.workbench
+            .open_structure_now(id, self.window, self.cx)
+            .map_err(read_error)
     }
 
     /// Runs `change` on the open structure's workspace.
@@ -187,6 +212,51 @@ impl Host for AppHost<'_, '_> {
     fn ask(&mut self, client: &Client, question: &Confirmation, answer: Answer) -> bool {
         crate::mcp::ask(client, question, answer, self.window, self.cx);
         true
+    }
+
+    /// Shows the structure, then changes what the window shows of it, as
+    /// the user's clicks and toolbar would.
+    fn change_view(&mut self, id: StructureEntryId, change: ViewChange) -> Result<(), CallError> {
+        self.show(id)?;
+        self.on_workspace(id, |workspace, window, cx| match change {
+            ViewChange::Select(targets) => workspace.select(&targets, window, cx),
+            ViewChange::DisplayModel(model) => {
+                let model = match model {
+                    DisplayModel::BallAndStick => mw_structure::DisplayModel::BallAndStick,
+                    DisplayModel::SpaceFilling => mw_structure::DisplayModel::SpaceFilling,
+                    DisplayModel::Polyhedra => mw_structure::DisplayModel::Polyhedra,
+                };
+                workspace.set_display_model(model, window, cx);
+            }
+            ViewChange::ResetCamera => workspace.reset_camera(cx),
+            // Changes of a later version of the registry.
+            _ => {}
+        })
+    }
+
+    /// Shows the structure and renders it with its viewport.
+    fn snapshot(
+        &mut self,
+        id: StructureEntryId,
+        width: u32,
+        height: u32,
+    ) -> Result<Image, CallError> {
+        self.show(id)?;
+        let snapshot = self.on_workspace(id, |workspace, _, cx| {
+            let (width, height) = if width == 0 && height == 0 {
+                snapshot_size(workspace.viewport_size(cx))
+            } else {
+                (width, height)
+            };
+            workspace.snapshot(width, height, cx)
+        })?;
+        let snapshot = snapshot.map_err(|reason| {
+            CallError::new(
+                "render_failed",
+                format!("the viewport could not draw the structure: {reason}"),
+            )
+        })?;
+        Ok(Image::new(snapshot.png, snapshot.width, snapshot.height))
     }
 }
 

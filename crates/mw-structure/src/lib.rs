@@ -52,4 +52,5 @@ pub use actions::{
     ToggleMoveAtoms, TogglePanel, TransformCell, Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
+pub use scene::DisplayModel;
 pub use workspace::{StructureWorkspace, StructureWorkspaceEvent, Supercell, supercell_name};

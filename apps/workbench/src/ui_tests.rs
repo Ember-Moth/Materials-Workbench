@@ -866,3 +866,125 @@ fn mcp_clients_edit_in_the_window(cx: &mut TestAppContext) {
 
 /// The rutile CIF of the sample project.
 const RUTILE_CIF: &str = include_str!("../../../crates/mw-crystal-io/tests/fixtures/rutile.cif");
+
+/// Milestone M18, the view tools: a client selects atoms, switches the
+/// display model, resets the camera and gets a picture of the structure,
+/// which the window shows; no data changes, and no permission is needed.
+#[gpui_kit::test]
+fn mcp_clients_change_the_view(cx: &mut TestAppContext) {
+    use mw_automation::Client;
+    use mw_crystal::{AtomRef, SiteId, Target};
+    use mw_project_file::{Camera, DisplayModel, EntryView};
+    use serde_json::json;
+
+    let temp = tempfile::tempdir().unwrap();
+    let projects = install_samples(temp.path());
+    let (workbench, mut cx) = start_with(cx, temp.path(), &projects[..1]);
+    let (server, _calls) = serve(&workbench, &temp.path().join("projects"), &mut cx);
+    // A client the user allowed nothing still changes the view.
+    let mut ai = cx.update(|_, cx| crate::settings::AiSetting::get(cx));
+    (ai.modify_data, ai.write_files) = (false, false);
+    cx.update(|_, cx| crate::settings::set_ai(ai, cx));
+    let client = Client::new("viewer", None);
+    let call = |tool: &str, arguments, cx: &mut VisualTestContext| {
+        call_as(&server, &client, tool, arguments, cx)
+    };
+
+    let rutile = workbench.read_with(&cx, |workbench, _| workbench.current.unwrap());
+    let structures = call("structure_list", json!({}), &mut cx);
+    let supercell = structures["structures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "金红石 2×2×2 超胞")
+        .map(|s| s["structure"].clone())
+        .unwrap();
+    call("structure_open", json!({ "structure": supercell }), &mut cx);
+    let shown_supercell = workspace(&workbench, &mut cx);
+
+    // The view tools show the structure they are about.
+    let selected = call(
+        "view_select",
+        json!({
+            "structure": rutile.0,
+            "sites": [2],
+            "atoms": [{ "site": 1, "member": 1, "cell": [0, 0, 0] }],
+        }),
+        &mut cx,
+    );
+    assert_eq!(selected, json!({ "sites": [2, 1], "atoms": 1 }));
+    assert_eq!(workbench.read_with(&cx, |w, _| w.current), Some(rutile));
+    let shown = workspace(&workbench, &mut cx);
+    assert_ne!(shown, shown_supercell);
+    let ti = AtomRef::new(SiteId(1), 1, [0, 0, 0]);
+    assert_eq!(
+        shown.read_with(&cx, |w, _| w.selected()),
+        [Target::Site(SiteId(2)), Target::Atom(ti)]
+    );
+
+    call(
+        "view_set_display_model",
+        json!({ "structure": rutile.0, "model": "space_filling" }),
+        &mut cx,
+    );
+    let view = |cx: &mut VisualTestContext| shown.read_with(cx, |w, cx| w.view(cx));
+    assert_eq!(
+        view(&mut cx).display_model,
+        Some(DisplayModel::SpaceFilling)
+    );
+
+    let framed = view(&mut cx).camera.unwrap();
+    let turned = EntryView::new(
+        Some(Camera::new(
+            1.0,
+            0.4,
+            framed.half_height * 2.0,
+            framed.target,
+        )),
+        None,
+        None,
+        None,
+    );
+    shown.update(&mut cx, |w, cx| w.set_view(&turned, cx));
+    assert_ne!(view(&mut cx).camera, Some(framed));
+    call("view_reset", json!({ "structure": rutile.0 }), &mut cx);
+    // The default angle, and the zoom that takes in the space-filling atoms.
+    let reset = view(&mut cx).camera.unwrap();
+    assert_eq!((reset.yaw, reset.pitch), (framed.yaw, framed.pitch));
+    assert!(reset.half_height < framed.half_height * 2.0);
+
+    // A picture of what the window shows, at the size asked for.
+    let picture = answered(&start_call(
+        &server,
+        &client,
+        "view_snapshot",
+        json!({ "structure": rutile.0, "width": 320, "height": 240 }),
+        &mut cx,
+    ));
+    assert_ne!(picture.is_error, Some(true), "{picture:#?}");
+    assert_eq!(
+        picture.structured_content,
+        Some(json!({ "width": 320, "height": 240 }))
+    );
+    let image = serde_json::to_value(picture.content.last().unwrap()).unwrap();
+    assert_eq!(image["type"], "image");
+    assert_eq!(image["mimeType"], "image/png");
+    // The PNG signature, in base64.
+    assert!(image["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+    // Or at the viewport's size.
+    let own = call(
+        "view_snapshot",
+        json!({ "structure": rutile.0, "width": 0, "height": 0 }),
+        &mut cx,
+    );
+    let size = shown.read_with(&cx, |w, cx| w.viewport_size(cx)).unwrap();
+    assert_eq!(
+        (own["width"].as_u64(), own["height"].as_u64()),
+        (Some(size.0.into()), Some(size.1.into()))
+    );
+
+    // Nothing to save: the view is not data.
+    assert!(!unsaved(&workbench, &mut cx));
+    let crystal_revision = shown.read_with(&cx, |w, _| w.crystal().revision());
+    assert_eq!(crystal_revision, 0);
+}

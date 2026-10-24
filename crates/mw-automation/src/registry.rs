@@ -2,7 +2,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mw_crystal::{Agent, Command, CrystalDocument, EditError, Guidance, Outcome};
+use mw_crystal::{Agent, Command, CrystalDocument, EditError, Guidance, Outcome, Target};
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{AuditRecord, EntryId, ProjectId};
 use serde::de::DeserializeOwned;
@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::policy::{self, Client, Confirmation, Context, Permissions};
 use crate::project::Projects;
 use crate::schema::Schema;
+use crate::view::DisplayModel;
 
 /// A structure in the open project. The project catalog assigns these, and
 /// `mw_project` re-exports this type; it lives here so that capabilities
@@ -162,10 +163,78 @@ pub trait Host {
         let _ = (client, question, answer);
         false
     }
+    /// Changes what the window shows of the structure, and shows it there
+    /// (design §5.3). Only the application has a window.
+    fn change_view(&mut self, id: StructureEntryId, change: ViewChange) -> Result<(), CallError> {
+        let _ = (id, change);
+        Err(no_window())
+    }
+    /// Renders the structure as the window shows it, with its camera,
+    /// display model and selection, and shows it there: `width` × `height`
+    /// pixels, or the viewport's own size, at most 2048 pixels a side, when
+    /// both are 0.
+    fn snapshot(
+        &mut self,
+        id: StructureEntryId,
+        width: u32,
+        height: u32,
+    ) -> Result<Image, CallError> {
+        let _ = (id, width, height);
+        Err(no_window())
+    }
 }
 
 /// Takes the user's answer to [`Host::ask`]: `true` to go ahead.
 pub type Answer = Box<dyn FnOnce(bool) + Send>;
+
+fn no_window() -> CallError {
+    CallError::new(
+        "unavailable",
+        "the view exists only in the application's window",
+    )
+}
+
+/// A change to what the window shows of a structure (design §5.3); none
+/// changes data.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ViewChange {
+    /// Selects these sites and atoms, as clicking them would; none clears
+    /// the selection.
+    Select(Vec<Target>),
+    DisplayModel(DisplayModel),
+    /// The camera's default angle and zoom.
+    ResetCamera,
+}
+
+/// A picture a call returns besides its output, such as the viewport's
+/// (design §5.3).
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Image {
+    /// PNG.
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Image {
+    pub fn new(png: Vec<u8>, width: u32, height: u32) -> Self {
+        Self { png, width, height }
+    }
+}
+
+impl fmt::Debug for Image {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Image({} × {}, {} bytes of PNG)",
+            self.width,
+            self.height,
+            self.png.len()
+        )
+    }
+}
 
 /// Documents held in memory, without a window: for tests, and later for the
 /// command line. Records of clients' calls are kept ([`Self::audit_log`]).
@@ -352,6 +421,17 @@ impl Host for Calling<'_> {
     fn ask(&mut self, client: &Client, question: &Confirmation, answer: Answer) -> bool {
         self.host.ask(client, question, answer)
     }
+    fn change_view(&mut self, id: StructureEntryId, change: ViewChange) -> Result<(), CallError> {
+        self.host.change_view(id, change)
+    }
+    fn snapshot(
+        &mut self,
+        id: StructureEntryId,
+        width: u32,
+        height: u32,
+    ) -> Result<Image, CallError> {
+        self.host.snapshot(id, width, height)
+    }
 }
 
 /// A successful call: structured output that matches the capability's
@@ -362,6 +442,8 @@ impl Host for Calling<'_> {
 pub struct CallResult {
     pub output: Value,
     pub summary: String,
+    /// A picture, for the view's snapshot.
+    pub image: Option<Image>,
 }
 
 impl CallResult {
@@ -371,6 +453,7 @@ impl CallResult {
         Self {
             output,
             summary: summary.into(),
+            image: None,
         }
     }
 }
@@ -429,6 +512,7 @@ impl std::error::Error for CallError {}
 pub struct Output<O> {
     pub value: O,
     pub summary: String,
+    pub image: Option<Image>,
 }
 
 impl<O> Output<O> {
@@ -436,7 +520,13 @@ impl<O> Output<O> {
         Self {
             value,
             summary: summary.into(),
+            image: None,
         }
+    }
+
+    pub fn with_image(mut self, image: Image) -> Self {
+        self.image = Some(image);
+        self
     }
 }
 
@@ -583,6 +673,7 @@ impl Registry {
         crate::structure::register(&mut registry);
         crate::files::register(&mut registry);
         crate::history::register(&mut registry);
+        crate::view::register(&mut registry);
         registry
     }
 
@@ -633,6 +724,7 @@ impl Registry {
             Ok(CallResult {
                 output: serde_json::to_value(output.value).expect("outputs serialize"),
                 summary: output.summary,
+                image: output.image,
             })
         };
         self.capabilities.push(Capability {

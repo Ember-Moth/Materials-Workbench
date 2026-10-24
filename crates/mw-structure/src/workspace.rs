@@ -16,14 +16,14 @@ use gpui_kit::component::notification::Notification;
 use mw_crystal::{
     AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
     CrystalDocument, DisplayRange, Edit, EditMode, PolyhedronCenters, SiteId, SphereCenter,
-    Structure, element,
+    Structure, Target, element,
 };
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
     Camera, DisplayModel as SavedDisplayModel, DisplayRange as SavedDisplayRange, EntryView,
     PanelTab as SavedPanelTab, SphereCenter as SavedSphereCenter, StructureFile,
 };
-use mw_viewport::{CameraPose, Viewport};
+use mw_viewport::{CameraPose, Snapshot, Viewport};
 
 use crate::actions::*;
 use crate::cell_dialog::{self, CellDialog};
@@ -298,6 +298,42 @@ impl StructureWorkspace {
         self.document.source.as_deref()
     }
 
+    /// Selects sites and atoms as clicking them would; none clears the
+    /// selection. For MCP clients' `view.select`
+    /// (`docs/design/ai-integration.md` §5.3).
+    pub fn select(&mut self, targets: &[Target], window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selection(Selection::of(targets), window, cx);
+    }
+
+    /// What is selected: whole sites and single atoms, in the order chosen.
+    pub fn selected(&self) -> Vec<Target> {
+        self.selection.targets()
+    }
+
+    /// Turns the camera back to its default angle and zoom, as "Reset
+    /// view" does.
+    pub fn reset_camera(&mut self, cx: &mut Context<Self>) {
+        self.viewport
+            .update(cx, |viewport, cx| viewport.reset_camera(cx));
+    }
+
+    /// The viewport's size in physical pixels, once it was laid out.
+    pub fn viewport_size(&self, cx: &App) -> Option<(u32, u32)> {
+        self.viewport.read(cx).physical_size()
+    }
+
+    /// A PNG of the structure as the viewport shows it, `width` × `height`
+    /// pixels; blocks for the time of a frame (`mw_viewport::Viewport::snapshot`).
+    pub fn snapshot(
+        &mut self,
+        width: u32,
+        height: u32,
+        cx: &mut Context<Self>,
+    ) -> Result<Snapshot, SharedString> {
+        self.viewport
+            .update(cx, |viewport, cx| viewport.snapshot(width, height, cx))
+    }
+
     // MARK: Saving
 
     /// Whether the structure has edits since it was opened or saved.
@@ -440,7 +476,14 @@ impl StructureWorkspace {
         cx.notify();
     }
 
-    fn set_display_model(&mut self, model: DisplayModel, _: &mut Window, cx: &mut Context<Self>) {
+    /// How the viewport draws atoms. View state: saved with the project,
+    /// no undo step.
+    pub fn set_display_model(
+        &mut self,
+        model: DisplayModel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.display_model != model {
             self.display_model = model;
             // The centers' popover belongs to the polyhedra.

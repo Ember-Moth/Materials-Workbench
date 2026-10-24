@@ -9,6 +9,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use mw_automation::{
     Availability, CallError, CallResult, Capability, Client, Confirmation, Context, Effect, Host,
     Registry, resource_uri,
@@ -163,14 +164,19 @@ impl Wire {
     }
 
     /// A call's result as MCP has it: the summary, then the output as JSON
-    /// text and as structured content; an error as JSON text, marked as one,
-    /// which the model can correct its call from.
+    /// text and as structured content, then the picture if there is one; an
+    /// error as JSON text, marked as one, which the model can correct its
+    /// call from.
     fn tool_result(&self, result: Result<CallResult, CallError>) -> CallToolResult {
         let mut out = match result {
             Ok(result) => {
                 let mut out = CallToolResult::structured(result.output);
                 out.content
                     .insert(0, ContentBlock::text(self.text(&result.summary)));
+                if let Some(image) = result.image {
+                    let data = base64::engine::general_purpose::STANDARD.encode(&image.png);
+                    out.content.push(ContentBlock::image(data, "image/png"));
+                }
                 out
             }
             Err(mut error) => {
@@ -977,11 +983,27 @@ mod tests {
         ] {
             assert!(headless.contains(&tool.to_string()), "{tool}");
         }
-        assert_eq!(headless.len(), Registry::standard().capabilities().len());
+        // The view is the window's.
+        let view = [
+            "view_select",
+            "view_set_display_model",
+            "view_reset",
+            "view_snapshot",
+        ];
+        for tool in view {
+            assert!(!headless.contains(&tool.to_string()), "{tool}");
+        }
+        assert_eq!(
+            headless.len(),
+            Registry::standard().capabilities().len() - view.len()
+        );
         // With a window, opening a file means importing it into a project.
         let windowed = names(Server::new(Windowed(Documents::new())).tools());
         assert!(!windowed.contains(&"file_open".to_string()));
-        assert_eq!(windowed.len(), headless.len() - 1);
+        for tool in view {
+            assert!(windowed.contains(&tool.to_string()), "{tool}");
+        }
+        assert_eq!(windowed.len(), headless.len() - 1 + view.len());
         let (dispatcher, _calls) = crate::dispatcher();
         let dispatching = names(Server::dispatching(Access::default(), dispatcher).tools());
         assert_eq!(dispatching, windowed);
@@ -1010,6 +1032,39 @@ mod tests {
         );
         assert_eq!(hints("history_undo"), (false, true, false, false));
         assert_eq!(hints("structure_export_file"), (false, true, true, false));
+        let tools = Server::new(Windowed(Documents::new())).tools();
+        let view = tools.iter().find(|t| t.name == "view_select").unwrap();
+        let a = view.annotations.as_ref().unwrap();
+        assert_eq!(
+            (
+                a.read_only_hint,
+                a.destructive_hint,
+                a.idempotent_hint,
+                a.open_world_hint
+            ),
+            (Some(false), Some(false), Some(true), Some(false))
+        );
+    }
+
+    #[test]
+    fn pictures_follow_the_output() {
+        let wire = Wire::new(&Registry::standard());
+        let mut result = CallResult::new(json!({ "width": 2, "height": 1 }), "A picture.");
+        result.image = Some(mw_automation::Image::new(
+            vec![0x89, b'P', b'N', b'G'],
+            2,
+            1,
+        ));
+        let out = wire.tool_result(Ok(result));
+        assert_eq!(out.content.len(), 3);
+        let image = serde_json::to_value(&out.content[2]).unwrap();
+        assert_eq!(image["type"], "image");
+        assert_eq!(image["mimeType"], "image/png");
+        assert_eq!(image["data"], "iVBORw==");
+        assert_eq!(
+            out.structured_content,
+            Some(json!({ "width": 2, "height": 1 }))
+        );
     }
 
     #[tokio::test]
