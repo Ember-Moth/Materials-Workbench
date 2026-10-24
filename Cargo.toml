@@ -60,6 +60,9 @@ rmcp = { version = "3.7", default-features = false }
 # `materials-workbench mcp` and the running application (ai-integration
 # design §5.1).
 libc = "0.2"
+# On Windows, the user a named pipe's other end runs as (same channel). The
+# version tokio and mio use already.
+windows-sys = "0.61"
 
 # The command line `mw` (mw-cli) and the Python module (mw-python), see
 # docs/design/scripting.md. PyO3 is optional in mw-python, so that builds

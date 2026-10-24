@@ -227,13 +227,105 @@ mod platform {
 }
 
 #[cfg(windows)]
+pub(crate) use platform::runs_as_current_user;
+
+#[cfg(windows)]
 mod platform {
+    use std::io;
     use std::path::PathBuf;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        EqualSid, GetTokenInformation, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     /// The local application data directory, private to the user by its
     /// inherited access rights.
     pub fn runtime_dir() -> Option<PathBuf> {
         dirs::data_local_dir()
+    }
+
+    /// Whether the process runs as the current user: the users of the two
+    /// processes' tokens are the same SID. An error when the process cannot
+    /// be asked, as one of another user's usually cannot.
+    pub fn runs_as_current_user(process_id: u32) -> io::Result<bool> {
+        // SAFETY: OpenProcess takes any id, and returns null when it fails.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if process.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let process = Handle(process);
+        let theirs = ProcessUser::of(process.0)?;
+        // SAFETY: GetCurrentProcess has no preconditions; the pseudo handle
+        // it returns needs no closing.
+        let ours = ProcessUser::of(unsafe { GetCurrentProcess() })?;
+        // SAFETY: both SIDs are valid, in buffers that live past the call.
+        Ok(unsafe { EqualSid(theirs.sid(), ours.sid()) } != 0)
+    }
+
+    /// A handle closed when dropped.
+    struct Handle(HANDLE);
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            // SAFETY: the handle is open, and closed here alone.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    /// The user of a process's token as `GetTokenInformation` gives it: a
+    /// `TOKEN_USER` whose SID lies further on in the same buffer.
+    struct ProcessUser {
+        /// `u64`s, aligned for the pointer in `TOKEN_USER`.
+        buffer: Vec<u64>,
+    }
+
+    impl ProcessUser {
+        fn of(process: HANDLE) -> io::Result<Self> {
+            let mut token = std::ptr::null_mut();
+            // SAFETY: `process` is open for querying information, and
+            // `token` is valid for writes.
+            if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let token = Handle(token);
+            // Asked for the size first: this call fails, saying how much
+            // room the information takes.
+            let mut length = 0;
+            // SAFETY: with no room, nothing is written through the null
+            // buffer; `length` is valid for writes.
+            unsafe {
+                GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut length)
+            };
+            if length == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut buffer = vec![0u64; (length as usize).div_ceil(size_of::<u64>())];
+            // SAFETY: the buffer is valid for writes of `length` bytes and
+            // aligned for `TOKEN_USER`; `length` is valid for writes.
+            let filled = unsafe {
+                GetTokenInformation(
+                    token.0,
+                    TokenUser,
+                    buffer.as_mut_ptr().cast(),
+                    length,
+                    &mut length,
+                )
+            };
+            if filled == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { buffer })
+        }
+
+        fn sid(&self) -> PSID {
+            // SAFETY: GetTokenInformation filled the buffer with a
+            // `TOKEN_USER`, which starts it.
+            unsafe { (*self.buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+        }
     }
 }
 
@@ -303,6 +395,15 @@ mod tests {
         assert_eq!(pipe.len(), r"\\.\pipe\materials-workbench-".len() + 16);
         assert_eq!(pipe, Endpoint::in_dir(temp.path().join("a")).pipe());
         assert_ne!(pipe, Endpoint::in_dir(temp.path().join("b")).pipe());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn processes_are_told_by_their_user() {
+        assert!(runs_as_current_user(std::process::id()).unwrap());
+        // Process 4 is the system's own, which runs as SYSTEM; an account
+        // without administrator rights cannot ask it at all.
+        assert!(!runs_as_current_user(4).unwrap_or(false));
     }
 
     #[test]
