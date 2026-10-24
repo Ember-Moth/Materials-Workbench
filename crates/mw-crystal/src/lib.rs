@@ -73,7 +73,7 @@ pub use display::{
 pub use document::{Agent, Annotation, Checkpoint, Command, CrystalDocument, Outcome};
 pub use edit::{
     Applied, CellValues, Edit, EditError, EditInfo, EditWarning, Guidance, OCCUPANCY_TOLERANCE,
-    Target, expand_and_remove, target_sites,
+    SiteDisorder, Target, expand_and_remove, target_sites,
 };
 pub use element::UNKNOWN_ELEMENT;
 pub use expand::{Contact, Orbit, close_contacts, orbits};

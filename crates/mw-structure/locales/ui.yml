@@ -816,6 +816,9 @@ edit:
     rename_label:
       en: Rename label
       zh-CN: 重命名标签
+    set_disorder:
+      en: Change disorder group
+      zh-CN: 修改无序组
     set_position:
       en: Move atom
       zh-CN: 移动原子

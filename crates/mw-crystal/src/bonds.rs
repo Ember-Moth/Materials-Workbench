@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::{AtomRef, DisplayAtom, Orbit, Site, SiteId, Structure, element};
+use crate::{AtomRef, Disorder, DisplayAtom, Orbit, Site, SiteId, Structure, element};
 
 /// Single-bond covalent radii in Å by atomic number − 1, H to Cm (Cordero et
 /// al., Dalton Trans. 2008, 2832; low-spin values for Mn, Fe and Co, sp³ for
@@ -125,7 +125,12 @@ fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
 /// different groups are alternatives, not neighbors. Group 0 is the ordered
 /// part, as in SHELX.
 pub(crate) fn alternatives(a: &Site, b: &Site) -> bool {
-    match (&a.disorder, &b.disorder) {
+    alternative_disorders(a.disorder.as_ref(), b.disorder.as_ref())
+}
+
+/// [`alternatives`] for sites with this disorder.
+pub(crate) fn alternative_disorders(a: Option<&Disorder>, b: Option<&Disorder>) -> bool {
+    match (a, b) {
         (Some(a), Some(b)) => {
             a.assembly == b.assembly && a.group != b.group && a.group != "0" && b.group != "0"
         }

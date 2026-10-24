@@ -5,17 +5,18 @@
 //! single atoms acts on, and refuses requests that would break the symmetry
 //! (design §7.1).
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::bonds::{alternatives, covalent_radius};
+use crate::bonds::{alternative_disorders, alternatives, covalent_radius};
 use crate::constraints::{cell_constraints, symmetrized_metric};
 use crate::placement::{self, Placement};
 use crate::{
     AtomFate, AtomRef, Axis, CellParam, CellParams, CellTransform, Constraint,
-    CoordinateConstraint, Derived, DetectSymmetry, EditMode, IdMap, Measured, Occupant,
+    CoordinateConstraint, Derived, DetectSymmetry, Disorder, EditMode, IdMap, Measured, Occupant,
     PositionMap, Site, SiteFate, SiteId, Species, Structure, SymmetrizeError, TransformError,
     element, expand, special_position, transform,
 };
@@ -72,6 +73,22 @@ impl CellValues {
     }
 }
 
+/// The disorder a site is to have, for [`Edit::SetDisorder`]; `None`
+/// takes it out of every disorder assembly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SiteDisorder {
+    pub site: SiteId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disorder: Option<Disorder>,
+}
+
+impl SiteDisorder {
+    pub fn new(site: SiteId, disorder: Option<Disorder>) -> Self {
+        Self { site, disorder }
+    }
+}
+
 /// One editing command (design §7.2). Occupants are named by their labels,
 /// which are unique within a structure. The `Restore*` commands are the
 /// exact inverses of others; they put back what an edit took away,
@@ -120,6 +137,12 @@ pub enum Edit {
         occupant: String,
         label: String,
     },
+    /// Puts sites in a group of a disorder assembly, or takes them out of
+    /// any, each with all its equivalent atoms (design §7.2). Sites of
+    /// different groups of one assembly are alternatives: never present
+    /// together, not bonded, their occupancies checked together (design
+    /// §7.7). The inverse is the same command with the old values.
+    SetDisorder { sites: Vec<SiteDisorder> },
     /// Moves a site to new fractional coordinates. Under symmetry the site
     /// takes the site symmetry of its new position: within the position
     /// tolerance of a special position, it snaps onto it (design §7.4).
@@ -445,6 +468,14 @@ pub enum EditError {
         label: String,
     },
     DuplicateSite(SiteId),
+    /// An edit names the same site twice.
+    RepeatedSite(SiteId),
+    /// A disorder assembly or group code that CIF cannot carry: empty,
+    /// containing white space, starting with a character CIF reserves, or
+    /// `.` or `?`, which CIF reads as no value (design §7.2).
+    InvalidDisorderCode {
+        code: String,
+    },
     InvalidIndex {
         index: usize,
     },
@@ -493,6 +524,8 @@ impl EditError {
             Self::InvalidLabel { .. } => "invalid_label",
             Self::DuplicateLabel { .. } => "duplicate_label",
             Self::DuplicateSite(_) => "duplicate_site",
+            Self::RepeatedSite(_) => "repeated_site",
+            Self::InvalidDisorderCode { .. } => "invalid_disorder_code",
             Self::InvalidIndex { .. } => "invalid_index",
             Self::UnknownMeasurement => "unknown_measurement",
             Self::RepeatedAtom(_) => "repeated_atom",
@@ -586,6 +619,12 @@ impl fmt::Display for EditError {
             ),
             Self::DuplicateLabel { label } => write!(f, "the label {label:?} is already in use"),
             Self::DuplicateSite(site) => write!(f, "a site with id {} already exists", site.0),
+            Self::RepeatedSite(site) => write!(f, "site {} is named more than once", site.0),
+            Self::InvalidDisorderCode { code } => write!(
+                f,
+                "{code:?} is not a valid disorder code: it must be non-empty, without white \
+                 space, not . or ?, and not start with _ # $ ' \" [ ] or ;"
+            ),
             Self::InvalidIndex { index } => write!(f, "index {index} is out of range"),
             Self::UnknownMeasurement => f.write_str("no such measurement"),
             Self::RepeatedAtom(atom) => write!(
@@ -714,7 +753,7 @@ impl Edit {
                     .extend(occupancy_warning(site_ref(structure, *site)?));
                 report
                     .warnings
-                    .extend(split_occupancy_warning(structure, *site));
+                    .extend(split_occupancy_warning(structure, &OnceCell::new(), *site));
                 let inverse = Self::SetOccupancy {
                     site: *site,
                     occupant: occupant.clone(),
@@ -745,7 +784,7 @@ impl Edit {
                 report.warnings.extend(occupancy_warning(target));
                 report
                     .warnings
-                    .extend(split_occupancy_warning(structure, *site));
+                    .extend(split_occupancy_warning(structure, &OnceCell::new(), *site));
                 let inverse = Self::RemoveOccupant {
                     site: *site,
                     occupant: label,
@@ -797,6 +836,22 @@ impl Edit {
                     label: occupant.clone(),
                 };
                 (inverse, same)
+            }
+            Self::SetDisorder { sites } => {
+                let mut old: Vec<SiteDisorder> = Vec::with_capacity(sites.len());
+                for change in sites {
+                    if let Some(disorder) = &change.disorder {
+                        check_disorder(disorder)?;
+                    }
+                    if old.iter().any(|o| o.site == change.site) {
+                        return Err(EditError::RepeatedSite(change.site));
+                    }
+                    let target = site_mut(structure, change.site)?;
+                    let disorder = std::mem::replace(&mut target.disorder, change.disorder.clone());
+                    old.push(SiteDisorder::new(change.site, disorder));
+                }
+                report.warnings.extend(disorder_warnings(structure, &old));
+                (Self::SetDisorder { sites: old }, same)
             }
             Self::SetPosition { site, position } => {
                 site_ref(structure, *site)?;
@@ -1370,8 +1425,7 @@ fn check_label(
     label: &str,
     except: Option<(SiteId, usize)>,
 ) -> Result<(), EditError> {
-    let reserved = ['_', '#', '$', '\'', '"', '[', ']', ';'];
-    if label.is_empty() || label.contains(char::is_whitespace) || label.starts_with(reserved) {
+    if !is_cif_code(label) {
         return Err(EditError::InvalidLabel {
             label: label.to_string(),
         });
@@ -1386,6 +1440,25 @@ fn check_label(
         return Err(EditError::DuplicateLabel {
             label: label.to_string(),
         });
+    }
+    Ok(())
+}
+
+/// Whether CIF can carry `text` as a code such as a label: non-empty,
+/// without white space, not starting with a character CIF reserves.
+fn is_cif_code(text: &str) -> bool {
+    let reserved = ['_', '#', '$', '\'', '"', '[', ']', ';'];
+    !text.is_empty() && !text.contains(char::is_whitespace) && !text.starts_with(reserved)
+}
+
+/// Disorder codes follow the rules for labels, and cannot be `.` or `?`:
+/// CIF reads those as no value, so the site would come back ordered
+/// (design §7.2).
+fn check_disorder(disorder: &Disorder) -> Result<(), EditError> {
+    for code in disorder.assembly.iter().chain([&disorder.group]) {
+        if !is_cif_code(code) || code == "." || code == "?" {
+            return Err(EditError::InvalidDisorderCode { code: code.clone() });
+        }
     }
     Ok(())
 }
@@ -1419,8 +1492,13 @@ fn occupancy_warning(site: &Site) -> Option<EditWarning> {
 /// two elements' covalent radii, nearer than a bond would put them, or
 /// than the short-contact distance for elements without a radius. Of each
 /// other group the adjacent site with the largest occupancy counts. A site
-/// that alone holds more than 1 has its own warning.
-fn split_occupancy_warning(structure: &Structure, site: SiteId) -> Option<EditWarning> {
+/// that alone holds more than 1 has its own warning. `orbits` are the
+/// structure's, computed when first needed.
+fn split_occupancy_warning(
+    structure: &Structure,
+    orbits: &OnceCell<Vec<expand::Orbit>>,
+    site: SiteId,
+) -> Option<EditWarning> {
     let own = structure.site(site)?;
     own.disorder.as_ref()?;
     let own_sum = occupancy_sum(own);
@@ -1445,10 +1523,10 @@ fn split_occupancy_warning(structure: &Structure, site: SiteId) -> Option<EditWa
     if reach <= 0.0 {
         return None;
     }
-    let orbits = expand::orbits(structure);
+    let orbits = orbits.get_or_init(|| expand::orbits(structure));
     // For each other group, the adjacent site with the largest occupancy.
     let mut groups: BTreeMap<&str, (f64, SiteId)> = BTreeMap::new();
-    for contact in expand::contacts_with(structure, &orbits, site, reach) {
+    for contact in expand::contacts_with(structure, orbits, site, reach) {
         let Some(other) = candidates.iter().find(|s| s.id == contact.b) else {
             continue;
         };
@@ -1473,6 +1551,81 @@ fn split_occupancy_warning(structure: &Structure, site: SiteId) -> Option<EditWa
         partners,
         sum,
     })
+}
+
+/// What changing the disorder of sites leaves to warn about (design
+/// §7.2); `old` holds the sites changed, with the disorder they had.
+///
+/// The occupancy check of split sites (design §7.7) runs for the changed
+/// sites and for their alternatives: a changed site may not be next to
+/// another alternative of a site that is next to both. A warning of an
+/// alternative counts only when it names a changed site, and a site with
+/// its partners is reported once. Sites that were alternatives and no
+/// longer are, closer than the short-contact distance, are now taken to be
+/// present together.
+fn disorder_warnings(structure: &Structure, old: &[SiteDisorder]) -> Vec<EditWarning> {
+    let changed: BTreeSet<SiteId> = old.iter().map(|o| o.site).collect();
+    let changed_sites: Vec<&Site> = old.iter().filter_map(|o| structure.site(o.site)).collect();
+    let orbits = OnceCell::new();
+    let mut warnings = Vec::new();
+
+    let alternatives_of_changed = structure.sites.iter().filter(|site| {
+        !changed.contains(&site.id) && changed_sites.iter().any(|c| alternatives(c, site))
+    });
+    let checked = changed_sites
+        .iter()
+        .copied()
+        .chain(alternatives_of_changed)
+        .map(|site| site.id);
+    let mut reported = BTreeSet::new();
+    for site in checked {
+        let Some(warning) = split_occupancy_warning(structure, &orbits, site) else {
+            continue;
+        };
+        let EditWarning::SplitOccupancySum { site, partners, .. } = &warning else {
+            continue;
+        };
+        if !changed.contains(site) && !partners.iter().any(|p| changed.contains(p)) {
+            continue;
+        }
+        let mut cluster = partners.clone();
+        cluster.push(*site);
+        cluster.sort();
+        if reported.insert(cluster) {
+            warnings.push(warning);
+        }
+    }
+
+    // Only a site that had a disorder group had alternatives.
+    if old.iter().all(|o| o.disorder.is_none()) {
+        return warnings;
+    }
+    let before = |id: SiteId| match old.iter().find(|o| o.site == id) {
+        Some(o) => o.disorder.as_ref(),
+        None => structure.site(id).and_then(|s| s.disorder.as_ref()),
+    };
+    let orbits = orbits.get_or_init(|| expand::orbits(structure));
+    let short = structure.tolerances.short_contact;
+    let mut pairs = BTreeSet::new();
+    for own in changed_sites {
+        for contact in expand::contacts_with(structure, orbits, own.id, short) {
+            let Some(other) = structure.site(contact.b) else {
+                continue;
+            };
+            let were = alternative_disorders(before(own.id), before(other.id));
+            if !were || alternatives(own, other) {
+                continue;
+            }
+            if pairs.insert((own.id.min(other.id), own.id.max(other.id))) {
+                warnings.push(EditWarning::ShortContact {
+                    site: own.id,
+                    other: other.id,
+                    distance: contact.distance,
+                });
+            }
+        }
+    }
+    warnings
 }
 
 #[cfg(test)]
@@ -1953,6 +2106,285 @@ mod tests {
         assert!(ordered.apply(&structure).unwrap().warnings.is_empty());
     }
 
+    fn disorder(assembly: Option<&str>, group: &str) -> Option<Disorder> {
+        Some(Disorder::new(assembly.map(Into::into), group.into()))
+    }
+
+    fn set_disorder(changes: &[(SiteId, Option<Disorder>)]) -> Edit {
+        Edit::SetDisorder {
+            sites: changes
+                .iter()
+                .map(|(site, disorder)| SiteDisorder::new(*site, disorder.clone()))
+                .collect(),
+        }
+    }
+
+    /// Carbon sites in a 10 Å P1 cell, without disorder: (id, position,
+    /// occupancy), labelled C and the id.
+    fn carbons(sites: &[(u32, [f64; 3], f64)]) -> Structure {
+        let sites = sites
+            .iter()
+            .map(|&(id, position, occupancy)| {
+                let label = format!("C{id}");
+                let occupant =
+                    Occupant::new(&label, Species::element("C"), Measured::exact(occupancy));
+                Site::new(SiteId(id), position, vec![occupant])
+            })
+            .collect();
+        Structure::new(
+            Lattice::new(CellParams::new(10.0, 10.0, 10.0, 90.0, 90.0, 90.0)),
+            Symmetry::p1(),
+            sites,
+        )
+    }
+
+    #[test]
+    fn disorder_applies_to_whole_sites_and_comes_back() {
+        let (rutile, derived) = load(SampleKey::Rutile);
+        let (ti, o) = (site(&rutile, "Ti1"), site(&rutile, "O1"));
+        let edit = set_disorder(&[(o, disorder(Some("A"), "1")), (ti, disorder(None, "2"))]);
+        let applied = round_trip(&rutile, edit);
+        let after = &applied.structure;
+        assert_eq!(after.site(o).unwrap().disorder, disorder(Some("A"), "1"));
+        assert_eq!(after.site(ti).unwrap().disorder, disorder(None, "2"));
+        // The positions, the orbits and the mode stay, and so do references.
+        assert_eq!(after.edit_mode(), EditMode::Symmetric);
+        let orbits = Derived::compute(after);
+        for site in [ti, o] {
+            assert_eq!(orbits.multiplicity(site), derived.multiplicity(site));
+        }
+        assert!(applied.ids.is_identity());
+        assert!(applied.warnings.is_empty() && applied.info.is_empty());
+        // The inverse is the same command with the old values.
+        assert_eq!(applied.inverse, set_disorder(&[(o, None), (ti, None)]));
+
+        let cleared = round_trip(after, set_disorder(&[(o, None)]));
+        assert_eq!(cleared.structure.site(o).unwrap().disorder, None);
+        assert_eq!(
+            cleared.structure.site(ti).unwrap().disorder,
+            disorder(None, "2")
+        );
+    }
+
+    #[test]
+    fn disorder_of_some_equivalent_atoms_needs_p1() {
+        let (rutile, derived) = load(SampleKey::Rutile);
+        let o = site(&rutile, "O1");
+        let count = derived.multiplicity(o).unwrap();
+        let atom = |member: usize| Target::Atom(AtomRef::new(o, member as u16, [0; 3]));
+        let error = target_sites(&rutile, &derived, &[atom(0)]).unwrap_err();
+        assert_eq!(
+            error.guidance(),
+            [Guidance::WholeSite { site: o }, Guidance::ConvertToP1]
+        );
+        let all: Vec<Target> = (0..count).map(atom).collect();
+        assert_eq!(target_sites(&rutile, &derived, &all).unwrap(), [o]);
+
+        // In P1 every atom is a site of its own and takes any group.
+        let p1 = Edit::ExpandToP1.apply(&rutile).unwrap();
+        let sites = p1.ids.sites(o);
+        assert_eq!(sites.len(), count);
+        let edit = set_disorder(&[
+            (sites[0], disorder(Some("A"), "1")),
+            (sites[1], disorder(Some("A"), "2")),
+        ]);
+        let applied = round_trip(&p1.structure, edit);
+        assert_eq!(applied.structure.edit_mode(), EditMode::P1);
+        assert!(applied.ids.is_identity());
+    }
+
+    #[test]
+    fn disorder_codes_must_survive_cif() {
+        let (rutile, _) = load(SampleKey::Rutile);
+        let o = site(&rutile, "O1");
+        let apply = |assembly: Option<&str>, group: &str| {
+            set_disorder(&[(o, disorder(assembly, group))]).apply(&rutile)
+        };
+        for bad in [
+            "", " ", "a b", "1\n", ".", "?", "_1", "#1", "$1", "'1", "\"1", "[1", "]1", ";1",
+        ] {
+            let refused = EditError::InvalidDisorderCode { code: bad.into() };
+            assert_eq!(apply(None, bad).unwrap_err(), refused, "{bad:?}");
+            assert_eq!(apply(Some(bad), "1").unwrap_err(), refused, "{bad:?}");
+        }
+        // Any other code: SHELX's PART numbers, negative ones included, and
+        // the letters and words other programs write. 1 and 01 differ.
+        for good in ["0", "1", "01", "-1", "A", "a", "major", "1.5", "B'"] {
+            let applied = apply(Some(good), good).unwrap();
+            let kept = &applied.structure.site(o).unwrap().disorder;
+            assert_eq!(kept, &disorder(Some(good), good));
+        }
+    }
+
+    #[test]
+    fn disorder_edits_name_existing_sites_once() {
+        let (rutile, _) = load(SampleKey::Rutile);
+        let o = site(&rutile, "O1");
+        let twice = set_disorder(&[(o, disorder(None, "1")), (o, disorder(None, "2"))]);
+        assert_eq!(
+            twice.apply(&rutile).unwrap_err(),
+            EditError::RepeatedSite(o)
+        );
+        let missing = set_disorder(&[(o, disorder(None, "1")), (SiteId(99), None)]);
+        assert_eq!(
+            missing.apply(&rutile).unwrap_err(),
+            EditError::UnknownSite(SiteId(99))
+        );
+
+        // One undo step; setting what is there adds none.
+        let mut document = crate::CrystalDocument::new(rutile.clone());
+        let edit = set_disorder(&[(o, disorder(Some("A"), "1"))]);
+        assert!(document.edit(edit.clone()).unwrap().changed);
+        assert!(!document.edit(edit).unwrap().changed);
+        document.undo().unwrap();
+        assert_eq!(document.structure(), &rutile);
+        assert!(document.undo().is_none());
+        document.redo().unwrap();
+        let redone = &document.structure().site(o).unwrap().disorder;
+        assert_eq!(redone, &disorder(Some("A"), "1"));
+    }
+
+    #[test]
+    fn joining_an_assembly_checks_the_split_occupancies() {
+        // C1 with C2 1 Å along −x and C3 1 Å along +x: both next to C1,
+        // closer than two covalent radii of carbon, but 2 Å from each
+        // other, so not next to each other. C4 and C5 are another split
+        // pair of assembly A, holding too much already.
+        let mut structure = carbons(&[
+            (1, [0.2, 0.2, 0.2], 0.5),
+            (2, [0.1, 0.2, 0.2], 0.3),
+            (3, [0.3, 0.2, 0.2], 0.3),
+            (4, [0.6, 0.6, 0.6], 0.7),
+            (5, [0.7, 0.6, 0.6], 0.7),
+        ]);
+        let setup: Vec<_> = [(1, "1"), (2, "2"), (4, "1"), (5, "2")]
+            .into_iter()
+            .map(|(id, group)| (SiteId(id), disorder(Some("A"), group)))
+            .collect();
+        structure = set_disorder(&setup).apply(&structure).unwrap().structure;
+
+        // C3 alone with C1: 0.8. C1 with C2 and C3 is 1.1, which only C1
+        // sees. The surplus of C4 and C5 has nothing to do with C3.
+        let applied = round_trip(
+            &structure,
+            set_disorder(&[(SiteId(3), disorder(Some("A"), "3"))]),
+        );
+        let [
+            EditWarning::SplitOccupancySum {
+                site,
+                partners,
+                sum,
+            },
+        ] = &applied.warnings[..]
+        else {
+            panic!("unexpected warnings {:?}", applied.warnings);
+        };
+        assert_eq!(
+            (*site, &partners[..]),
+            (SiteId(1), &[SiteId(2), SiteId(3)][..])
+        );
+        assert!((sum - 1.1).abs() < 1e-12, "{sum}");
+
+        // Leaving the assembly only lowers the sums there.
+        let left = set_disorder(&[(SiteId(2), None)]).apply(&applied.structure);
+        assert!(left.unwrap().warnings.is_empty());
+        // Another assembly does not count.
+        let other = set_disorder(&[(SiteId(3), disorder(Some("B"), "3"))]);
+        assert!(other.apply(&structure).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn split_occupancy_warnings_come_once() {
+        // Two sites next to each other, 0.6 each, made alternatives in one
+        // edit: each sees the other, and the two are one warning.
+        let structure = carbons(&[(1, [0.10, 0.10, 0.10], 0.6), (2, [0.11, 0.10, 0.10], 0.6)]);
+        let edit = set_disorder(&[
+            (SiteId(1), disorder(Some("A"), "1")),
+            (SiteId(2), disorder(Some("A"), "2")),
+        ]);
+        let applied = round_trip(&structure, edit);
+        match &applied.warnings[..] {
+            [
+                EditWarning::SplitOccupancySum {
+                    site,
+                    partners,
+                    sum,
+                },
+            ] => {
+                assert_eq!((*site, &partners[..]), (SiteId(1), &[SiteId(2)][..]));
+                assert!((sum - 1.2).abs() < 1e-12, "{sum}");
+            }
+            other => panic!("unexpected warnings {other:?}"),
+        }
+        // The ordered part, group 0, has no alternatives.
+        let ordered = set_disorder(&[
+            (SiteId(1), disorder(Some("A"), "0")),
+            (SiteId(2), disorder(Some("A"), "2")),
+        ]);
+        assert!(ordered.apply(&structure).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn alternatives_that_stop_being_ones_are_close() {
+        // C1 and C2 are split positions 0.1 Å apart. C3, ordered, is 0.1 Å
+        // from C1 already; that has nothing to do with the edits.
+        let mut structure = carbons(&[
+            (1, [0.10, 0.10, 0.10], 0.5),
+            (2, [0.11, 0.10, 0.10], 0.5),
+            (3, [0.10, 0.11, 0.10], 0.5),
+        ]);
+        let setup = set_disorder(&[
+            (SiteId(1), disorder(Some("A"), "1")),
+            (SiteId(2), disorder(Some("A"), "2")),
+        ]);
+        structure = setup.apply(&structure).unwrap().structure;
+        let warnings = |changes: &[(SiteId, Option<Disorder>)]| {
+            round_trip(&structure, set_disorder(changes)).warnings
+        };
+        let close = |site: u32, other: u32| {
+            move |warnings: Vec<EditWarning>| match &warnings[..] {
+                [
+                    EditWarning::ShortContact {
+                        site: s,
+                        other: o,
+                        distance,
+                    },
+                ] => {
+                    assert_eq!((*s, *o), (SiteId(site), SiteId(other)));
+                    assert!((distance - 0.1).abs() < 1e-9, "{distance}");
+                }
+                other => panic!("unexpected warnings {other:?}"),
+            }
+        };
+        let c2 = SiteId(2);
+        // In the same group, out of the disorder, in the ordered part or in
+        // another assembly, C2 is present together with C1.
+        close(2, 1)(warnings(&[(c2, disorder(Some("A"), "1"))]));
+        close(2, 1)(warnings(&[(c2, None)]));
+        close(2, 1)(warnings(&[(c2, disorder(Some("A"), "0"))]));
+        close(2, 1)(warnings(&[(c2, disorder(Some("B"), "2"))]));
+        // Still an alternative of C1, in another group.
+        assert!(warnings(&[(c2, disorder(Some("A"), "3"))]).is_empty());
+        // Both moved into one group: one pair, once.
+        close(1, 2)(warnings(&[
+            (SiteId(1), disorder(Some("A"), "3")),
+            (c2, disorder(Some("A"), "3")),
+        ]));
+    }
+
+    #[test]
+    fn alternatives_are_not_bonded() {
+        // Two carbon atoms 1.4 Å apart.
+        let structure = carbons(&[(1, [0.10, 0.10, 0.10], 0.5), (2, [0.24, 0.10, 0.10], 0.5)]);
+        assert_eq!(Derived::compute(&structure).bonds.len(), 1);
+        let edit = set_disorder(&[
+            (SiteId(1), disorder(Some("A"), "1")),
+            (SiteId(2), disorder(Some("A"), "2")),
+        ]);
+        let applied = round_trip(&structure, edit);
+        assert!(Derived::compute(&applied.structure).bonds.is_empty());
+    }
+
     #[test]
     fn removed_sites_come_back_in_place() {
         let (srtio3, _) = load(SampleKey::StrontiumTitanate);
@@ -2165,6 +2597,7 @@ mod tests {
                 occupancy: Measured::with_su(0.1, 0.01),
                 label: None,
             },
+            set_disorder(&[(SiteId(1), disorder(None, "1")), (SiteId(2), None)]),
             Edit::Batch {
                 edits: vec![
                     Edit::RemoveSite { site: SiteId(2) },
@@ -2192,6 +2625,16 @@ mod tests {
             json,
             serde_json::json!({"command": "remove_site", "site": 2})
         );
+        let json = serde_json::to_value(set_disorder(&[
+            (SiteId(3), disorder(Some("A"), "2")),
+            (SiteId(4), None),
+        ]))
+        .unwrap();
+        let expected = serde_json::json!({"command": "set_disorder", "sites": [
+            {"site": 3, "disorder": {"assembly": "A", "group": "2"}},
+            {"site": 4},
+        ]});
+        assert_eq!(json, expected);
         let values: CellValues = serde_json::from_str(r#"{"gamma": 120}"#).unwrap();
         assert_eq!(values, CellValues::default().with(CellParam::Gamma, 120.0));
     }

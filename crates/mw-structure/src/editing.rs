@@ -46,6 +46,7 @@ pub(crate) fn command_name(command: &Command) -> SharedString {
             }
             Edit::RemoveOccupant { .. } => tr!("edit.command.remove_occupant"),
             Edit::RenameLabel { .. } => tr!("edit.command.rename_label"),
+            Edit::SetDisorder { .. } => tr!("edit.command.set_disorder"),
             Edit::SetPosition { .. } | Edit::MoveSite { .. } | Edit::RestorePosition { .. } => {
                 tr!("edit.command.set_position")
             }
