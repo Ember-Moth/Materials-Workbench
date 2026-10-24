@@ -285,7 +285,7 @@ M5 的实现（`mw-crystal-io/src/kept.rs`）：
 | `SetSpecies` | 整个轨道一起替换元素 | — |
 | `SetOccupancy` / `AddOccupant` / `RemoveOccupant` | 编辑混合占位 | 占位率之和 > 1 时警告 |
 | `RenameLabel` | — | 标签唯一 |
-| `SetDisorder` | — | — |
+| `SetDisorder` | 改位点所属的无序组合与无序组（v0.3，语义待定） | — |
 | `TransformCell(P, p)` | 换基 / 换原点：转原胞、转标准惯用胞、Niggli 约化、换 setting | P 为有理矩阵，det P > 0 且在 1/8 到 8 之间；新基矢是结构的晶格平移；每个操作把新晶格映射到自身 |
 | `ExpandToP1` | 展开为 P1 | — |
 | `Symmetrize { symprec, standardize }` | 按检测结果对称化（7.10 节） | 预览里显示最大位移 |
@@ -367,7 +367,7 @@ M5 的实现（`mw-crystal-io/src/kept.rs`）：
 
 ### 7.6 增删位点
 
-- **AddSite**：在约束平面上点击，或直接输入坐标。
+- **AddSite**：在约束平面上点击（v0.3），或直接输入坐标。
   - 先在 `position_tol` 内找出位点对称群，再取 `x_sym = (1/|G_s|) · Σ g_i(x)` 作为吸附位置；求和前各项先平移到离 x 最近的晶格像。
   - 与已有轨道重合时拒绝，并提示："与 Fe1 重合，是否改为在 Fe1 上添加混合占位？"
   - 标签自动生成：元素符号 + 最小的未使用编号。
@@ -379,7 +379,7 @@ M5 的实现（`mw-crystal-io/src/kept.rs`）：
 - 新位点排在不对称单元的最后，ID 取现有最大值加一（与转为 P1 一致）。逆命令是 `RemoveSite`，它的逆命令 `RestoreSite` 放回同一个 ID，所以重做精确。
 - 吸附后的位置与任何已有位点的原子（含等效原子）相距不到 `position_tol` 时拒绝（`CoincidentSite`），引导是 `Guidance::AddOccupant`：改为在那个位点上添加混合占位。距离在 `position_tol` 和 `short_contact` 之间时照常添加，给出原子过近的警告。
 - 不给标签时按 7.7 节的规则生成；给出的标签要合法且唯一。元素、占位率的检查与 `AddOccupant` 相同。
-- 界面：位点标签页的"添加位点…"和命令面板打开对话框，输入元素、占位率和分数坐标；对话框随输入说明将吸附到哪个特殊位置、相距多远、晶胞内有几个等效原子。重合时关掉这个对话框，再弹一个，提出把元素作为混合占位加到那个位点上。还没有在约束平面上点击添加。
+- 界面：位点标签页的"添加位点…"和命令面板打开对话框，输入元素、占位率和分数坐标；对话框随输入说明将吸附到哪个特殊位置、相距多远、晶胞内有几个等效原子。重合时关掉这个对话框，再弹一个，提出把元素作为混合占位加到那个位点上。在约束平面上点击添加留到 v0.3（v0.2 验收时决定）。
 
 ### 7.7 元素替换与占位
 
@@ -652,6 +652,7 @@ M5 实现了扩展 XYZ 的导出（`mw-crystal-io/src/xyz.rs`）：一帧，第�
 |---|---|
 | v0.1 | 完整模型（含对称操作、混合占位、ADP 保留）；CIF 导入；派生数据；查看与测量；POSCAR / 扩展 XYZ 导出；对称模式下的非几何编辑（`SetCellParams`、`SetSpecies`、占位编辑、`RemoveSite`、`RenameLabel`）；`ExpandToP1` 和 P1 模式下的自由编辑；`MakeSupercell` |
 | v0.2 | 对称模式下的几何编辑（`MoveSite`、`SetCoordinate`、`AddSite` 及特殊位置吸附，M7 已实现）；`DetectSymmetry` / `Symmetrize`（M9，已实现）；`TransformCell`（M8，已实现）；POSCAR 导入与晶格的显式朝向（M10，已实现） |
+| v0.3 | `SetDisorder`（改位点所属的无序组合与无序组）；在约束平面上点击添加位点。两者都是 v0.2 验收时从 v0.2 移过来的 |
 | 之后 | 降到子群的对称性编辑、ADP 编辑、CIF 2.0、mCIF |
 
 ## 11. 待决策
