@@ -292,7 +292,7 @@ impl Lattice {
 
     /// The lattice with these basis vectors in Å (`basis[i]` is a, b, c), as
     /// a file such as POSCAR gives it: the cell parameters from the metric
-    /// tensor ([`CellParams::from_metric`]) and the orientation that turns
+    /// tensor (`CellParams::from_metric`) and the orientation that turns
     /// the standard basis onto these vectors. `None` when the vectors span
     /// no cell.
     pub fn from_matrix(basis: [[f64; 3]; 3]) -> Option<Self> {

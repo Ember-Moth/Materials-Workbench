@@ -1,5 +1,6 @@
 # Format, lints, every test and the application's build on macOS, Linux and
-# Windows (docs/development.md §2). The runners have no GPU: tests that
+# Windows (docs/development.md §2), plus the dependency licenses and the
+# crates.io packages, and the Python wheels. The runners have no GPU: tests that
 # render use software adapters, Mesa's lavapipe on Linux and WARP on
 # Windows, and fail rather than skip when there is none (MW_REQUIRE_GPU).
 
@@ -126,6 +127,42 @@ jobs:
           name: snapshot-${{ matrix.name }}
           path: snapshot.png
           if-no-files-found: ignore
+
+  # What a release needs besides the build (docs/design/release.md §6–7):
+  # every dependency under a license the workspace allows, and the crates
+  # published to crates.io packaging and documenting cleanly. Platform
+  # independent, so on Linux only.
+  release-checks:
+    name: Licenses and crates.io packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # deny.toml at the root; reads the dependency graph, builds nothing.
+      - name: Dependency licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.97 --profile minimal
+          rustup default 1.97
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Packs both crates as crates.io would get them and builds them from
+      # the packages, mw-crystal-io against the packed mw-crystal.
+      - name: Package mw-crystal and mw-crystal-io
+        run: cargo package -p mw-crystal -p mw-crystal-io --locked
+
+      - name: Documentation of mw-crystal and mw-crystal-io
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps -p mw-crystal -p mw-crystal-io --locked
 
   # One abi3 wheel of the Python module per platform, for CPython 3.10 and
   # newer (docs/design/scripting.md §5.7), installed into a fresh virtual

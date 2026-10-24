@@ -1,9 +1,17 @@
 [package]
 name = "mw-crystal"
-version = "0.0.0"
+version = "0.3.0"
+description = "Crystal structure model with exact symmetry operations, space group and Wyckoff analysis, bonds, cell transformations and undoable editing commands"
+readme = "README.md"
+documentation = "https://docs.rs/mw-crystal"
+keywords = ["crystallography", "crystal", "symmetry", "space-group", "wyckoff"]
+categories = ["science::materials"]
 edition.workspace = true
-publish.workspace = true
 license.workspace = true
+repository.workspace = true
+# Published to crates.io, unlike the rest of the workspace
+# (docs/design/release.md §6).
+publish = true
 
 [dependencies]
 moyo.workspace = true

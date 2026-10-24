@@ -1,0 +1,38 @@
+# Licenses of the dependencies (docs/design/release.md §7). Everything this
+# workspace builds is released as MIT OR Apache-2.0, so every dependency must
+# be under a license that allows that: permissive licenses, and MPL-2.0,
+# whose copyleft stays with its own files. No GPL-family license is on the
+# list, so a dependency only under one fails the check. CI runs
+# `cargo deny check licenses`.
+
+[graph]
+# The optional features too: the Python bindings (mw-python) and the
+# screenshot tour.
+all-features = true
+
+[licenses]
+# SPDX identifiers. An `OR` expression passes when one side is allowed (for
+# example self_cell's `Apache-2.0 OR GPL-2.0-only`); an `AND` expression needs
+# every part.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    # target-lexicon, which PyO3's build script uses; the exception only
+    # adds permissions.
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    # The Mozilla root certificates in webpki-root-certs.
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    # File-level copyleft: dwrote, option-ext.
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9

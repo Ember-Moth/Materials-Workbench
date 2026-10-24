@@ -51,6 +51,8 @@ cargo fmt --all
 | Python 模块的静态检查 | `cargo clippy -p mw-python --features extension-module --all-targets --locked -- -D warnings` | 绑定在可选特性后面，上面的 clippy 不检查它们；Python 3.13 由 `actions/setup-python` 装 |
 | 命令行与 Python 模块的冒烟测试 | `cargo build -p mw-cli -p mw-python --features mw-python/extension-module --locked`，运行一次 `mw info`，再 `python -I crates/mw-python/tests/smoke.py target/debug target/debug/mw` | 命令行的测试已经在上面的 `cargo test --workspace` 里 |
 
+另有 `release-checks` 任务，只在 Ubuntu 24.04 上跑一次（与平台无关）：`EmbarkStudios/cargo-deny-action` 按根目录的 `deny.toml` 检查全部依赖的许可（`cargo deny check licenses`），`cargo package -p mw-crystal -p mw-crystal-io --locked` 把两个要发布到 crates.io 的 crate 打包并从包里编译，`cargo doc --no-deps -p mw-crystal -p mw-crystal-io` 在 `RUSTDOCFLAGS=-D warnings` 下生成文档（第 2.2 节，[发布与打包设计稿](design/release.md)第 6、7 节）。
+
 另有 `wheels` 任务，三个平台各一个：`PyO3/maturin-action` 在 `crates/mw-python` 里构建 release wheel（macOS universal2、Linux 在 manylinux 容器里、Windows x64），装进新的虚拟环境（`pip install --no-index --no-deps`，只装这个文件）后运行 `smoke.py --installed`，wheel 作为产物保存（`wheel-<平台>`），不发布（[命令行与 Python 设计稿](design/scripting.md)第 6 节）。
 
 GitHub 的运行器没有显卡，出帧的测试用软件适配器：Linux 装 Mesa 的 lavapipe（Vulkan，适配器名 `llvmpipe (…)`），Windows 用系统自带的 WARP（Direct3D 12，`Microsoft Basic Render Driver`），macOS 运行器有虚拟的 Metal 设备。渲染器读 wgpu 的环境变量（`mw-crystal-render` 的 `Renderer::new`）：`WGPU_BACKEND` 限定后端（`vulkan`、`dx12`、`metal`），`WGPU_ADAPTER_NAME` 只取名字里含这段文字的适配器（不分大小写），CI 用两者把测试固定在软件适配器上；`MW_REQUIRE_GPU=1` 让找不到适配器的测试失败而不是跳过（第 4 节）。其他环境变量：`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 缩小目标目录和缓存；`AWS_LC_SYS_PREBUILT_NASM=1` 见第 1 节。依赖的编译结果由 `Swatinem/rust-cache` 缓存，只有 `main` 上的运行写缓存。
@@ -374,6 +376,34 @@ python3 -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
 `-I` 让 Python 忽略 `PYTHONPATH` 和用户目录里的包，所以模块所在的目录由脚本自己加进 `sys.path`。在自己的脚本或 Jupyter 里用，把 `target/debug/libmw_python.dylib`（Linux 是 `libmw_python.so`，Windows 是 `mw_python.dll`）复制成某个目录里的 `materials_workbench.so`（Windows 上 `materials_workbench.pyd`），把那个目录加进 `sys.path`，再 `import materials_workbench as mw`。打成 wheel 用 maturin（`crates/mw-python/pyproject.toml`），要从 PyPI 下载，运行前先问用户；CI 已经为三个平台构建。
 
 debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
+
+### 2.2 发布前的检查
+
+设计见[发布与打包设计稿](design/release.md)。安装包、Release 工作流和许可清单的生成还没做（设计稿第 11 节），下面是现在就能在本机跑的检查，CI 的 `release-checks` 任务做同样的事（第 2.1 节）。
+
+依赖的许可（`deny.toml`，设计稿 7.1 节）。cargo-deny 要另外安装（`cargo install cargo-deny --locked`，从 crates.io 下载，先问用户）；`--offline` 只用本机已有的依赖信息：
+
+```bash
+cargo deny --offline check licenses
+```
+
+引入新依赖后跑一遍。许可不在允许列表里时检查失败，不要直接加进列表：先看它是什么许可、只在哪个平台或特性下用到，GPL 类许可不加（路线图第 16 节）。
+
+`mw-crystal`、`mw-crystal-io` 发布到 crates.io 前的检查（设计稿第 6 节）。只做 dry run，不上传；两个一起打包，`mw-crystal-io` 依赖的 `mw-crystal` 解析到同一批打出的包上：
+
+```bash
+cargo publish --dry-run -p mw-crystal -p mw-crystal-io
+```
+
+```bash
+cargo package -p mw-crystal -p mw-crystal-io --list
+```
+
+```bash
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p mw-crystal -p mw-crystal-io
+```
+
+工作目录有未提交的改动时，前两条要加 `--allow-dirty`。两个 crate 的 README 里的例子是文档测试，`cargo test --workspace` 会运行；改了公开接口要同步 README。这两个 crate 只能依赖 crates.io 上的 crate 和彼此，给它们加工作区里其他 crate 的依赖会让打包失败。
 
 ## 3. 代码约定
 

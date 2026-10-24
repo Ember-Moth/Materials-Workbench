@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）已实现、只差 Inspector 和 Claude Code / Claude Desktop 的手动检查，三个平台的 CI 都通过；M16（晶面与热振动椭球）、M17（编辑补充）、M20（发布）还没开始，下一步是 M16；第 9 节的模拟已全部替换。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）已实现、只差 Inspector 和 Claude Code / Claude Desktop 的手动检查，三个平台的 CI 都通过；M20（发布）做了准备（打包设计稿 `docs/design/release.md`、`mw-crystal` 和 `mw-crystal-io` 的 crates.io 元数据与 dry run、依赖许可检查），签名和自动更新等用户决定；M16（晶面与热振动椭球）、M17（编辑补充）还没开始，下一步是 M16；第 9 节的模拟已全部替换。
 
 ## 文档是设计的依据
 
@@ -16,7 +16,8 @@ Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工�
   - `viewport-rendering.md`：视口技术选型与 GPUI 源码核查结论；
   - `ui-shell.md`：界面布局与术语表；
   - `ai-integration.md`：MCP、内置助手与模型服务层；
-  - `scripting.md`：命令行 `mw` 与 Python 模块（M19）。
+  - `scripting.md`：命令行 `mw` 与 Python 模块（M19）；
+  - `release.md`：安装包、GitHub Releases、crates.io、第三方许可清单与自动更新（M20）。
 
 文档用中文写，API 名、crate 名、文件名保留原文。实现与设计不一致时，要修订设计稿，不让两者分叉。
 
@@ -33,9 +34,11 @@ cargo test -p workbench --test mcp                        # materials-workbench 
 cargo test -p mw-cli                                      # 命令行 mw：运行可执行文件，与注册表和领域函数直接调用的结果比较
 cargo clippy --workspace --all-targets
 cargo fmt --all
+cargo deny --offline check licenses                       # 依赖的许可（deny.toml）
+cargo publish --dry-run -p mw-crystal -p mw-crystal-io    # 发布到 crates.io 前的检查，只做 dry run
 ```
 
-- **CI**：`.github/workflows/ci.yml` 在 macOS、Linux、Windows 上跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告算失败）、渲染一帧、`cargo test --workspace --locked` 和构建应用。运行器没有显卡，出帧的测试用软件适配器（Linux 的 lavapipe、Windows 的 WARP），由 `WGPU_BACKEND` 和 `WGPU_ADAPTER_NAME` 固定；`MW_REQUIRE_GPU=1` 让找不到适配器的渲染器测试失败而不是跳过。CI 只在推送后运行，推送前先问用户。本地复现和各平台依赖见 `docs/development.md` 第 1 节和 2.1 节。
+- **CI**：`.github/workflows/ci.yml` 在 macOS、Linux、Windows 上跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告算失败）、渲染一帧、`cargo test --workspace --locked` 和构建应用；另在 Linux 上检查依赖的许可、打包 `mw-crystal` 和 `mw-crystal-io`、在 `-D warnings` 下生成它们的文档（`release-checks` 任务）。运行器没有显卡，出帧的测试用软件适配器（Linux 的 lavapipe、Windows 的 WARP），由 `WGPU_BACKEND` 和 `WGPU_ADAPTER_NAME` 固定；`MW_REQUIRE_GPU=1` 让找不到适配器的渲染器测试失败而不是跳过。CI 只在推送后运行，推送前先问用户。本地复现和各平台依赖见 `docs/development.md` 第 1 节和 2.1 节。
 
 - **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量、选中要删除的原子和移动模式下拖动原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；拖动原子时的预览用 `Hold` 按住截图，下一步再 `Release`；原子的位置按屏幕上那一帧算，所以转动视图的拖动要单独放进一步，等新画面到了再点选；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
@@ -76,7 +79,7 @@ cargo fmt --all
 
 ### crate 分层
 
-工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。新 crate 的 `[package]` 要写 `edition.workspace = true`、`publish.workspace = true`、`license.workspace = true`。项目按 MIT OR Apache-2.0 双许可发布，不引入 GPL 类许可的依赖，也不复制 GPL 代码。依赖只能从上往下：
+工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。新 crate 的 `[package]` 要写 `edition.workspace = true`、`publish.workspace = true`、`license.workspace = true`。项目按 MIT OR Apache-2.0 双许可发布，不引入 GPL 类许可的依赖，也不复制 GPL 代码；根目录的 `deny.toml` 列出允许的许可，引入依赖后跑 `cargo deny --offline check licenses`。只有 `mw-crystal` 和 `mw-crystal-io` 发布到 crates.io（`publish = true`，版本 0.3.0，工作区依赖里带 `version`）：它们只能依赖 crates.io 上的 crate 和彼此；各有英文 README，其中的例子和 crate 文档里的例子都是文档测试，改了公开接口要同步（`docs/design/release.md` 第 6 节）。依赖只能从上往下：
 
 - **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源；第一个参数是 `mcp` 时在初始化 GPUI 之前转给 `mw_mcp::main`（`src/mcp.rs`），不开窗口。设置里允许 MCP 客户端连接时，`Workbench` 监听并在主线程上逐个运行它们的调用，宿主是借用工作台的 `AppHost`（`src/host.rs`）：列出和打开窗口里的项目与结构，读工作区里的 `CrystalDocument`，编辑经 `StructureWorkspace::execute_by` 进同一个撤销栈并记下客户端，写文件前弹确认（`mcp::ask`），视图工具先显示结构再调用工作区的 `select`、`set_display_model`、`reset_camera`、`snapshot`；权限是设置里的 `AiSetting`，审计记录在保存、关闭、退出时追加进项目（`src/ai_log.rs`），打开的项目由应用持锁（`projects.rs`）。
 - **能力 crate（依赖 GPUI）**：

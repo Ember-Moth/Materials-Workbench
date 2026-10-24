@@ -4,13 +4,18 @@ members = ["crates/*", "apps/*"]
 
 [workspace.package]
 edition = "2024"
+# Only mw-crystal and mw-crystal-io are published to crates.io; they set
+# `publish` themselves (docs/design/release.md §6).
 publish = false
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ember-Moth/Materials-Workbench"
 
 [workspace.dependencies]
 mw-automation = { path = "crates/mw-automation" }
-mw-crystal = { path = "crates/mw-crystal" }
-mw-crystal-io = { path = "crates/mw-crystal-io" }
+# Published crates: a dependency on one carries its version, which crates.io
+# uses in place of the path.
+mw-crystal = { path = "crates/mw-crystal", version = "0.3.0" }
+mw-crystal-io = { path = "crates/mw-crystal-io", version = "0.3.0" }
 mw-crystal-render = { path = "crates/mw-crystal-render" }
 mw-mcp = { path = "crates/mw-mcp" }
 mw-project = { path = "crates/mw-project" }

@@ -1,6 +1,8 @@
 //! Crystal structure model, independent of any UI.
 //!
-//! The types follow `docs/design/crystallography-model.md`. A [`Structure`]
+//! The types follow the design notes in the Materials Workbench repository,
+//! [`docs/design/crystallography-model.md`][design] (in Chinese); "design
+//! §n" below refers to their sections. A [`Structure`]
 //! is the asymmetric unit plus its [`Symmetry`] operation set; [`Derived`]
 //! expands it into the atoms of the unit cell, finds their bonds, with each
 //! atom of the crystal named by an [`AtomRef`], and analyzes its symmetry:
@@ -22,6 +24,54 @@
 //! other tabulated settings. [`DetectSymmetry`] finds the symmetry a
 //! structure's atoms have and previews symmetrizing by it, which
 //! [`Edit::Symmetrize`] commits.
+//!
+//! Reading and writing files is in the `mw-crystal-io` crate.
+//!
+//! # Example
+//!
+//! Rutile from its cell, three generators of P4₂/mnm and two sites:
+//!
+//! ```
+//! use mw_crystal::{
+//!     CellParams, Derived, Formula, Lattice, Measured, Occupant, Site, SiteId, Species,
+//!     Structure, SymOp, Symmetry, make_supercell,
+//! };
+//!
+//! let generators = ["-y+1/2,x+1/2,z+1/2", "-x+1/2,y+1/2,-z+1/2", "-x,-y,-z"]
+//!     .map(|op| SymOp::parse(op).unwrap());
+//! let site = |id, label: &str, element: &str, position| {
+//!     let occupant = Occupant::new(label, Species::element(element), Measured::exact(1.0));
+//!     Site::new(SiteId(id), position, vec![occupant])
+//! };
+//! let rutile = Structure::new(
+//!     Lattice::new(CellParams::new(4.594, 4.594, 2.959, 90.0, 90.0, 90.0)),
+//!     Symmetry::generate(&generators).unwrap(),
+//!     vec![
+//!         site(1, "Ti1", "Ti", [0.0, 0.0, 0.0]),
+//!         site(2, "O1", "O", [0.3048, 0.3048, 0.0]),
+//!     ],
+//! );
+//!
+//! let derived = Derived::compute(&rutile);
+//! let space_group = derived.symmetry.space_group.as_ref().unwrap();
+//! assert_eq!(space_group.number, 136);
+//! assert_eq!(derived.atoms_in_cell(), 6);
+//! let oxygen = derived.site_symmetry(SiteId(2)).unwrap();
+//! assert_eq!(oxygen.wyckoff.as_ref().unwrap().to_string(), "4f");
+//! // Hill order: alphabetical when there is no carbon.
+//! assert_eq!(Formula::of(&rutile, &derived).to_string(), "O2Ti");
+//!
+//! // A 2 × 2 × 2 supercell is a new structure in P1, one site per atom.
+//! let supercell = make_supercell(&rutile, [[2, 0, 0], [0, 2, 0], [0, 0, 2]]).unwrap();
+//! assert_eq!(supercell.sites.len(), 48);
+//! ```
+//!
+//! [design]: https://github.com/Ember-Moth/Materials-Workbench/blob/main/docs/design/crystallography-model.md
+
+// The README's example runs with the doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 mod atom_ref;
 mod bonds;

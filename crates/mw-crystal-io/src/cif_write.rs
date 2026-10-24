@@ -16,7 +16,7 @@ use mw_crystal::{
 
 use crate::kept::{CifFields, Class, Column, Field, Text};
 
-/// What [`write`] adds to the structure.
+/// What [`write()`] adds to the structure.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WriteOptions<'a> {
     block_name: &'a str,
