@@ -447,6 +447,31 @@ VIEWPORT_POC_BENCH=1000:100,1000:100,10000:100,10000:50,100000:100,100000:50,100
 - **渲染宽度对齐到 64 像素**：微基准（M5，11.5 MB）里宽 1791 时逐行拷贝 0.57 ms，对齐成 1792 后整块拷贝约 0.41 ms，在后台线程上省 0.15 ms。代价是每帧多渲染、多上传最多 63 列（1792 宽时约 3.5%），上传在界面线程上，得不偿失。基准用的宽度 1792 和 896 本来就是 64 的倍数，已经整块拷贝。
 - **复用 CPU 缓冲区**：做不到。像素交给 `RenderImage` 后归它所有（`data` 是私有字段，没有取回的接口），微基准里复用 `Vec` 也只省约 0.03 ms。GPU 端的暂存缓冲本来就复用，现在不同尺寸的可以并存。
 
+### 8.4 Linux 与 Windows（待测）
+
+M13 要在 Linux 和 Windows 实机上运行应用并重测视口，结果按 8.1、8.2 节的格式记在这里。CI（开发指南 2.1 节）只说明在软件适配器上能编译、测试能通过；运行器没有显示器，窗口系统、合成器、真实 GPU 和帧率都不在它的范围内。
+
+需要一台 Linux（Wayland 或 X11 的图形会话，显卡有 Vulkan 驱动）和一台 Windows 10 或 11（有显卡），依赖按开发指南第 1 节装好，在仓库根目录运行下面的命令。
+
+1. **记下环境**：系统版本；显卡型号和驱动版本；显示器分辨率、刷新率和缩放比；Linux 上是 Wayland 还是 X11（`echo $XDG_SESSION_TYPE`）。
+2. **运行应用**，日志里有渲染器选的适配器（`renderer adapter:` 一行）和 GPUI 自己选的适配器：
+
+   ```bash
+   RUST_LOG=info cargo run --bin materials-workbench
+   ```
+
+   Windows 的 PowerShell 里先 `$env:RUST_LOG="info"`。走一遍：打开示例项目里的金红石，拖动旋转、滚轮缩放；单击、Ctrl-单击、⇧-单击原子；测量距离；改一个晶胞参数，Ctrl+Z 撤销、Ctrl+Shift+Z 重做；V 进移动模式拖一个原子，按住 Alt 脱离特殊位置；Ctrl+K 命令面板；Ctrl+S 保存，关闭项目再从最近项目打开；用命令面板切换深色模式和英文界面；拖动改变窗口大小。记下不对的地方，最好带截图。缩放比不是 100 % 时看原子边缘和文字是否发虚。
+3. **视口基准**：窗口保持在前台、不要动鼠标，约 1 分钟后自动退出，把输出整个保存下来：
+
+   ```bash
+   VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc 2>&1 | tee bench.txt
+   ```
+
+   Windows 的 PowerShell 里先 `$env:VIEWPORT_POC_BENCH="1"`，再 `cargo run -p viewport-poc 2>&1 | Tee-Object bench.txt`。输出里 `window_lost_focus=true` 的档位作废；第一档常常失去焦点，可以按 8.2 节的写法在前面加一个不计数的档重测。PoC 窗口右侧"设备"一栏写着渲染器和 GPUI 各用的适配器，截一张图或抄下来；有两块显卡的机器尤其要看两者是不是同一块。
+4. **（可选）连接运行中的应用**：设置里打开"允许 MCP 客户端连接"，再在另一个终端运行 `RUST_LOG=info cargo run --bin materials-workbench -- mcp --allow crates/mw-project-file/samples`，标准错误里应有 `connected to the running application`；在终端里按 Ctrl+D（Windows 上 Ctrl+Z 回车）结束输入，命令应当马上退出。
+
+把第 1 步的环境、第 2 步发现的问题和 `bench.txt` 交回来，整理进本节和架构文档第 10 节的 M13 行。
+
 ## 9. 风险与待确认
 
 | 项 | 说明 |
