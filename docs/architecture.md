@@ -180,9 +180,9 @@ Workbench（窗口根视图，apps/workbench）：打开着的工作区、当前
 
 | 模拟 | 位置 | 代替的是 | 由哪一步替换 |
 |---|---|---|---|
-| 显示固定为一个晶胞，面、棱、角上的原子在对面补一份 | `mw-crystal/src/expand.rs` 的 `display_atoms` | 视图层的显示范围 | v0.3 |
-| 显示范围、多面体 | 各处的 `not_implemented` | 对应功能 | 见第 10 节 |
-| "多面体"显示模型画成球棍 | `mw-structure/src/scene.rs` 的 `DisplayModel` | 半透明多面体管线 | v0.3 |
+| 显示固定为一个晶胞，面、棱、角上的原子在对面补一份 | `mw-crystal/src/expand.rs` 的 `display_atoms` | 视图层的显示范围 | v0.3 M14 |
+| 显示范围、多面体 | 各处的 `not_implemented` | 对应功能 | v0.3 M14、M15 |
+| "多面体"显示模型画成球棍 | `mw-structure/src/scene.rs` 的 `DisplayModel` | 半透明多面体管线 | v0.3 M15 |
 
 ## 10. 路线图
 
@@ -216,3 +216,30 @@ v0.2（[路线图](roadmap.md)第 6 节）拆成六个里程碑。M7、M10、M11
 v0.2 的实验性 MCP Server 先做出原型（`mw-mcp`，2026-10-22：无界面、只读、stdio，独立可执行文件；能力注册表为此加了 `structure.diagnostics` 和 `structure.export`），M11（2026-10-23）让它只读地打开项目文件并并入主程序，M12（2026-10-23）让它连接运行中的应用（见上表）。
 
 **v0.2 验收**（2026-10-23）：路线图第 6 节的验收标准逐条核对完毕，结果见上表。第一条，晶体学设计稿第 7 节的每条编辑语义都有对应测试；核对时发现 4 条没有做到：同一无序组合里相邻 split site 的占位率之和检查（7.7 节）和导入时晶胞与对称性不一致的修正（7.3 节，原先"提示对称化"行不通，改为改晶胞参数的结果总与对称性一致，属性面板给出"对齐"）已补上；`SetDisorder` 和在约束平面上点击添加位点推到 v0.3（设计稿第 10 节）。删除位点后的反馈原先只有截图覆盖，也补了测试。第二条，P1 结构对称化后再转回 P1 在容差内不变，由 `mw-crystal/src/symmetrize.rs` 的测试覆盖全部 530 个表列设定（含转过朝向、左手系、带位移参数和不确定度的结构）。保留：MCP 只有自动化测试（rmcp 客户端经 stdio 驱动 `mw-mcp` 和 `materials-workbench mcp`，含转接到测试里启动的监听端），在 Claude Code 里的手动检查和 MCP Inspector（要从 npm 下载）暂缓；M12 在 Windows 上只做过编译检查，Linux 和 Windows 都没有实际运行过（属于路线图 v0.3 的验证）；POSCAR 仍只用 pymatgen 和 ASE 验证。仍是模拟的部分（第 9 节）都属于之后的版本。
+
+v0.3（[路线图](roadmap.md)第 7 节）是首个公开发布，拆成八个里程碑（2026-10-24 规划）。分三批：
+
+- **第一批同时做 M13、M14、M18**：三者改的文件基本不重叠（CI 与平台代码；显示与场景；能力注册表、`mw-mcp` 和外壳的宿主）。
+- **第二批**：M15 排在 M14 之后（同一批显示与场景代码）；M19 排在 M13 之后（Python 包要在 CI 里为三个平台构建），与 M15 同时做。
+- **第三批**：M16 排在 M15 之后（晶面复用多面体的半透明管线）；M17 排在 M16 之后（在平面上点击添加位点要用 M16 画出的平面），其中 `SetDisorder` 的领域命令可以提前做。M20 的打包与 crates.io 准备在 M13 之后随时可以开始，正式发布放在最后、验收之后。
+
+验收（规划时拟定，路线图第 7 节还没有写验收标准）：
+
+- 三个平台的 CI 都通过（fmt、clippy、全部测试）；三个平台的安装包装好后能打开示例项目，Linux 和 Windows 上的视口性能重测记进视口设计稿第 8 节；
+- 第 9 节的模拟全部替换掉，显示范围、多面体、晶面和热振动椭球都有测试和截图巡览；
+- AI 集成设计稿第 8 节里与 MCP 有关的标准：Inspector 检查通过，Claude Desktop 和 Claude Code 都能连接，在 Claude Code 里完成"打开项目 → 总结结构 → 生成超胞 → 导出 POSCAR"（界面里实时可见、可以撤销、审计日志完整），不可逆操作必弹确认，带恶意指令的文件不能触发未经确认的写操作；工具质量的评测集要调用真实模型，运行前先问；
+- 命令行和 Python 都能完成格式转换、超胞和对称性检测，结果与界面一致；
+- `mw-crystal`、`mw-crystal-io` 发布到 crates.io。
+
+| 里程碑 | 内容 | 主要涉及 | 状态 |
+|---|---|---|---|
+| M13 跨平台 CI 与验证 | GitHub Actions 在 macOS、Linux、Windows 上跑 fmt、clippy、全部测试并构建应用；修掉三个平台上暴露的问题（M12 的 Windows 命名管道至今只编译过）；需要 GPU 的测试在没有显卡的机器上用软件渲染（Linux 的 lavapipe、Windows 的 WARP）或标明跳过；在 Linux 和 Windows 实机上运行应用、重测视口性能（视口设计稿 8.1 节没有覆盖的平台，实机需要你配合） | `.github/workflows`、各 crate 的平台分支、`viewport-poc` | 未开始 |
+| M14 显示范围 | 显示多个晶胞（n × m × l）和按距离截取（以原子或点为中心的球），边界原子补像的规则从模拟改为显示范围的一部分；显示键随之计算；设置存进视图状态，随项目保存（可能要升项目格式版本）；替换第 9 节"显示固定为一个晶胞"和显示范围的 `not_implemented` | `mw-crystal`（显示原子与键）、`mw-structure`（显示范围浮层、场景）、`mw-project-file`、`mw-viewport`（大场景的帧率） | 未开始 |
+| M15 配位多面体 | 由键确定中心原子和配体，计算凸包；渲染器加半透明三角形管线（先按深度排序，必要时换成顺序无关透明，视口设计稿 5.6 节）；"多面体"显示模型真正画出多面体，替换第 9 节的两项模拟；多面体的选择（按中心元素）和配色 | `mw-crystal`、`mw-crystal-render`、`mw-structure` | 未开始 |
+| M16 晶面与热振动椭球 | Miller 指数 (hkl) 与晶面间距的计算，在视口里画出晶面（裁到晶胞或显示范围，复用 M15 的半透明管线），晶面的添加与列表；热振动椭球：由 U_iso / U_ij 经晶格朝向换到笛卡尔，按概率水平（默认 50 %）画 impostor 椭球，作为一种显示模型；晶面属于标注还是视图状态、是否进撤销栈，先在设计稿里定下 | `mw-crystal`、`mw-crystal-render`、`mw-structure` | 未开始 |
+| M17 编辑补充 | 在约束平面上点击添加位点（视口里的点击换算成平面上的分数坐标，再走 `AddSite` 的吸附；"约束平面"指什么先在设计稿 7.6 节定下）；`SetDisorder`：改位点所属的无序组合与无序组，语义、校验和界面先写进设计稿 7.2 节，再实现（领域命令可以提前做）；视需要加上按无序组切换显示（设计稿 4.5 节） | `mw-crystal`、`mw-viewport`、`mw-structure` | 未开始 |
+| M18 完整 MCP | 编辑工具：注册表里可撤销的写入能力全部提供，连接应用时经 `StructureWorkspace::execute` 进同一个撤销栈、界面带"AI"标记，无界面时写回项目文件（先备份、加锁，项目文件设计稿第 1 节）；`file.import`、`structure.convert_to_p1`、`structure.make_supercell`、导出写文件；视图工具 `view.select`、`view.set_display_model`、`view.reset`、`view.snapshot`（返回视口图片）；权限设置（允许修改数据、允许写文件，可按客户端）、不可逆操作经 elicitation 或界面确认、审计日志随项目保存（AI 集成设计稿第 7 节） | `mw-automation`、`mw-mcp`、`mw-project-file`、外壳（`AppHost`、设置） | 未开始 |
+| M19 命令行与 Python | 命令行：格式转换、超胞、晶胞变换、对称性检测与对称化等批处理，形式（主程序的子命令或独立可执行文件）先定下；Python 绑定：新 crate（PyO3 + maturin），在 Jupyter 里读写结构、查询和调用同一个能力注册表，wheel 在 CI 里为三个平台构建 | 新增命令行与 Python 两个 crate；`mw-automation` | 未开始 |
+| M20 发布 | macOS（`.app` 与 `.dmg`，签名与公证需要你的 Apple 开发者账号）、Windows、Linux 的安装包与自动更新；macOS 上把 `.mwproj` 登记为文档包，示例项目放进安装包；安装包附带第三方许可清单；`mw-crystal`、`mw-crystal-io` 发布到 crates.io（整理元数据和文档）；用户文档、示例项目和演示（演示视频需要你来录）；GitHub Releases 由 CI 生成 | 外壳、`.github/workflows`、各领域 crate 的元数据、文档 | 未开始 |
+
+需要你决定的：M20 的代码签名（Apple 开发者账号、Windows 证书）和自动更新的方式；M19 的命令行形式，以及 Python 包是否发布到 PyPI；M18 写操作在连接应用时的默认权限。
