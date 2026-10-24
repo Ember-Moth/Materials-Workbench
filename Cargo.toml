@@ -59,6 +59,9 @@ rmcp = { version = "3.7", default-features = false }
 # `materials-workbench mcp` and the running application (ai-integration
 # design §5.1).
 libc = "0.2"
+# On Windows, the user a named pipe's other end runs as (same channel). The
+# version tokio and mio use already.
+windows-sys = "0.61"
 
 # GPUI and the component library are slow in unoptimized builds; this follows
 # the GPUI Kit installation guide. The symmetry search is optimized too, so

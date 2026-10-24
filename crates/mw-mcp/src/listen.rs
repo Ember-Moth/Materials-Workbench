@@ -275,7 +275,11 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::*;
+    use std::os::windows::io::AsRawHandle as _;
     use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+
+    use crate::endpoint::runs_as_current_user;
 
     fn instance(endpoint_pipe: &str, first: bool) -> io::Result<NamedPipeServer> {
         ServerOptions::new()
@@ -318,7 +322,20 @@ mod platform {
         loop {
             next.connect().await?;
             let connected = std::mem::replace(&mut next, instance(&name, false)?);
+            // The token file is the user's alone; this checks again.
+            if !client_runs_as_current_user(&connected) {
+                log::warn!("refused an MCP client of another user");
+                continue;
+            }
             tokio::spawn(serve(connected, token.clone(), dispatcher.clone()));
         }
+    }
+
+    fn client_runs_as_current_user(pipe: &NamedPipeServer) -> bool {
+        let mut process_id = 0;
+        // SAFETY: the handle is the open server end of a connected pipe,
+        // and `process_id` is valid for writes.
+        let found = unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut process_id) };
+        found != 0 && runs_as_current_user(process_id).unwrap_or(false)
     }
 }

@@ -138,7 +138,11 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::*;
+    use std::os::windows::io::AsRawHandle as _;
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+
+    use crate::endpoint::runs_as_current_user;
 
     /// Windows' "all pipe instances are busy".
     const ERROR_PIPE_BUSY: i32 = 231;
@@ -149,7 +153,10 @@ mod platform {
         // application makes the next one right away.
         for _ in 0..20 {
             match ClientOptions::new().open(&pipe) {
-                Ok(client) => return Ok(Some(client)),
+                Ok(client) => {
+                    check_server(&client)?;
+                    return Ok(Some(client));
+                }
                 Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
                     std::thread::sleep(Duration::from_millis(50));
                 }
@@ -161,6 +168,29 @@ mod platform {
             io::ErrorKind::TimedOut,
             "the application's pipe stayed busy",
         ))
+    }
+
+    /// Checks that the process at the other end of the pipe runs as this
+    /// user, before the token goes to it: anyone may make a pipe of that
+    /// name before the application does.
+    fn check_server(client: &NamedPipeClient) -> io::Result<()> {
+        let mut process_id = 0;
+        // SAFETY: the handle is the open client end of a pipe, and
+        // `process_id` is valid for writes.
+        if unsafe { GetNamedPipeServerProcessId(client.as_raw_handle(), &mut process_id) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        match runs_as_current_user(process_id) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the pipe belongs to another user",
+            )),
+            Err(e) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("could not tell which user the pipe belongs to: {e}"),
+            )),
+        }
     }
 }
 
