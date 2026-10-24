@@ -104,7 +104,7 @@ cargo fmt --all
 
 ### 命令与快捷键
 
-- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。
+- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。修饰键写 `secondary-`（macOS 上是 ⌘，Linux 和 Windows 上是 Ctrl），不写 `cmd-`（那在其他平台是 Super / Win 键）；界面集成测试里按键也写 `secondary-`，鼠标事件的修饰键用 `Modifiers::secondary()`。
 - 按键上下文有两个：`Workbench`（外壳）和 `StructureWorkspace`（只在结构工作区内有效的快捷键）。
 - 处理器写在拥有该命令的视图上。按钮、快捷键和命令面板都派发同一个动作。
 - 撤销和重做是 `Undo` / `Redo`（⌘Z / ⇧⌘Z，绑定在 `StructureWorkspace` 上下文里；输入框更深的上下文里是撤销文字）。

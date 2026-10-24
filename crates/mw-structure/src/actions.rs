@@ -36,15 +36,16 @@ gpui_kit::actions!(
 pub const KEY_CONTEXT: &str = "StructureWorkspace";
 
 /// Registers the workspace's key bindings (`docs/design/ui-shell.md` §8).
+/// `secondary` is ⌘ on macOS and Ctrl elsewhere.
 pub fn bind_keys(cx: &mut App) {
     let context = Some(KEY_CONTEXT);
     cx.bind_keys([
-        KeyBinding::new("cmd-alt-b", TogglePanel, context),
-        KeyBinding::new("cmd-0", ResetView, context),
-        KeyBinding::new("cmd-e", ExportStructure, context),
+        KeyBinding::new("secondary-alt-b", TogglePanel, context),
+        KeyBinding::new("secondary-0", ResetView, context),
+        KeyBinding::new("secondary-e", ExportStructure, context),
         // Text fields undo their own typing in their deeper context.
-        KeyBinding::new("cmd-z", Undo, context),
-        KeyBinding::new("cmd-shift-z", Redo, context),
+        KeyBinding::new("secondary-z", Undo, context),
+        KeyBinding::new("secondary-shift-z", Redo, context),
         // Text fields bind these keys in their own, deeper context, so typing
         // still edits text.
         KeyBinding::new("m", ToggleMeasure, context),

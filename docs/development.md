@@ -302,7 +302,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 1. 在拥有它的 crate 里用 `gpui_kit::actions!` 定义动作。
 2. 在该视图上用 `.on_action(cx.listener(...))` 处理。
-3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。
+3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。修饰键写 `secondary-`（macOS 上是 ⌘，Linux 和 Windows 上是 Ctrl），不写 `cmd-`：`cmd-` 在 Linux 和 Windows 上是 Super / Win 键。界面集成测试里按快捷键同样写 `secondary-`（GPUI 输入框的全选、撤销在 macOS 上绑 `cmd-`，在其他平台上绑 `ctrl-`）；判断鼠标事件的修饰键用 `Modifiers::secondary()`。
 4. 加进命令面板：结构相关的加到 `mw_structure::palette_commands()`，外壳命令加到 `apps/workbench/src/palette.rs`。关键词里写英文名和拼音。
 5. 按钮、菜单都派发同一个动作，不要各自复制一份逻辑。
 

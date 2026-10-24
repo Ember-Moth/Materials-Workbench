@@ -84,7 +84,7 @@ fn focus_workspace(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestCo
 fn type_into(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str) {
     cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
     draw(cx);
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input(text);
     cx.simulate_keystrokes("enter");
     draw(cx);
@@ -95,7 +95,7 @@ fn type_into(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str)
 fn type_text(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str) {
     cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
     draw(cx);
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input(text);
     draw(cx);
 }
@@ -205,7 +205,7 @@ fn the_selection_stays_ringed_through_edits(cx: &mut TestAppContext) {
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
 
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
 }
@@ -225,11 +225,11 @@ fn typed_cell_parameters_follow_the_symmetry_and_undo(cx: &mut TestAppContext) {
     focus_workspace(&workspace, &mut cx);
     assert_eq!(steps(&workspace, &mut cx), 1);
 
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(cell(&workspace, CellParam::B, &mut cx), 4.594);
     assert_eq!(text(&a, &mut cx), "4.594");
-    cx.simulate_keystrokes("cmd-shift-z");
+    cx.simulate_keystrokes("secondary-shift-z");
     draw(&mut cx);
     assert_eq!(cell(&workspace, CellParam::A, &mut cx), 4.7);
 }
@@ -291,7 +291,7 @@ fn mixed_occupancy_from_the_occupant_fields(cx: &mut TestAppContext) {
     type_into(&mut cx, &f, "0.2");
     assert_eq!(occupancies(&mut cx), [0.75, 0.2]);
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z cmd-z cmd-z");
+    cx.simulate_keystrokes("secondary-z secondary-z secondary-z");
     draw(&mut cx);
     assert_eq!(occupancies(&mut cx), [1.0]);
     let labels = workspace.read_with(&cx, |workspace, _| workspace.occupants.len());
@@ -346,11 +346,11 @@ fn labels_are_renamed_from_their_field_and_undo(cx: &mut TestAppContext) {
     assert_eq!(steps(&workspace, &mut cx), 2);
 
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z cmd-z");
+    cx.simulate_keystrokes("secondary-z secondary-z");
     draw(&mut cx);
     assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O1"]);
     assert_eq!(text(&field, &mut cx), "O1");
-    cx.simulate_keystrokes("cmd-shift-z");
+    cx.simulate_keystrokes("secondary-shift-z");
     draw(&mut cx);
     assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O2"]);
     assert_eq!(text(&field, &mut cx), "O2");
@@ -428,7 +428,7 @@ fn delete_removes_whole_sites_and_undo_brings_them_back(cx: &mut TestAppContext)
     let selected = workspace.read_with(&cx, |workspace, _| workspace.selected_site());
     assert_eq!(selected, None);
 
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(
         sites(&workspace, &mut cx),
@@ -464,7 +464,7 @@ fn a_cell_off_its_symmetry_is_aligned_in_one_step(cx: &mut TestAppContext) {
     draw(&mut cx);
     assert_eq!(steps(&workspace, &mut cx), 1);
 
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(cell(&workspace, CellParam::B, &mut cx), 3.9051);
     assert_eq!(cell(&workspace, CellParam::Alpha, &mut cx), 90.01);
@@ -553,7 +553,7 @@ fn typed_coordinates_keep_the_special_position(cx: &mut TestAppContext) {
     assert_eq!(notifications(&mut cx), before + 2);
 
     focus_workspace(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(position(&rutile, o1, &mut cx), [0.31, 0.31, 0.0]);
     assert_eq!(text(&x, &mut cx), "0.31");
@@ -629,7 +629,7 @@ fn dragging_an_atom_moves_its_site_along_its_special_position(cx: &mut TestAppCo
     assert_eq!(selected, [Target::Atom(atom)]);
 
     focus_workspace(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(position(&rutile, o1, &mut cx), [0.3048, 0.3048, 0.0]);
 }
@@ -858,7 +858,7 @@ fn converting_to_p1_follows_the_selection_and_undoes_at_once(cx: &mut TestAppCon
     assert_eq!(ringed(&rutile, &mut cx), (1, true));
 
     focus_workspace(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(sites(&rutile, &mut cx), [SiteId(1), SiteId(2)]);
     let selected = rutile.read_with(&cx, |workspace, _| workspace.selection.targets());
@@ -894,7 +894,7 @@ fn the_delete_dialog_converts_to_p1_and_deletes_one_atom(cx: &mut TestAppContext
     assert_eq!(labels, ["Sr1", "Ti1", "O1_1", "O1_3"]);
     assert_eq!(steps(&srtio3, &mut cx), 1);
     focus_workspace(&srtio3, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(sites(&srtio3, &mut cx), [SiteId(1), SiteId(2), SiteId(3)]);
 }
@@ -944,7 +944,7 @@ fn an_edit_renders_one_frame(cx: &mut TestAppContext) {
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
 
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(frames(&workspace, &mut cx), before + 2);
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
@@ -1172,7 +1172,7 @@ fn transforming_the_cell(cx: &mut TestAppContext) {
 
     // One undo puts the conventional cell and the selection back.
     focus_workspace(&salt, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(cell(&salt, CellParam::Alpha, &mut cx), 90.0);
     let selected = salt.read_with(&cx, |workspace, _| workspace.selection.targets());
@@ -1322,7 +1322,7 @@ fn symmetrizing_a_p1_structure(cx: &mut TestAppContext) {
 
     // One undo puts the supercell and the selection back.
     focus_workspace(&supercell, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(sites(&supercell, &mut cx).len(), 48);
     let selected = supercell.read_with(&cx, |workspace, _| workspace.selection.targets());

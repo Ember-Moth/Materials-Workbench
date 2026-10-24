@@ -176,7 +176,7 @@ fn a_project_comes_back_as_it_was_saved(cx: &mut TestAppContext) {
     let view = cx.update(|_, cx| rutile.read(cx).view(cx));
 
     focus(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
     assert!(!rutile.read_with(&cx, |workspace, _| workspace.is_modified()));
@@ -270,7 +270,7 @@ fn imported_files_are_saved_with_their_copy(cx: &mut TestAppContext) {
     assert!(unsaved(&workbench, &mut cx));
 
     focus(&workspace(&workbench, &mut cx), &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
 
@@ -332,7 +332,7 @@ fn poscar_files_are_imported_and_saved_with_their_copy(cx: &mut TestAppContext) 
     assert_eq!(notifications(&mut cx), before + 2);
 
     focus(&workspace(&workbench, &mut cx), &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
 
@@ -396,7 +396,7 @@ fn supercells_join_the_project_as_derived_structures(cx: &mut TestAppContext) {
     assert_eq!(names, ["SrTiO₃".to_string(), name.clone()]);
 
     focus(&workspace(&workbench, &mut cx), &mut cx);
-    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_keystrokes("secondary-s");
     draw(&mut cx);
     assert!(!unsaved(&workbench, &mut cx));
 
