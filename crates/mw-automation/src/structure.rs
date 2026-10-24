@@ -3,15 +3,13 @@
 //! by stable ids.
 
 use mw_crystal::{
-    AtomRef, Axis, CellParam, CellPreset, CellTransform, CellValues, Constraint,
+    AtomRef, Axis, CellParam, CellPreset, CellTransform, CellValues, Command, Constraint,
     CoordinateConstraint, CrystalDocument, DetectSymmetry, Edit, EditError, EditMode, Formula,
     Measured, Measurement, Outcome, Rational, Setting, SiteId, SpaceGroupType, Species, Structure,
-    Symmetrization, Target,
+    Symmetrization, Target, make_supercell,
 };
 
-use crate::registry::{
-    Availability, CallError, Effect, Host, Output, Registry, Spec, StructureEntryId,
-};
+use crate::registry::{CallError, Effect, Host, Output, Registry, Spec, StructureEntryId};
 use crate::schema::{NonEmpty, schema_struct, string_enum};
 
 /// Neighbors returned at most.
@@ -20,6 +18,9 @@ const MAX_NEIGHBORS: usize = 100;
 const MAX_CUTOFF: f64 = 10.0;
 /// Sites per page.
 const MAX_SITES: u32 = 500;
+/// Atoms a supercell may have; the interface warns from here on that
+/// showing it is slow, and a model has no reason to go further.
+pub const MAX_SUPERCELL_ATOMS: usize = 100_000;
 
 schema_struct! {
     pub struct StructureInput {
@@ -534,6 +535,57 @@ schema_struct! {
 }
 
 schema_struct! {
+    pub struct MakeSupercellInput {
+        /// The structure's id, from structure.list.
+        pub structure: StructureEntryId,
+        /// The integer matrix M by rows: the supercell's basis vectors are
+        /// A·M, so [[2,0,0],[0,2,0],[0,0,2]] doubles every axis. Its
+        /// determinant, the number of cells the supercell holds, must be
+        /// positive.
+        pub matrix: [[i32; 3]; 3],
+        /// The new structure's name; empty for the default, e.g. 金红石
+        /// 2×2×2 supercell.
+        pub name: String,
+    }
+}
+
+schema_struct! {
+    pub struct MakeSupercellOutput {
+        /// The new structure's id; it is open.
+        pub structure: StructureEntryId,
+        pub name: String,
+        /// The structure it was made from.
+        pub source: StructureEntryId,
+        /// Cells of the original the supercell holds, det M.
+        pub cells: i64,
+        /// Sites of the supercell, which is in P1: one per atom.
+        pub sites: usize,
+        pub cell: CellOutput,
+    }
+}
+
+/// The default name of a supercell made by `matrix`, e.g. `金红石 2×2×2
+/// supercell`; hosts with an interface language may name it in that.
+pub fn supercell_name(base: &str, matrix: [[i32; 3]; 3]) -> String {
+    let diagonal = (0..3).all(|i| (0..3).all(|j| i == j || matrix[i][j] == 0));
+    if diagonal {
+        format!(
+            "{base} {}×{}×{} supercell",
+            matrix[0][0], matrix[1][1], matrix[2][2]
+        )
+    } else {
+        format!("{base} supercell")
+    }
+}
+
+fn determinant(m: &[[i32; 3]; 3]) -> i64 {
+    let m = m.map(|row| row.map(i64::from));
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
+schema_struct! {
     pub struct SymmetrizeOutput {
         /// False when nothing changed.
         pub changed: bool,
@@ -584,23 +636,17 @@ pub(crate) fn document(
     host.document(id).ok_or_else(|| missing(host, id))
 }
 
-pub(crate) fn document_mut(
+/// Runs an edit through the host as one undo step of the calling client
+/// (design §5.3), and gives the document as it is afterwards.
+pub(crate) fn run(
     host: &mut dyn Host,
     id: StructureEntryId,
-) -> Result<&mut CrystalDocument, CallError> {
-    // Checked first: the borrow checker does not let the error branch use
-    // `host` once `document_mut` has borrowed it for the result.
-    if host.document(id).is_none() {
-        return Err(missing(host, id));
-    }
-    // The application edits through its interface, which updates what it
-    // shows; capabilities get to edit there with v0.3 (design §5.1).
-    host.document_mut(id).ok_or_else(|| {
-        CallError::new(
-            "read_only",
-            format!("structure {} cannot be edited from here", id.0),
-        )
-    })
+    edit: Edit,
+) -> Result<(&CrystalDocument, Outcome), CallError> {
+    document(host, id)?;
+    let agent = host.agent();
+    let outcome = host.execute(id, Command::Edit(edit), agent)?;
+    Ok((document(host, id)?, outcome))
 }
 
 /// Why there is no document: a structure of a project that is not open
@@ -953,18 +999,8 @@ fn atom_text(structure: &Structure, atom: AtomRef) -> String {
 }
 
 pub(crate) fn register(registry: &mut Registry) {
-    let query = |name, description| Spec {
-        name,
-        description,
-        effect: Effect::ReadOnly,
-        availability: Availability::Both,
-    };
-    let edit = |name, description| Spec {
-        name,
-        description,
-        effect: Effect::Undoable,
-        availability: Availability::Both,
-    };
+    let query = |name, description| Spec::new(name, description, Effect::ReadOnly);
+    let edit = |name, description| Spec::new(name, description, Effect::Undoable);
 
     registry.register(
         query(
@@ -1288,7 +1324,8 @@ pub(crate) fn register(registry: &mut Registry) {
              another changes with it (setting a of a tetragonal cell sets b too) and a fixed one, \
              such as a 90° angle, cannot change; structure.summary lists both. The result always \
              keeps the symmetry, so it also aligns a cell imported slightly off it. Undoable.",
-        ),
+        )
+        .idempotent(),
         |host: &mut dyn Host, input: SetCellInput| {
             let mut values = CellValues::default();
             for item in &input.values.0 {
@@ -1297,8 +1334,7 @@ pub(crate) fn register(registry: &mut Registry) {
                 }
                 values = values.with(item.parameter, item.value);
             }
-            let document = document_mut(host, input.structure)?;
-            let outcome = document.edit(Edit::SetCell { values })?;
+            let (document, outcome) = run(host, input.structure, Edit::SetCell { values })?;
             let output = edit_output(document, outcome, Vec::new());
             let summary = edit_summary(
                 &output,
@@ -1315,17 +1351,19 @@ pub(crate) fn register(registry: &mut Registry) {
              of its site. The label stays; rename it with structure.rename_label. Replacing only \
              some equivalent atoms would break the symmetry and is refused; the error suggests \
              replacing all of them or converting the structure to P1. Undoable.",
-        ),
+        )
+        .idempotent(),
         |host: &mut dyn Host, input: SetElementInput| {
             let element = element_symbol(&input.element);
-            let document = document_mut(host, input.structure)?;
+            let document = document(host, input.structure)?;
             let site = occupant_site(document.structure(), &input.occupant)?;
             whole_site(document, site, &input.atoms)?;
-            let outcome = document.edit(Edit::SetSpecies {
+            let edit = Edit::SetSpecies {
                 site,
                 occupant: input.occupant.clone(),
                 species: Species::element(&element),
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let count = document.derived().multiplicity(site).unwrap_or(0);
             let output = edit_output(document, outcome, vec![site]);
             let summary = edit_summary(
@@ -1346,16 +1384,18 @@ pub(crate) fn register(registry: &mut Registry) {
              its site; more than 0 and at most 1. Warns when a site's occupancies add up to more \
              than 1.01. Changing only some equivalent atoms would break the symmetry and is \
              refused. Undoable.",
-        ),
+        )
+        .idempotent(),
         |host: &mut dyn Host, input: SetOccupancyInput| {
-            let document = document_mut(host, input.structure)?;
+            let document = document(host, input.structure)?;
             let site = occupant_site(document.structure(), &input.occupant)?;
             whole_site(document, site, &input.atoms)?;
-            let outcome = document.edit(Edit::SetOccupancy {
+            let edit = Edit::SetOccupancy {
                 site,
                 occupant: input.occupant.clone(),
                 occupancy: Measured::exact(input.occupancy),
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, vec![site]);
             let summary = edit_summary(
                 &output,
@@ -1375,16 +1415,17 @@ pub(crate) fn register(registry: &mut Registry) {
              For example Fe to Fe0.9Ni0.1: add Ni at 0.1, then set Fe to 0.9 with \
              structure.set_occupancy. The new occupant's label is its element symbol and the \
              smallest unused number, e.g. Ni1. Undoable.",
-        ),
+        )
+        .additive(),
         |host: &mut dyn Host, input: AddOccupantInput| {
             let element = element_symbol(&input.element);
-            let document = document_mut(host, input.structure)?;
-            let outcome = document.edit(Edit::AddOccupant {
+            let edit = Edit::AddOccupant {
                 site: input.site,
                 species: Species::element(&element),
                 occupancy: Measured::exact(input.occupancy),
                 label: None,
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let structure = document.structure();
             let new_label = structure
                 .site(input.site)
@@ -1410,12 +1451,15 @@ pub(crate) fn register(registry: &mut Registry) {
              keeps at least one occupant: to remove the last one, delete the site. Undoable.",
         ),
         |host: &mut dyn Host, input: OccupantInput| {
-            let document = document_mut(host, input.structure)?;
-            let site = occupant_site(document.structure(), &input.occupant)?;
-            let outcome = document.edit(Edit::RemoveOccupant {
+            let site = occupant_site(
+                document(host, input.structure)?.structure(),
+                &input.occupant,
+            )?;
+            let edit = Edit::RemoveOccupant {
                 site,
                 occupant: input.occupant.clone(),
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, vec![site]);
             let summary = edit_summary(&output, format!("Removed {}.", input.occupant));
             Ok(Output::new(output, summary))
@@ -1426,15 +1470,19 @@ pub(crate) fn register(registry: &mut Registry) {
         edit(
             "structure.rename_label",
             "Rename an occupant's label. Labels are unique in a structure. Undoable.",
-        ),
+        )
+        .idempotent(),
         |host: &mut dyn Host, input: RenameInput| {
-            let document = document_mut(host, input.structure)?;
-            let site = occupant_site(document.structure(), &input.occupant)?;
-            let outcome = document.edit(Edit::RenameLabel {
+            let site = occupant_site(
+                document(host, input.structure)?.structure(),
+                &input.occupant,
+            )?;
+            let edit = Edit::RenameLabel {
                 site,
                 occupant: input.occupant.clone(),
                 label: input.label.clone(),
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, vec![site]);
             let summary = edit_summary(
                 &output,
@@ -1464,7 +1512,7 @@ pub(crate) fn register(registry: &mut Registry) {
             if targets.is_empty() {
                 return Err(invalid("name at least one site or atom"));
             }
-            let document = document_mut(host, input.structure)?;
+            let document = document(host, input.structure)?;
             let sites = document.target_sites(&targets)?;
             let deleted: Vec<String> = sites
                 .iter()
@@ -1486,7 +1534,7 @@ pub(crate) fn register(registry: &mut Registry) {
             } else {
                 Edit::Batch { edits }
             };
-            let outcome = document.edit(edit)?;
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, sites);
             let summary = edit_summary(&output, format!("Deleted {}.", deleted.join(", ")));
             Ok(Output::new(output, summary))
@@ -1501,13 +1549,14 @@ pub(crate) fn register(registry: &mut Registry) {
              within 0.01 Å of a special position it snaps onto it, so its number of equivalent \
              atoms can change, as info reports. Warns when an atom comes closer to another than the \
              short-contact distance, 0.5 Å by default. Undoable.",
-        ),
+        )
+        .idempotent(),
         |host: &mut dyn Host, input: SetPositionInput| {
-            let document = document_mut(host, input.structure)?;
-            let outcome = document.edit(Edit::SetPosition {
+            let edit = Edit::SetPosition {
                 site: input.site,
                 position: input.position,
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, vec![input.site]);
             let summary = edit_summary(
                 &output,
@@ -1530,13 +1579,13 @@ pub(crate) fn register(registry: &mut Registry) {
              closer than 0.5 Å. Undoable.",
         ),
         |host: &mut dyn Host, input: MoveSiteInput| {
-            let document = document_mut(host, input.structure)?;
             let site = input.atom.site;
-            let outcome = document.edit(Edit::MoveSite {
+            let edit = Edit::MoveSite {
                 atom: input.atom,
                 displacement: input.displacement,
                 leave_special_position: input.leave_special_position,
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, vec![site]);
             let summary = edit_summary(&output, format!("Moved {}.", site_text(document, site)));
             Ok(Output::new(output, summary))
@@ -1553,14 +1602,15 @@ pub(crate) fn register(registry: &mut Registry) {
              (fixed_coordinate) or a combination of free ones (combined_coordinate) cannot be \
              set; structure.set_position moves a site off its special position. Snaps onto a \
              special position with more symmetry within 0.01 Å. Undoable.",
-        ),
+        )
+        .idempotent(),
         |host: &mut dyn Host, input: SetCoordinateInput| {
-            let document = document_mut(host, input.structure)?;
-            let outcome = document.edit(Edit::SetCoordinate {
+            let edit = Edit::SetCoordinate {
                 site: input.site,
                 axis: input.axis,
                 value: input.value,
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = edit_output(document, outcome, vec![input.site]);
             let summary = edit_summary(
                 &output,
@@ -1591,10 +1641,11 @@ pub(crate) fn register(registry: &mut Registry) {
              Atom references and measurements follow the atoms. Undoable.",
         ),
         |host: &mut dyn Host, input: TransformCellInput| {
-            let document = document_mut(host, input.structure)?;
+            let document = document(host, input.structure)?;
             let before = document.derived().atoms_in_cell();
             let transform = cell_transform(document, &input)?;
-            let outcome = document.edit(Edit::TransformCell { transform })?;
+            let (document, outcome) =
+                run(host, input.structure, Edit::TransformCell { transform })?;
             let derived = document.derived();
             let text = |r: &Rational| r.to_string();
             let output = TransformCellOutput {
@@ -1644,15 +1695,16 @@ pub(crate) fn register(registry: &mut Registry) {
              the atoms to the nearest atom. Undoable.",
         ),
         |host: &mut dyn Host, input: SymmetrizeInput| {
-            let document = document_mut(host, input.structure)?;
+            let document = document(host, input.structure)?;
             let detect = detect_symmetry(document.structure(), &input)?;
             let result = detect
                 .run(document.structure())
                 .map_err(EditError::Symmetrize)?;
-            let outcome = document.edit(Edit::Symmetrize {
+            let edit = Edit::Symmetrize {
                 symprec: (input.tolerance != 0.0).then_some(input.tolerance),
                 standardize: input.standardize,
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             let output = SymmetrizeOutput {
                 changed: outcome.changed,
                 revision: document.revision(),
@@ -1677,16 +1729,17 @@ pub(crate) fn register(registry: &mut Registry) {
              to that site with structure.add_occupant instead. The label is the element symbol \
              and the smallest unused number, e.g. O2. Warns when atoms come closer than 0.5 Å. \
              Undoable.",
-        ),
+        )
+        .additive(),
         |host: &mut dyn Host, input: AddSiteInput| {
             let element = element_symbol(&input.element);
-            let document = document_mut(host, input.structure)?;
-            let outcome = document.edit(Edit::AddSite {
+            let edit = Edit::AddSite {
                 position: input.position,
                 species: Species::element(&element),
                 occupancy: Measured::exact(input.occupancy),
                 label: None,
-            })?;
+            };
+            let (document, outcome) = run(host, input.structure, edit)?;
             // A new site goes to the end of the asymmetric unit.
             let site = document.structure().sites.last().map(|s| s.id);
             let output = edit_output(document, outcome, site.into_iter().collect());
@@ -1696,6 +1749,94 @@ pub(crate) fn register(registry: &mut Registry) {
                     "Added {}.",
                     site.map_or_else(String::new, |site| site_text(document, site))
                 ),
+            );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.convert_to_p1",
+            "Convert the structure to P1: every atom of the unit cell becomes a site of its own, \
+             labelled after its site (Ti1_1, Ti1_2, …; a site with one atom keeps its label), \
+             and the space group becomes P 1. Then single atoms can be edited, replaced or \
+             deleted, which symmetry mode refuses. Atom references and measurements follow the \
+             atoms. A structure in P1 already is refused (already_p1). structure.symmetrize goes \
+             back to a symmetric structure. Undoable.",
+        )
+        .idempotent(),
+        |host: &mut dyn Host, input: StructureInput| {
+            let (document, outcome) = run(host, input.structure, Edit::ExpandToP1)?;
+            let sites = document.structure().sites.len();
+            let output = edit_output(document, outcome, Vec::new());
+            let summary = edit_summary(
+                &output,
+                format!("Converted to P1: {sites} sites, one per atom."),
+            );
+            Ok(Output::new(output, summary))
+        },
+    );
+
+    registry.register(
+        edit(
+            "structure.make_supercell",
+            "Make a supercell of a structure as a new structure of the same project, placed \
+             after it and open: the basis vectors are A·M for the integer matrix M, the \
+             structure is in P1, and each atom's label gets the number of its image (Ti1_1 … \
+             Ti1_16). Partial occupancies, displacement parameters and uncertainties carry over; \
+             the original stays as it was, and measurements stay with it. At most 100000 atoms. \
+             Without the application's window the project file is saved at once.",
+        )
+        .additive(),
+        |host: &mut dyn Host, input: MakeSupercellInput| {
+            let source = document(host, input.structure)?;
+            let det = determinant(&input.matrix);
+            if det <= 0 {
+                return Err(invalid(format!(
+                    "the matrix has determinant {det}; it must be positive"
+                )));
+            }
+            let atoms = source.derived().atoms_in_cell() as u128 * det as u128;
+            if atoms > MAX_SUPERCELL_ATOMS as u128 {
+                return Err(CallError::new(
+                    "too_large",
+                    format!(
+                        "the supercell would have {atoms} atoms, more than \
+                         {MAX_SUPERCELL_ATOMS}; choose a smaller matrix"
+                    ),
+                ));
+            }
+            let structure = make_supercell(source.structure(), input.matrix)
+                .map_err(|error| invalid(error.to_string()))?;
+            let name = (!input.name.trim().is_empty()).then(|| input.name.trim().to_owned());
+            let projects = host.projects_mut().ok_or_else(|| {
+                CallError::new(
+                    "unavailable",
+                    "structure.make_supercell needs a project to add the supercell to",
+                )
+            })?;
+            let id =
+                projects.add_derived(input.structure, name.as_deref(), structure, input.matrix)?;
+            let name = host
+                .projects()
+                .and_then(|p| p.entries().into_iter().find(|e| e.structure == id))
+                .map_or_else(String::new, |e| e.name);
+            let document = document(host, id)?;
+            let output = MakeSupercellOutput {
+                structure: id,
+                name,
+                source: input.structure,
+                cells: det,
+                sites: document.structure().sites.len(),
+                cell: cell(document),
+            };
+            let summary = format!(
+                "Made {} (id {}): {} cells, {} atoms; {}.",
+                output.name,
+                id.0,
+                output.cells,
+                output.sites,
+                cell_text(&output.cell)
             );
             Ok(Output::new(output, summary))
         },

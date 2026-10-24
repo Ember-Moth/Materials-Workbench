@@ -89,7 +89,7 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 29 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`）：
+- `Registry::standard()` 注册了 33 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`，M18 加了下面最后两项里的四个）：
   - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
   - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
@@ -97,13 +97,15 @@ Capability
   - 对称模式下的几何编辑（M7，晶体学设计稿 7.4–7.6 节）：`structure.move_site`（拖动一个原子，分数位移，`leave_special_position` 决定是否投影到约束子空间）、`structure.set_coordinate`（`axis` 为 `"x"`/`"y"`/`"z"`，跟随坐标联动，常数坐标返回 `fixed_coordinate`）、`structure.add_site`（元素、分数坐标、占位率，吸附到特殊位置；重合时返回 `coincident_site`，引导 `{"kind": "add_occupant", "site": …}`）。`structure.set_position` 在对称模式下也可用，位点取新位置的位点对称性；
   - 晶胞变换（M8，晶体学设计稿 7.8 节）：`structure.transform_cell`，`cell` 取 `primitive`、`conventional`、`niggli`、`setting`（`setting` 给出 H-M 符号，如 `P 1 1 21/a`、`R -3 c :R`）或 `matrix`（`matrix` 是 P 的三行分数文本，`origin` 是 p，空数组表示原点不动）；不用的字段给空字符串或空数组。结果有变换的 ITA 写法（如 `c, b, -a; 0, 0, 0`）、P 和 p、新的空间群设定、晶胞参数、晶胞内原子数和操作数。拒绝时返回 `transform_not_positive`、`transform_volume`、`transform_not_a_translation`、`transform_breaks_symmetry`、`transform_too_large`，名称不对时 `invalid_arguments`，别的类型的设定 `other_type`，moyo 给不出时 `no_transformation`；
   - 对称性检测与对称化（M9，晶体学设计稿 7.10 节）：只读的 `structure.detect_symmetry` 给出对称化的预览而不改结构：检测到的空间群类型、结果的空间群（保持的晶胞容纳不下全部对称性时是子群）、位点数、晶胞内原子数、操作数、原子的最大位移和移动最大的位点、是否换晶胞或转朝向、原点移了多远、结果的晶胞；可撤销的 `structure.symmetrize` 执行同样的对称化，输出 `changed`、`revision` 和同一份预览（`result`）。输入相同：`tolerance`（Å，0 表示用结构自己的容差，因为输入不用可空类型）和 `standardize`。拒绝时返回 `symmetrize_no_higher_symmetry`、`symmetrize_not_found`、`symmetrize_mismatch`、`symmetrize_position_tolerance`、`symmetrize_too_large`、`symmetrize_no_atoms`，容差为负时 `invalid_arguments`。只读的那个的说明不提 `structure.symmetrize`：MCP Server 不提供编辑工具，提了只会让客户端去找不存在的工具；
-  - `history.undo`、`history.redo`。
+  - `history.undo`、`history.redo`；
+  - M18（5.3 节）：可撤销的 `structure.convert_to_p1`（已经是 P1 时返回 `already_p1`）、`structure.make_supercell`（`matrix` 是 M 的三行整数，`name` 为空时用默认名；行列式不为正时 `invalid_arguments`，超过 10 万个原子时 `too_large`）、`file.import`（`project` 给项目 ID，CIF 或 POSCAR），外部副作用的 `structure.export_file`（`overwrite` 为假而文件已存在时 `file_exists`，路径不在允许范围内时 `not_allowed`）。`file.open` 也能读 POSCAR 了：读文件、给结构命名都经 `parse_import`，规则与界面打开文件相同。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
-- `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。
+- `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、视图、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。`Spec::new(name, description, effect)` 默认两种模式都可用；`additive()`、`idempotent()` 给出 MCP 注解要的两个标记（5.3 节），外部副作用的能力必须用 `register_confirmed` 注册，带一个说明"要确认的是什么"的检查函数，否则注册时就 panic。
 - **Schema 由 Rust 类型生成**：输入输出都是用 `schema_struct!` 声明的结构体，同一份字段列表同时生成 serde 类型和 Schema，字段的文档注释就是给模型看的说明，两者不会不一致。没有用 schemars：它生成的 Schema 带有严格子集之外的关键字（`format`、`minimum`、`$schema` 等），还得再改写一遍。
 - **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部只读能力（MCP Server 暴露的那些）放进一个严格请求也合规；能力总数已超过一个严格请求的 20 个工具，所以测试按每 20 个一组检查其余的。输出 Schema 同样在子集内，可以有可空字段。
-- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11）。`Documents` 是放在内存里、没有项目的实现，供测试使用；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），它只读：`document_mut` 返回 `None`，注册表的编辑能力在这样的宿主上返回 `read_only`。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，编辑经 `Host::execute(id, command, agent)`、`undo`、`redo` 交给宿主执行（M18，5.3 节）；有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11；导入和加入派生结构，M18）。`Documents` 是放在内存里、没有项目的实现，供测试使用，它留下客户端调用的审计记录（`audit_log`）；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），在 M18 的阶段 4 之前它拒绝编辑（`read_only`）。处理函数用 `structure::run` 执行编辑：它取 `Host::agent()`（注册表在调用期间包一层宿主，告诉它是哪个客户端），所以客户端的编辑在撤销栈里记在它名下。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **调用的上下文**（M18，7.2 节）：`Registry::call` 是用户自己的调用（脚本、命令行），什么都能做；`Registry::call_as(host, context, name, input)` 带着 `Context`（`Caller` 是用户或 `Client`，`Permissions`，是否已确认），先查可用性、再查权限，然后才运行处理函数。客户端的每次调用（包括被拒绝的）由 `policy::record` 生成 `AuditRecord`，按调用涉及的结构或项目交给 `Host::audit`。`Registry::confirmation` 给出外部副作用的能力要用户确认的那句话。
 - **参数先按类型反序列化**（拒绝多余字段），类型不对时返回 `invalid_arguments`；范围和单位由处理函数检查。元素符号不区分大小写（`zr` 即 Zr）。
 - **编辑的结果**：`EditOutput` 有 `changed`、`revision`、作用到的 `sites`、`warnings`，以及 `info`（M7）：编辑在要求之外做了什么，`snapped`（吸附到特殊位置）或 `multiplicity`（等效原子数变了）。摘要里写成 `Note: …`；移动位点的摘要写明它最后的位置、等效原子数和 Wyckoff 位置。
 - **错误可恢复**：`CallError` 有稳定的 `code`、英文的 `message` 和引导 `guidance`。例如对称模式下只给 Ti1 的一个等效原子换元素，返回 `breaks_symmetry`，引导为"改整个位点"或"转为 P1"（晶体学设计稿 7.1 节）。

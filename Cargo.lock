@@ -4146,6 +4146,7 @@ dependencies = [
  "mw-project-file",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -55,7 +55,7 @@ pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
     DETECTION_LIMIT, Derived, DisplayAtom, SymmetryAnalysis,
 };
-pub use document::{Annotation, Checkpoint, Command, CrystalDocument, Outcome};
+pub use document::{Agent, Annotation, Checkpoint, Command, CrystalDocument, Outcome};
 pub use edit::{
     Applied, CellValues, Edit, EditError, EditInfo, EditWarning, Guidance, OCCUPANCY_TOLERANCE,
     Target, expand_and_remove, target_sites,

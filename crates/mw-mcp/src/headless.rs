@@ -7,14 +7,14 @@ use std::sync::Arc;
 
 use mw_automation::{
     CallError, EntryInfo, Host, OpenedFile, Opening, ProjectInfo, Projects, RecentProject,
-    RecentProjects, SkippedBlock, StructureEntryId, StructureInfo, duplicate_project, read_error,
+    RecentProjects, StructureEntryId, StructureInfo, duplicate_project, parse_import, read_error,
     unknown_structure,
 };
-use mw_crystal::CrystalDocument;
-use mw_crystal_io::{ImportedBlock, cif};
+use mw_crystal::{Agent, Command, CrystalDocument, Outcome};
+use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
-    EntryId, EntryKind, Import, ProjectDir, ProjectId, Provenance, Sha256, SourceFormat, Timestamp,
-    read_manifest, structure_sha256,
+    EntryId, EntryKind, ProjectDir, ProjectId, Provenance, Sha256, Timestamp, read_manifest,
+    structure_sha256,
 };
 
 use crate::access::Access;
@@ -96,6 +96,15 @@ impl Headless {
             .find(|entry| entry.id == id)
     }
 
+    fn document_mut(&mut self, id: StructureEntryId) -> Result<&mut CrystalDocument, CallError> {
+        self.projects
+            .iter_mut()
+            .flat_map(|project| project.entries.iter_mut())
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.document.as_mut())
+            .ok_or_else(|| unknown_structure(id))
+    }
+
     /// The project for files opened outside any project, made on first use.
     fn untitled(&mut self) -> &mut Project {
         let index = match self.projects.iter().position(|p| p.dir.is_none()) {
@@ -152,13 +161,21 @@ impl Host for Headless {
         self.entry(id)?.document.as_ref()
     }
 
-    fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument> {
-        self.projects
-            .iter_mut()
-            .flat_map(|project| project.entries.iter_mut())
-            .find(|entry| entry.id == id)?
-            .document
-            .as_mut()
+    fn execute(
+        &mut self,
+        id: StructureEntryId,
+        command: Command,
+        agent: Option<Agent>,
+    ) -> Result<Outcome, CallError> {
+        Ok(self.document_mut(id)?.execute_by(command, agent)?)
+    }
+
+    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        Ok(self.document_mut(id)?.undo())
+    }
+
+    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        Ok(self.document_mut(id)?.redo())
     }
 
     fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
@@ -273,41 +290,11 @@ impl Projects for Headless {
         {
             return Ok((record.file.clone(), Opening::AlreadyOpen));
         }
-        let report = cif::read(&bytes);
-        let skipped = report
-            .failed_blocks()
-            .map(|block| SkippedBlock::new(&block.name, block.line, block.diagnostics.clone()))
-            .collect();
-        let file_name = path
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let stem = path
-            .file_stem()
-            .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
-        let several = report.structures().count() > 1;
+        let parsed = parse_import(&path, bytes)?;
         let now = Timestamp::now();
         let mut structures = Vec::new();
-        for (block, structure) in report.structures() {
-            // Named and with the file's diagnostics, as the interface opens
-            // files (mw-structure/src/import.rs).
-            let name = if several {
-                format!("{stem} · {}", block.name)
-            } else {
-                stem.clone()
-            };
-            let mut block = block.clone();
-            block
-                .diagnostics
-                .splice(0..0, report.diagnostics.iter().cloned());
-            let import = Import::new(
-                SourceFormat::Cif,
-                &file_name,
-                Some(path.display().to_string()),
-                sha256.clone(),
-                &block.name,
-                now.clone(),
-                structure_sha256(structure),
-            );
+        for (name, block) in &parsed.structures {
+            let import = parsed.import(block, now.clone());
             let entry = mw_project_file::Entry::new(
                 EntryId::new(),
                 EntryKind::CrystalStructure,
@@ -316,15 +303,15 @@ impl Projects for Headless {
             );
             let id = self.next_id();
             structures.push(id);
-            let document = CrystalDocument::new(structure.clone());
+            let structure = block.structure.clone().expect("imported blocks hold one");
             self.untitled().entries.push(Entry {
                 id,
                 entry,
-                document: Some(document),
-                source: Some(Arc::new(block)),
+                document: Some(CrystalDocument::new(structure)),
+                source: Some(Arc::new(block.clone())),
             });
         }
-        let file = OpenedFile::new(path, structures, skipped, report.diagnostics);
+        let file = OpenedFile::new(path, structures, parsed.skipped, parsed.diagnostics);
         if !file.structures.is_empty() {
             self.files.push(OpenedRecord {
                 sha256,

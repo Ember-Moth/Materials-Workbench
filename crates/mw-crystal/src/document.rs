@@ -34,6 +34,22 @@ pub struct Annotation {
     pub stale: bool,
 }
 
+/// Who made an undo step when it was not the user at the keyboard: an AI
+/// client, by the name it shows (ai-integration design §5.3). The step keeps
+/// it through undo and redo; it is not saved with the document.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Agent(Arc<str>);
+
+impl Agent {
+    pub fn new(name: impl Into<Arc<str>>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A state of a document's history, for [`CrystalDocument::mark_saved`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Checkpoint(Option<u64>);
@@ -58,6 +74,8 @@ struct Step {
     /// Unique within the document, for telling the saved state apart.
     id: u64,
     command: Command,
+    /// `None` for the user's own step.
+    agent: Option<Agent>,
     /// For a structure edit, the edits that undo and redo it. Each is the
     /// inverse the other gave when it was last applied, so both restore
     /// exactly.
@@ -180,6 +198,16 @@ impl CrystalDocument {
     /// Runs a command as one undo step and clears the redo history. On
     /// error, nothing changes.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, EditError> {
+        self.execute_by(command, None)
+    }
+
+    /// Runs a command as [`Self::execute`] does, as a step `agent` made, or
+    /// the user for `None`.
+    pub fn execute_by(
+        &mut self,
+        command: Command,
+        agent: Option<Agent>,
+    ) -> Result<Outcome, EditError> {
         let before = self.annotations.clone();
         let (edits, outcome) = match &command {
             Command::Edit(edit) => {
@@ -233,6 +261,7 @@ impl CrystalDocument {
         self.done.push(Step {
             id: self.next_step,
             command,
+            agent,
             edits,
             before,
             after: self.annotations.clone(),
@@ -300,6 +329,16 @@ impl CrystalDocument {
     /// The command that [`Self::redo`] would redo.
     pub fn redo_command(&self) -> Option<&Command> {
         self.undone.last().map(|step| &step.command)
+    }
+
+    /// Who made the step [`Self::undo`] would undo, if not the user.
+    pub fn undo_agent(&self) -> Option<&Agent> {
+        self.done.last()?.agent.as_ref()
+    }
+
+    /// Who made the step [`Self::redo`] would redo, if not the user.
+    pub fn redo_agent(&self) -> Option<&Agent> {
+        self.undone.last()?.agent.as_ref()
     }
 
     /// The commands that made the current state, oldest first: the record
@@ -409,6 +448,25 @@ mod tests {
         .unwrap();
         assert_eq!(doc.redo_command(), None);
         assert_eq!(doc.history().count(), 2);
+    }
+
+    #[test]
+    fn steps_keep_who_made_them() {
+        let mut doc = document(SampleKey::StrontiumTitanate);
+        let a = |a: f64| Edit::SetCell {
+            values: CellValues::default().with(CellParam::A, a),
+        };
+        doc.edit(a(4.0)).unwrap();
+        assert_eq!(doc.undo_agent(), None);
+        let claude = Agent::new("Claude Code");
+        doc.execute_by(Command::Edit(a(4.1)), Some(claude.clone()))
+            .unwrap();
+        assert_eq!(doc.undo_agent(), Some(&claude));
+        doc.undo().unwrap();
+        assert_eq!(doc.undo_agent(), None);
+        assert_eq!(doc.redo_agent(), Some(&claude));
+        doc.redo().unwrap();
+        assert_eq!(doc.undo_agent().map(Agent::name), Some("Claude Code"));
     }
 
     #[test]

@@ -28,16 +28,9 @@ enum ReadError {
 /// The format a file is read as, from its name: `.cif` is CIF; `.vasp`,
 /// `.poscar` and names that start with POSCAR or CONTCAR (`POSCAR`,
 /// `CONTCAR`, `POSCAR-001`, `CONTCAR.relax`) are POSCAR.
+/// MCP clients import by the same rule (`SourceFormat::of_path`).
 pub fn format_of(path: &std::path::Path) -> Option<SourceFormat> {
-    let extension = path.extension().and_then(|e| e.to_str());
-    let is =
-        |names: &[&str]| extension.is_some_and(|e| names.iter().any(|n| e.eq_ignore_ascii_case(n)));
-    if is(&["cif"]) {
-        return Some(SourceFormat::Cif);
-    }
-    let name = path.file_name()?.to_str()?.to_ascii_uppercase();
-    (is(&["vasp", "poscar"]) || name.starts_with("POSCAR") || name.starts_with("CONTCAR"))
-        .then_some(SourceFormat::Poscar)
+    SourceFormat::of_path(path)
 }
 
 /// One file the user asked to open, read and parsed.

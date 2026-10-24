@@ -16,3 +16,4 @@ serde_json.workspace = true
 # Only to check that every schema is in the strict subset tools use
 # (docs/design/ai-integration.md §6.2.6).
 mw-llm.workspace = true
+tempfile.workspace = true

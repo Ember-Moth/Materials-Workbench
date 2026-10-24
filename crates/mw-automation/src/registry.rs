@@ -1,12 +1,15 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use mw_crystal::{CrystalDocument, EditError, Guidance};
+use mw_crystal::{Agent, Command, CrystalDocument, EditError, Guidance, Outcome};
 use mw_crystal_io::ImportedBlock;
+use mw_project_file::{AuditRecord, EntryId, ProjectId};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::policy::{self, Context};
 use crate::project::Projects;
 use crate::schema::Schema;
 
@@ -24,11 +27,16 @@ impl Schema for StructureEntryId {
 }
 
 /// What calling a capability can change (design §7.1). Clients decide from
-/// it whether a call needs the user's confirmation.
+/// it whether a call needs the user's confirmation; the registry decides
+/// from it what a client may run (design §7.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Effect {
     ReadOnly,
-    /// Changes a document through its undo stack.
+    /// Changes only what the window shows: the selection, the display
+    /// model, the camera. No data, no undo step.
+    View,
+    /// Changes a document through its undo stack, or adds a structure to a
+    /// project.
     Undoable,
     /// Irreversible, or reaches outside the application: writing files,
     /// sending data elsewhere.
@@ -67,14 +75,28 @@ impl StructureInfo {
 }
 
 /// Where capabilities find the documents they work on: the running
-/// application, or a session without a window ([`Documents`]).
+/// application, the MCP server reading project files, or documents held in
+/// memory ([`Documents`]).
 pub trait Host {
     /// The structures callers can name, in listing order.
     fn structures(&self) -> Vec<StructureInfo>;
     fn document(&self, id: StructureEntryId) -> Option<&CrystalDocument>;
-    /// `None` for a document capabilities may read but not edit, as in
-    /// the application for now: edits there go through its interface.
-    fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument>;
+    /// Runs a command on a structure as one undo step made by `agent`
+    /// (`None` for the user), the way the host shows and keeps its edits:
+    /// the application through its workspace, the server without a window
+    /// saving the project afterwards (design §5.3). Only called for a
+    /// structure [`Self::document`] has.
+    fn execute(
+        &mut self,
+        id: StructureEntryId,
+        command: Command,
+        agent: Option<Agent>,
+    ) -> Result<Outcome, CallError>;
+    /// Undoes the structure's last step, whoever made it; `None` when there
+    /// was none.
+    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError>;
+    /// Redoes the structure's last undone step; `None` when there was none.
+    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError>;
     /// The data block the structure was read from: its import diagnostics,
     /// and the CIF fields the structure does not hold. `None` for a
     /// structure that came from no file, such as a sample.
@@ -96,13 +118,35 @@ pub trait Host {
     fn projects_mut(&mut self) -> Option<&mut dyn Projects> {
         None
     }
+    /// The client making the current call, whose edits become its undo
+    /// steps. The registry tells hosts during each call
+    /// ([`Registry::call_as`]); hosts need not implement it.
+    fn agent(&self) -> Option<Agent> {
+        None
+    }
+    /// Keeps the record of a client's call for the audit log of `project`
+    /// (design §7.3). Hosts without projects drop it.
+    fn audit(&mut self, project: Option<ProjectId>, record: AuditRecord) {
+        let _ = (project, record);
+    }
+    /// The canonical path of a file a client asked to write, if it may:
+    /// inside the directories the user allowed or an open project's
+    /// directory (design §7.2).
+    fn writable(&self, path: &str) -> Result<PathBuf, CallError> {
+        let _ = path;
+        Err(CallError::new(
+            "unavailable",
+            "writing files is not available in this mode",
+        ))
+    }
 }
 
 /// Documents held in memory, without a window: for tests, and later for the
-/// MCP server's headless mode and the command line.
+/// command line. Records of clients' calls are kept ([`Self::audit_log`]).
 #[derive(Clone, Debug, Default)]
 pub struct Documents {
     entries: Vec<Entry>,
+    audit: Vec<AuditRecord>,
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +183,11 @@ impl Documents {
         self.push(name.into(), project.into(), document, Some(source))
     }
 
+    /// The records of clients' calls, oldest first.
+    pub fn audit_log(&self) -> &[AuditRecord] {
+        &self.audit
+    }
+
     fn push(
         &mut self,
         name: String,
@@ -159,6 +208,14 @@ impl Documents {
     fn entry(&self, id: StructureEntryId) -> Option<&Entry> {
         self.entries.iter().find(|entry| entry.info.id == id)
     }
+
+    fn document_mut(&mut self, id: StructureEntryId) -> Result<&mut CrystalDocument, CallError> {
+        self.entries
+            .iter_mut()
+            .find(|entry| entry.info.id == id)
+            .map(|entry| &mut entry.document)
+            .ok_or_else(|| crate::project::unknown_structure(id))
+    }
 }
 
 impl Host for Documents {
@@ -173,15 +230,79 @@ impl Host for Documents {
         self.entry(id).map(|entry| &entry.document)
     }
 
-    fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument> {
-        self.entries
-            .iter_mut()
-            .find(|entry| entry.info.id == id)
-            .map(|entry| &mut entry.document)
+    fn execute(
+        &mut self,
+        id: StructureEntryId,
+        command: Command,
+        agent: Option<Agent>,
+    ) -> Result<Outcome, CallError> {
+        Ok(self.document_mut(id)?.execute_by(command, agent)?)
+    }
+
+    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        Ok(self.document_mut(id)?.undo())
+    }
+
+    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        Ok(self.document_mut(id)?.redo())
     }
 
     fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
         self.entry(id)?.source.as_deref()
+    }
+
+    fn audit(&mut self, _project: Option<ProjectId>, record: AuditRecord) {
+        self.audit.push(record);
+    }
+}
+
+/// The host during one call, which knows the caller's agent.
+struct Calling<'a> {
+    host: &'a mut dyn Host,
+    agent: Option<Agent>,
+}
+
+impl Host for Calling<'_> {
+    fn structures(&self) -> Vec<StructureInfo> {
+        self.host.structures()
+    }
+    fn document(&self, id: StructureEntryId) -> Option<&CrystalDocument> {
+        self.host.document(id)
+    }
+    fn execute(
+        &mut self,
+        id: StructureEntryId,
+        command: Command,
+        agent: Option<Agent>,
+    ) -> Result<Outcome, CallError> {
+        self.host.execute(id, command, agent)
+    }
+    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        self.host.undo(id)
+    }
+    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        self.host.redo(id)
+    }
+    fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {
+        self.host.source(id)
+    }
+    fn has_window(&self) -> bool {
+        self.host.has_window()
+    }
+    fn projects(&self) -> Option<&dyn Projects> {
+        self.host.projects()
+    }
+    fn projects_mut(&mut self) -> Option<&mut dyn Projects> {
+        self.host.projects_mut()
+    }
+    fn agent(&self) -> Option<Agent> {
+        self.agent.clone()
+    }
+    fn audit(&mut self, project: Option<ProjectId>, record: AuditRecord) {
+        self.host.audit(project, record);
+    }
+    fn writable(&self, path: &str) -> Result<PathBuf, CallError> {
+        self.host.writable(path)
     }
 }
 
@@ -280,9 +401,44 @@ pub struct Spec {
     pub description: &'static str,
     pub effect: Effect,
     pub availability: Availability,
+    /// A write that only adds, such as a new site or structure, rather
+    /// than changing or removing what is there (MCP's `destructiveHint`).
+    pub additive: bool,
+    /// Calling it again with the same arguments changes nothing more, as
+    /// for setting a value (MCP's `idempotentHint`). Queries always are.
+    pub idempotent: bool,
+}
+
+impl Spec {
+    pub fn new(name: &'static str, description: &'static str, effect: Effect) -> Self {
+        Self {
+            name,
+            description,
+            effect,
+            availability: Availability::Both,
+            additive: false,
+            idempotent: matches!(effect, Effect::ReadOnly | Effect::View | Effect::External),
+        }
+    }
+
+    pub fn additive(mut self) -> Self {
+        self.additive = true;
+        self
+    }
+
+    pub fn idempotent(mut self) -> Self {
+        self.idempotent = true;
+        self
+    }
+
+    pub fn only(mut self, availability: Availability) -> Self {
+        self.availability = availability;
+        self
+    }
 }
 
 type Handler = Box<dyn Fn(&mut dyn Host, Value) -> Result<CallResult, CallError> + Send + Sync>;
+type Preflight = Box<dyn Fn(&dyn Host, Value) -> Result<String, CallError> + Send + Sync>;
 
 /// One operation that every entry point can call: the interface, scripts,
 /// the command line, MCP clients and the built-in assistant (design §4).
@@ -291,9 +447,16 @@ pub struct Capability {
     pub description: &'static str,
     pub effect: Effect,
     pub availability: Availability,
+    /// See [`Spec::additive`].
+    pub additive: bool,
+    /// See [`Spec::idempotent`].
+    pub idempotent: bool,
     pub input_schema: Value,
     pub output_schema: Value,
     handler: Handler,
+    /// For capabilities that need the user's confirmation: checks the
+    /// arguments and says what the call would do.
+    preflight: Option<Preflight>,
 }
 
 impl fmt::Debug for Capability {
@@ -304,6 +467,54 @@ impl fmt::Debug for Capability {
             .field("availability", &self.availability)
             .finish_non_exhaustive()
     }
+}
+
+impl Capability {
+    fn available(&self, host: &dyn Host) -> Result<(), CallError> {
+        let available = match self.availability {
+            Availability::Gui => host.has_window(),
+            Availability::Headless => !host.has_window(),
+            Availability::Both => true,
+        };
+        if available {
+            Ok(())
+        } else {
+            Err(CallError::new(
+                "unavailable",
+                format!("{} is not available in this mode", self.name),
+            ))
+        }
+    }
+}
+
+fn arguments<I: DeserializeOwned>(input: Value) -> Result<I, CallError> {
+    serde_json::from_value(input)
+        .map_err(|error| CallError::new("invalid_arguments", error.to_string()))
+}
+
+/// The project and the entry a call is about, for its audit record: the
+/// structure it names, or the project it names or opens.
+fn audit_target(
+    host: &dyn Host,
+    input: &Value,
+    output: Option<&Value>,
+) -> (Option<ProjectId>, Option<EntryId>) {
+    let structure = input["structure"]
+        .as_u64()
+        .and_then(|id| u32::try_from(id).ok())
+        .map(StructureEntryId);
+    if let Some(id) = structure
+        && let Some(entry) = host
+            .projects()
+            .and_then(|p| p.entries().into_iter().find(|e| e.structure == id))
+    {
+        return (Some(entry.project), Some(entry.entry));
+    }
+    let project = [Some(input), output]
+        .into_iter()
+        .flatten()
+        .find_map(|value| value["project"].as_str().and_then(ProjectId::parse));
+    (project, None)
 }
 
 /// The capabilities, by name.
@@ -335,15 +546,42 @@ impl Registry {
         O: Schema + Serialize,
         F: Fn(&mut dyn Host, I) -> Result<Output<O>, CallError> + Send + Sync + 'static,
     {
+        self.add(spec, handler, None);
+    }
+
+    /// Adds a capability that runs only once the user confirmed the call
+    /// (design §7.1): `preflight` checks the arguments and says, in one
+    /// English sentence for the user, what the call would do.
+    pub fn register_confirmed<I, O, P, F>(&mut self, spec: Spec, preflight: P, handler: F)
+    where
+        I: Schema + DeserializeOwned,
+        O: Schema + Serialize,
+        P: Fn(&dyn Host, I) -> Result<String, CallError> + Send + Sync + 'static,
+        F: Fn(&mut dyn Host, I) -> Result<Output<O>, CallError> + Send + Sync + 'static,
+    {
+        let preflight: Preflight =
+            Box::new(move |host: &dyn Host, input: Value| preflight(host, arguments(input)?));
+        self.add(spec, handler, Some(preflight));
+    }
+
+    fn add<I, O, F>(&mut self, spec: Spec, handler: F, preflight: Option<Preflight>)
+    where
+        I: Schema + DeserializeOwned,
+        O: Schema + Serialize,
+        F: Fn(&mut dyn Host, I) -> Result<Output<O>, CallError> + Send + Sync + 'static,
+    {
         assert!(
             self.get(spec.name).is_none(),
             "capability {} registered twice",
             spec.name
         );
+        assert!(
+            spec.effect != Effect::External || preflight.is_some(),
+            "{} has external effects, so it must say what the user confirms",
+            spec.name
+        );
         let handler = move |host: &mut dyn Host, input: Value| {
-            let input: I = serde_json::from_value(input)
-                .map_err(|error| CallError::new("invalid_arguments", error.to_string()))?;
-            let output = handler(host, input)?;
+            let output = handler(host, arguments(input)?)?;
             Ok(CallResult {
                 output: serde_json::to_value(output.value).expect("outputs serialize"),
                 summary: output.summary,
@@ -354,9 +592,12 @@ impl Registry {
             description: spec.description,
             effect: spec.effect,
             availability: spec.availability,
+            additive: spec.additive,
+            idempotent: spec.idempotent,
             input_schema: I::schema(),
             output_schema: O::schema(),
             handler: Box::new(handler),
+            preflight,
         });
     }
 
@@ -368,28 +609,84 @@ impl Registry {
         self.capabilities.iter().find(|c| c.name == name)
     }
 
-    /// Calls a capability with JSON arguments; `null` counts as `{}`.
+    fn find(&self, name: &str) -> Result<&Capability, CallError> {
+        self.get(name).ok_or_else(|| {
+            CallError::new("unknown_capability", format!("no capability named {name}"))
+        })
+    }
+
+    /// Calls a capability as the user at the keyboard, who may run
+    /// anything; JSON arguments, `null` counting as `{}`.
     pub fn call(
         &self,
         host: &mut dyn Host,
         name: &str,
         input: Value,
     ) -> Result<CallResult, CallError> {
-        let capability = self.get(name).ok_or_else(|| {
-            CallError::new("unknown_capability", format!("no capability named {name}"))
-        })?;
-        let available = match capability.availability {
-            Availability::Gui => host.has_window(),
-            Availability::Headless => !host.has_window(),
-            Availability::Both => true,
-        };
-        if !available {
-            return Err(CallError::new(
-                "unavailable",
-                format!("{name} is not available in this mode"),
-            ));
-        }
+        self.call_as(host, &Context::user(), name, input)
+    }
+
+    /// Calls a capability in `context`: an AI client runs only what the
+    /// user allowed it, and irreversible capabilities only once confirmed
+    /// (design §7.2), whatever its model says. Every call of a client,
+    /// refused ones too, leaves a record for the audit log
+    /// ([`Host::audit`]).
+    pub fn call_as(
+        &self,
+        host: &mut dyn Host,
+        context: &Context,
+        name: &str,
+        input: Value,
+    ) -> Result<CallResult, CallError> {
+        let capability = self.find(name)?;
         let input = if input.is_null() { json!({}) } else { input };
-        (capability.handler)(host, input)
+        let (project, entry) = audit_target(host, &input, None);
+        let result = capability
+            .available(host)
+            .and_then(|()| context.permit(name, capability.effect))
+            .and_then(|()| {
+                let mut calling = Calling {
+                    host,
+                    agent: context.client_info().map(policy::Client::agent),
+                };
+                (capability.handler)(&mut calling, input.clone())
+            });
+        if let Some(client) = context.client_info() {
+            let project = project.or_else(|| {
+                let output = result.as_ref().ok().map(|r| &r.output);
+                audit_target(host, &input, output).0
+            });
+            let record = policy::record(
+                client,
+                name,
+                entry,
+                &input,
+                capability.effect,
+                context.confirmed,
+                &result,
+            );
+            host.audit(project, record);
+        }
+        result
+    }
+
+    /// What the user is asked to confirm before `name` runs with `input`:
+    /// one English sentence, or `None` for a capability that needs no
+    /// confirmation. Checks the arguments first, so that the user is not
+    /// asked about a call that would fail.
+    pub fn confirmation(
+        &self,
+        host: &dyn Host,
+        name: &str,
+        input: Value,
+    ) -> Result<Option<String>, CallError> {
+        let capability = self.find(name)?;
+        capability.available(host)?;
+        let input = if input.is_null() { json!({}) } else { input };
+        capability
+            .preflight
+            .as_ref()
+            .map(|preflight| preflight(host, input))
+            .transpose()
     }
 }

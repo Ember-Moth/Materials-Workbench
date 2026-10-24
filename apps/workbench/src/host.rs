@@ -13,7 +13,7 @@ use mw_automation::{
     CallError, EntryInfo, Host, Opening, ProjectInfo, Projects, RecentProject, RecentProjects,
     StructureEntryId, StructureInfo, duplicate_project, read_error, unknown_structure,
 };
-use mw_crystal::CrystalDocument;
+use mw_crystal::{Agent, Command, CrystalDocument, Outcome};
 use mw_crystal_io::ImportedBlock;
 use mw_mcp::Access;
 use mw_project_file::ProjectId;
@@ -22,6 +22,15 @@ use mw_structure::StructureWorkspace;
 use crate::config::AppPaths;
 use crate::projects::same_dir;
 use crate::workbench::Workbench;
+
+/// Edits from MCP clients reach the workspace with phase 4 of M18
+/// (ai-integration design §5.3); until then the application refuses them.
+fn read_only(id: StructureEntryId) -> CallError {
+    CallError::new(
+        "read_only",
+        format!("structure {} cannot be edited from here", id.0),
+    )
+}
 
 /// The workbench during one call, with what the calling client may open.
 pub(crate) struct AppHost<'a, 'c> {
@@ -80,8 +89,21 @@ impl Host for AppHost<'_, '_> {
         Some(self.workspace(id)?.crystal())
     }
 
-    fn document_mut(&mut self, _: StructureEntryId) -> Option<&mut CrystalDocument> {
-        None
+    fn execute(
+        &mut self,
+        id: StructureEntryId,
+        _command: Command,
+        _agent: Option<Agent>,
+    ) -> Result<Outcome, CallError> {
+        Err(read_only(id))
+    }
+
+    fn undo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        Err(read_only(id))
+    }
+
+    fn redo(&mut self, id: StructureEntryId) -> Result<Option<Outcome>, CallError> {
+        Err(read_only(id))
     }
 
     fn source(&self, id: StructureEntryId) -> Option<&ImportedBlock> {

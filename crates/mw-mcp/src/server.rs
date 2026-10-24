@@ -615,11 +615,25 @@ mod tests {
         ) -> Option<&mw_crystal::CrystalDocument> {
             self.0.document(id)
         }
-        fn document_mut(
+        fn execute(
             &mut self,
             id: mw_automation::StructureEntryId,
-        ) -> Option<&mut mw_crystal::CrystalDocument> {
-            self.0.document_mut(id)
+            command: mw_crystal::Command,
+            agent: Option<mw_crystal::Agent>,
+        ) -> Result<mw_crystal::Outcome, CallError> {
+            self.0.execute(id, command, agent)
+        }
+        fn undo(
+            &mut self,
+            id: mw_automation::StructureEntryId,
+        ) -> Result<Option<mw_crystal::Outcome>, CallError> {
+            self.0.undo(id)
+        }
+        fn redo(
+            &mut self,
+            id: mw_automation::StructureEntryId,
+        ) -> Result<Option<mw_crystal::Outcome>, CallError> {
+            self.0.redo(id)
         }
         fn has_window(&self) -> bool {
             true
