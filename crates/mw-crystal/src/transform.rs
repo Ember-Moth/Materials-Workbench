@@ -865,7 +865,10 @@ mod tests {
                 .collect()
         };
         assert_eq!(positions(&before), positions(&after));
-        assert_eq!(after.atoms.len(), before.atoms.len());
+        assert_eq!(
+            after.one_cell(&structure).len(),
+            before.one_cell(&rutile).len()
+        );
         assert_eq!(structure.validate(), Ok(()));
     }
 

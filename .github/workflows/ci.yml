@@ -1,0 +1,182 @@
+# Format, lints, every test and the application's build on macOS, Linux and
+# Windows (docs/development.md §2). The runners have no GPU: tests that
+# render use software adapters, Mesa's lavapipe on Linux and WARP on
+# Windows, and fail rather than skip when there is none (MW_REQUIRE_GPU).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Smaller target directories and caches; panics still name the line.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+  MW_REQUIRE_GPU: 1
+  # aws-lc-sys (TLS for GPUI's and mw-llm's HTTP clients) assembles with
+  # NASM on Windows x86_64; the runners have none, so it uses the objects
+  # it ships with. Only read on Windows.
+  AWS_LC_SYS_PREBUILT_NASM: 1
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+            wgpu_backend: metal
+            # The runner's virtual GPU, whatever it is called.
+            wgpu_adapter: ""
+          - name: Linux
+            os: ubuntu-24.04
+            # lavapipe, Mesa's Vulkan driver on the CPU.
+            wgpu_backend: vulkan
+            wgpu_adapter: llvmpipe
+          - name: Windows
+            os: windows-2025
+            # WARP, the Direct3D 12 rasterizer on the CPU that comes with
+            # Windows.
+            wgpu_backend: dx12
+            wgpu_adapter: Microsoft Basic Render Driver
+    env:
+      # The renderer takes only this backend and an adapter whose name
+      # contains this (mw-crystal-render's `Renderer::new`; empty is as if
+      # unset), so the tests render on the software adapter or fail.
+      WGPU_BACKEND: ${{ matrix.wgpu_backend }}
+      WGPU_ADAPTER_NAME: ${{ matrix.wgpu_adapter }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.97 --profile minimal --component rustfmt,clippy
+          rustup default 1.97
+
+      # GPUI's Linux platform (GPUI Kit's installation guide, less the
+      # packages for features this workspace does not use), the Vulkan
+      # loader and lavapipe.
+      - name: Install system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libvulkan1 mesa-vulkan-drivers
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Prints the adapter the renderer found; the image is kept below.
+      - name: Render a frame
+        run: cargo run -p mw-crystal-render --example snapshot --locked -- snapshot.png 1000
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build the application
+        run: cargo build --bin materials-workbench --locked
+
+      # The command line and the Python module (docs/design/scripting.md
+      # §6). The test step above ran the command line's tests; the Python
+      # bindings are behind a feature the workspace leaves off, so they
+      # are linted, built and imported here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Python module, lints
+        run: cargo clippy -p mw-python --features extension-module --all-targets --locked -- -D warnings
+
+      - name: Command line and Python module, smoke test
+        shell: bash
+        run: |
+          cargo build -p mw-cli -p mw-python --features mw-python/extension-module --locked
+          target/debug/mw info crates/mw-crystal-io/tests/fixtures/rutile.cif crates/mw-crystal-io/tests/fixtures/poscar/CONTCAR
+          python -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
+
+      - name: Keep the rendered frame
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ matrix.name }}
+          path: snapshot.png
+          if-no-files-found: ignore
+
+  # One abi3 wheel of the Python module per platform, for CPython 3.10 and
+  # newer (docs/design/scripting.md §5.7), installed into a fresh virtual
+  # environment from the file alone and smoke-tested. Kept as artifacts;
+  # nothing is published.
+  wheels:
+    name: Wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+            # Apple silicon and Intel in one wheel.
+            target: universal2-apple-darwin
+          - name: Linux
+            os: ubuntu-24.04
+            target: x86_64
+          - name: Windows
+            os: windows-2025
+            target: x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # On Linux in a manylinux container, so that the wheel runs on old
+      # distributions too.
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/mw-python
+          target: ${{ matrix.target }}
+          manylinux: auto
+          rust-toolchain: "1.97"
+          args: --release --locked --out dist
+
+      - name: Test the wheel
+        shell: bash
+        run: |
+          python -m venv wheel-venv
+          if [ "$RUNNER_OS" = Windows ]; then venv=wheel-venv/Scripts/python; else venv=wheel-venv/bin/python; fi
+          "$venv" -m pip install --no-index --no-deps crates/mw-python/dist/*.whl
+          "$venv" -I crates/mw-python/tests/smoke.py --installed
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: crates/mw-python/dist/*.whl
+          if-no-files-found: error

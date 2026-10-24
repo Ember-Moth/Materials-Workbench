@@ -6,10 +6,18 @@
 
 | 平台 | 需要 |
 |---|---|
-| 全部 | Rust 1.92 或更新（GPUI Kit 当前依赖要求）；本仓库在 1.97 上开发 |
+| 全部 | Rust 1.92 或更新（GPUI Kit 当前依赖要求）；本仓库在 1.97 上开发，CI 用 1.97 |
 | macOS | Xcode（GPUI 用 Metal），`xcode-select -p` 指向 Xcode |
-| Linux | 图形会话（Wayland 或 X11）和可用的 Vulkan 驱动；依赖包见 [GPUI Kit 安装说明](https://gpui-kit.com/docs/installation) |
-| Windows | 尚未测试 |
+| Linux | 构建：下面这些包（Ubuntu 24.04 的包名，取自 [GPUI Kit 安装说明](https://gpui-kit.com/docs/installation)，去掉了本工作区用不到的 WebView、音频和 OpenSSL）；运行：图形会话（Wayland 或 X11）和可用的 Vulkan 驱动，没有显卡时用 Mesa 的 lavapipe（`mesa-vulkan-drivers`） |
+| Windows | Visual Studio 2022 Build Tools（"使用 C++ 的桌面开发"，含 MSVC 和 Windows SDK），用 MSVC 版的 Rust 工具链；CMake 在 `PATH` 上。`aws-lc-sys`（GPUI 和 `mw-llm` 的 HTTP 客户端用的 TLS）在 x86_64 上要 NASM，没装时设 `AWS_LC_SYS_PREBUILT_NASM=1`，用它自带的汇编结果 |
+
+Linux 的构建依赖：
+
+```bash
+sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libvulkan1 mesa-vulkan-drivers
+```
+
+Linux 和 Windows 上还没有在实机上打开过窗口（路线图 v0.3 的 M13），实机检查的步骤见[视口设计稿](design/viewport-rendering.md) 8.4 节。
 
 ## 2. 常用命令
 
@@ -28,6 +36,52 @@ cargo clippy --workspace --all-targets
 ```bash
 cargo fmt --all
 ```
+
+### 2.1 CI
+
+`.github/workflows/ci.yml` 在 push 到 `main`、每个 pull request 和手动触发时运行，macOS 15、Ubuntu 24.04、Windows Server 2025 各一个任务，互不中断（一个平台失败，其余照常跑完）。每个任务依次：
+
+| 步骤 | 命令 | 说明 |
+|---|---|---|
+| 格式 | `cargo fmt --all -- --check` | |
+| 静态检查 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | 警告算失败；本地不加 `-D warnings` 时只打印 |
+| 渲染一帧 | `cargo run -p mw-crystal-render --example snapshot --locked -- snapshot.png 1000` | 打印渲染器用的适配器；图片作为任务的产物保存（`snapshot-<平台>`），可以下载下来看软件渲染的结果 |
+| 测试 | `cargo test --workspace --locked` | 全部测试，含渲染器的像素测试和界面集成测试 |
+| 构建应用 | `cargo build --bin materials-workbench --locked` | |
+| Python 模块的静态检查 | `cargo clippy -p mw-python --features extension-module --all-targets --locked -- -D warnings` | 绑定在可选特性后面，上面的 clippy 不检查它们；Python 3.13 由 `actions/setup-python` 装 |
+| 命令行与 Python 模块的冒烟测试 | `cargo build -p mw-cli -p mw-python --features mw-python/extension-module --locked`，运行一次 `mw info`，再 `python -I crates/mw-python/tests/smoke.py target/debug target/debug/mw` | 命令行的测试已经在上面的 `cargo test --workspace` 里 |
+
+另有 `wheels` 任务，三个平台各一个：`PyO3/maturin-action` 在 `crates/mw-python` 里构建 release wheel（macOS universal2、Linux 在 manylinux 容器里、Windows x64），装进新的虚拟环境（`pip install --no-index --no-deps`，只装这个文件）后运行 `smoke.py --installed`，wheel 作为产物保存（`wheel-<平台>`），不发布（[命令行与 Python 设计稿](design/scripting.md)第 6 节）。
+
+GitHub 的运行器没有显卡，出帧的测试用软件适配器：Linux 装 Mesa 的 lavapipe（Vulkan，适配器名 `llvmpipe (…)`），Windows 用系统自带的 WARP（Direct3D 12，`Microsoft Basic Render Driver`），macOS 运行器有虚拟的 Metal 设备。渲染器读 wgpu 的环境变量（`mw-crystal-render` 的 `Renderer::new`）：`WGPU_BACKEND` 限定后端（`vulkan`、`dx12`、`metal`），`WGPU_ADAPTER_NAME` 只取名字里含这段文字的适配器（不分大小写），CI 用两者把测试固定在软件适配器上；`MW_REQUIRE_GPU=1` 让找不到适配器的测试失败而不是跳过（第 4 节）。其他环境变量：`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 缩小目标目录和缓存；`AWS_LC_SYS_PREBUILT_NASM=1` 见第 1 节。依赖的编译结果由 `Swatinem/rust-cache` 缓存，只有 `main` 上的运行写缓存。
+
+在本地复现一个平台的任务（Linux 和 Windows 上先装好第 1 节的依赖）：
+
+```bash
+cargo fmt --all -- --check
+```
+
+```bash
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+```bash
+MW_REQUIRE_GPU=1 cargo test --workspace --locked
+```
+
+```bash
+cargo build --bin materials-workbench --locked
+```
+
+在有显卡的机器上复现软件渲染，按名字选软件适配器（Linux 上要先装 `mesa-vulkan-drivers`；Windows 总会列出 WARP）：
+
+```bash
+WGPU_BACKEND=vulkan WGPU_ADAPTER_NAME=llvmpipe MW_REQUIRE_GPU=1 cargo test --workspace
+```
+
+Windows 的 PowerShell 里先设 `$env:WGPU_BACKEND="dx12"`、`$env:WGPU_ADAPTER_NAME="Microsoft Basic Render Driver"`、`$env:MW_REQUIRE_GPU="1"`，再运行 `cargo test --workspace`。渲染一帧看结果：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000` 会打印用的是哪个适配器，名字对不上时列出所有能用的。
+
+CI 只在 GitHub 上运行，改了工作流要推送后才能看到结果。本地没有工作流的检查工具（actionlint 要另外下载）；在 macOS 上能交叉检查非测试代码在其他平台上能否编译：`aws-lc-sys` 的 C 代码在 macOS 上编不了 Windows 版，所以只能检查不依赖它的 crate，例如 `cargo clippy -p mw-mcp -p mw-crystal-render --lib --bins --target x86_64-pc-windows-msvc`（要先装好这个 target，用另一个 `CARGO_TARGET_DIR` 不占用平时的构建目录）。
 
 CIF 导入的语料统计：读取本地一个 COD 目录（不随仓库提交）。语料从 COD 的官方 rsync 服务器取，数据属于公有领域；`--max-size=1M` 只取不超过 1 MiB 的文件（约 50 万个、37 GB，占全部条目的 94 %，超过的大多嵌着衍射数据），按前缀目录 1–9 分别同步，以后重跑同一条命令只补新增和改动的条目：
 
@@ -138,7 +192,13 @@ cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000
 VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc
 ```
 
-界面截图巡览：依次切换主界面、位点面板、在视口里点选原子（先拖动旋转，再单击、⇧ 单击、悬停，用的是真实的鼠标事件和拾取）、测量距离和键角、命令面板、删除对话框、深色模式、英文界面、其他示例结构，在 SrTiO₃ 上编辑（改晶胞参数、添加混合占位的对话框和结果、给位点改标签及重复标签被拒绝、点选并删除位点、撤销回原样），在 SrTiO₃ 上转为 P1 后删除一个原子，保存项目（⌘S），再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、吸附到特殊位置的、导入失败的及其错误列表），金红石的移动模式（拖动原子时的预览和松手后的结果、按住 ⌥ 脱离特殊位置）、输入跟随坐标、添加位点的对话框、新位点与已有位点重合时的提示和吸附到特殊位置的新位点，金红石的转为 P1 对话框和结果、生成超胞的对话框和新的派生结构，关闭有未保存更改的项目时的提示，最后是设置对话框、收起边栏、导出对话框（部分占位的结构，POSCAR 和 XYZ 置灰）、带最近项目的空状态和新建的空项目，往这个空项目里导入 POSCAR（fcc 原胞的基矢不在标准朝向，属性面板在晶胞参数下说明）和 CONTCAR（通知和诊断标签页），最后导入六方轴的刚玉，打开晶胞变换对话框（原胞的 P 和预览）并变换到菱方原胞，再打开示例项目里 P1 的金红石 2×2×2 超胞，打开对称化对话框（后台检测后的预览）并标准化地对称化回金红石晶胞，再把它的晶胞弄得与对称性略有出入（属性面板的说明和"对齐"按钮）并对齐，把每一步渲染成 PNG 后自动退出。每步之后等视口的最新一帧画出来（`Viewport::is_current`）再截图。巡览用 `screenshots/config` 作配置目录，每次都从第一次启动开始（装好示例项目），不读也不改你自己的设置、最近项目和示例项目。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
+半透明多面体每帧的代价（不开窗口；2 331 个八面体加棱线和 7 897 个球，相机每帧转一点，打印界面线程上的编码提交和 GPU 加回读的耗时，与只有球时对比，见[视口设计稿](design/viewport-rendering.md) 8.6 节）：
+
+```bash
+cargo test -p mw-crystal-render --release frame_timings -- --ignored --nocapture
+```
+
+界面截图巡览：依次切换主界面、位点面板、在视口里点选原子（先拖动旋转，再单击、⇧ 单击、悬停，用的是真实的鼠标事件和拾取）、测量距离和键角、命令面板、删除对话框、深色模式、英文界面、其他示例结构，在 SrTiO₃ 上编辑（改晶胞参数、添加混合占位的对话框和结果、给位点改标签及重复标签被拒绝、点选并删除位点、撤销回原样），在 SrTiO₃ 上转为 P1 后删除一个原子，保存项目（⌘S），再导入 `crates/mw-crystal-io/tests/fixtures/` 里的几个文件（带诊断的、吸附到特殊位置的、导入失败的及其错误列表），金红石的移动模式（拖动原子时的预览和松手后的结果、按住 ⌥ 脱离特殊位置）、输入跟随坐标、添加位点的对话框、新位点与已有位点重合时的提示和吸附到特殊位置的新位点，金红石的转为 P1 对话框和结果、生成超胞的对话框和新的派生结构，关闭有未保存更改的项目时的提示，最后是设置对话框、收起边栏、导出对话框（部分占位的结构，POSCAR 和 XYZ 置灰）、带最近项目的空状态和新建的空项目，往这个空项目里导入 POSCAR（fcc 原胞的基矢不在标准朝向，属性面板在晶胞参数下说明）和 CONTCAR（通知和诊断标签页），最后导入六方轴的刚玉，打开晶胞变换对话框（原胞的 P 和预览）并变换到菱方原胞，再打开示例项目里 P1 的金红石 2×2×2 超胞，打开对称化对话框（后台检测后的预览）并标准化地对称化回金红石晶胞，再把它的晶胞弄得与对称性略有出入（属性面板的说明和"对齐"按钮）并对齐，然后是金红石的显示范围（浮层、3 × 3 × 2 晶胞块、以原子为中心的球、后台准备的 10 × 10 × 10）和多面体模型（金红石的八面体、中心原子的浮层、3 × 3 × 2 晶胞块，SrTiO₃ 只画 TiO₆，ZnO 的四面体及其晶胞块和深色模式），把每一步渲染成 PNG 后自动退出。每步之后等视口的最新一帧画出来（`Viewport::is_current`）再截图。巡览用 `screenshots/config` 作配置目录，每次都从第一次启动开始（装好示例项目），不读也不改你自己的设置、最近项目和示例项目。它用 GPUI 的离屏渲染，不需要屏幕录制权限，适合改完界面后自查：
 
 ```bash
 MW_SCREENSHOT_DIR=screenshots cargo run --bin materials-workbench --features screenshot
@@ -258,6 +318,46 @@ claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/mat
 
 用 `claude mcp get materials-workbench` 或会话里的 `/mcp` 确认已连接。工具在 Claude Code 里叫 `mcp__materials-workbench__project_open` 这样的名字；打开结构后，它的 CIF 文本可以用 `@materials-workbench:mw://project/{项目 ID}/structure/{条目 ID}.cif` 引用，URI 在 `project_open` 和 `structure_open` 的结果里。Claude Desktop 的 `claude_desktop_config.json` 也是同样的 `mcpServers` 写法，但它可能在 `/` 启动服务器，所以必须给 `--allow`；这一点还没有按 Claude Desktop 当前的文档核对。
 
+命令行 `mw`（`crates/mw-cli`，[命令行与 Python 设计稿](design/scripting.md)第 4 节）不开窗口、不链接 GPUI。文件按界面的规则认格式，一次可以给多个；结构写到标准输出、`-o 文件`（一个结构）或 `--out-dir 目录`（按结构名命名，不覆盖已有文件，`--force` 覆盖）；`--json` 在标准输出上给一个 JSON 文档。退出码 0 是全部完成，1 是有文件或结构失败（其余照常完成），2 是用法错误。`mw --help` 和 `mw 子命令 --help` 列出全部选项：
+
+```bash
+cargo run -p mw-cli -- info crates/mw-crystal-io/tests/fixtures/rutile.cif crates/mw-crystal-io/tests/fixtures/poscar/CONTCAR
+```
+
+```bash
+cargo run -p mw-cli -- convert crates/mw-crystal-io/tests/fixtures/*.cif --to poscar --out-dir /tmp/mw-poscar-out
+```
+
+```bash
+cargo run -p mw-cli -- supercell crates/mw-crystal-io/tests/fixtures/rutile.cif --repeat 2x2x2 --to xyz
+```
+
+```bash
+cargo run -p mw-cli -- transform crates/mw-crystal-io/tests/fixtures/corundum_hall.cif --cell primitive
+```
+
+```bash
+cargo run -p mw-cli -- symmetrize crates/mw-crystal-io/tests/fixtures/poscar/CONTCAR --standardize
+```
+
+```bash
+cargo run -p mw-cli -- diagnostics --json crates/mw-crystal-io/tests/fixtures/malformed.cif
+```
+
+`cargo install --path crates/mw-cli` 把 `mw` 装进 `~/.cargo/bin`。
+
+Python 模块 `materials_workbench`（`crates/mw-python`，设计稿第 5 节）的绑定在可选特性后面：默认的 `cargo build` 和 `cargo test --workspace` 不编译它们，不需要 Python。在本机试用不必安装任何东西：构建扩展模块（`extension-module` 特性不链接 libpython），再运行冒烟测试，它把动态库复制到临时目录、改名为 Python 能导入的名字后导入，检查每个接口，给出 `mw` 时还核对命令行写出同样的文本：
+
+```bash
+cargo build -p mw-cli -p mw-python --features mw-python/extension-module
+```
+
+```bash
+python3 -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
+```
+
+`-I` 让 Python 忽略 `PYTHONPATH` 和用户目录里的包，所以模块所在的目录由脚本自己加进 `sys.path`。在自己的脚本或 Jupyter 里用，把 `target/debug/libmw_python.dylib`（Linux 是 `libmw_python.so`，Windows 是 `mw_python.dll`）复制成某个目录里的 `materials_workbench.so`（Windows 上 `materials_workbench.pyd`），把那个目录加进 `sys.path`，再 `import materials_workbench as mw`。打成 wheel 用 maturin（`crates/mw-python/pyproject.toml`），要从 PyPI 下载，运行前先问用户；CI 已经为三个平台构建。
+
 debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
 
 ## 3. 代码约定
@@ -277,6 +377,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 - 新增依赖前确认它的许可证与 MIT OR Apache-2.0 兼容（MIT、Apache-2.0、BSD、ISC、Zlib 等宽松许可）；不引入 GPL 类许可的依赖，也不复制 GPL 代码。
 - 纯计算（解析、对称性、物理量）放在不依赖 GPUI 的 crate 里，并在那里写单元测试。
 - `apps/workbench` 只做组装：创建实体、转接事件、注册全局命令，不放业务逻辑。
+- 命令行和 Python 要用的操作先进能力注册表（或领域 crate），再在 `mw-scripting` 里包一层，`mw-cli` 和 `mw-python` 都调它，不在两边各写一套（[命令行与 Python 设计稿](design/scripting.md)第 2 节）。
 
 ### 3.3 样式
 
@@ -302,7 +403,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 1. 在拥有它的 crate 里用 `gpui_kit::actions!` 定义动作。
 2. 在该视图上用 `.on_action(cx.listener(...))` 处理。
-3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。
+3. 需要快捷键时，在该 crate 的 `bind_keys` 里注册，并选对按键上下文。修饰键写 `secondary-`（macOS 上是 ⌘，Linux 和 Windows 上是 Ctrl），不写 `cmd-`：`cmd-` 在 Linux 和 Windows 上是 Super / Win 键。界面集成测试里按快捷键同样写 `secondary-`（GPUI 输入框的全选、撤销在 macOS 上绑 `cmd-`，在其他平台上绑 `ctrl-`）；判断鼠标事件的修饰键用 `Modifiers::secondary()`。
 4. 加进命令面板：结构相关的加到 `mw_structure::palette_commands()`，外壳命令加到 `apps/workbench/src/palette.rs`。关键词里写英文名和拼音。
 5. 按钮、菜单都派发同一个动作，不要各自复制一份逻辑。
 
@@ -316,24 +417,29 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 | 层次 | 例子 | 位置 |
 |---|---|---|
-| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、转为 P1 与超胞（位移参数和不确定度的变换、与手写超胞逐位相同、非对角矩阵）、530 个表列设定、空间群识别、位点对称性与坐标形式、晶胞约束、成键、测量、化学式、近邻、编辑命令（每条命令和它的逆命令精确往返；改晶胞参数的结果总与对称性一致，不给值时对齐略有出入的晶胞；同一无序组合里相邻 split site 的占位率之和超过 1 时警告）、对称模式下的几何编辑（晶体学设计稿第 7 节的每条规则：位移换算到代表点与投影、脱离与吸附、多重度变化、坐标联动与晶格平移、添加位点的吸附与重合，`mw-crystal/src/placement.rs`）、晶胞变换（7.8 节的每条规则：坐标与操作按 (P, p) 变换、定心平移与合并、拒绝的情况、惯用胞 ↔ 原胞和全部设定之间逐位往返、Niggli 约化的已知例子、显式朝向与左手系、位移参数与不确定度、引用跟着原子走，`mw-crystal/src/cell_transform.rs`）、对称性检测与对称化（7.10 节的每条规则：原子平均与晶胞联动、原点不动或移动与极轴、标准化、超胞与容纳不下的晶胞、种类区分、每种拒绝、按最近原子映射引用、左手系，以及 v0.2 的验收测试：530 个表列设定转为 P1、扰动、对称化、再转为 P1，`mw-crystal/src/symmetrize.rs`；真实文件的对称化与 CIF 往返在 `mw-crystal-io/tests/symmetrize.rs`）、撤销与重做、选区、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
+| 纯单元测试 | 晶胞矩阵与体积、对称操作与群封闭、原子展开、转为 P1 与超胞（位移参数和不确定度的变换、与手写超胞逐位相同、非对角矩阵）、530 个表列设定、空间群识别、位点对称性与坐标形式、晶胞约束、成键、测量、化学式、近邻、编辑命令（每条命令和它的逆命令精确往返；改晶胞参数的结果总与对称性一致，不给值时对齐略有出入的晶胞；同一无序组合里相邻 split site 的占位率之和超过 1 时警告）、对称模式下的几何编辑（晶体学设计稿第 7 节的每条规则：位移换算到代表点与投影、脱离与吸附、多重度变化、坐标联动与晶格平移、添加位点的吸附与重合，`mw-crystal/src/placement.rs`）、晶胞变换（7.8 节的每条规则：坐标与操作按 (P, p) 变换、定心平移与合并、拒绝的情况、惯用胞 ↔ 原胞和全部设定之间逐位往返、Niggli 约化的已知例子、显式朝向与左手系、位移参数与不确定度、引用跟着原子走，`mw-crystal/src/cell_transform.rs`）、对称性检测与对称化（7.10 节的每条规则：原子平均与晶胞联动、原点不动或移动与极轴、标准化、超胞与容纳不下的晶胞、种类区分、每种拒绝、按最近原子映射引用、左手系，以及 v0.2 的验收测试：530 个表列设定转为 P1、扰动、对称化、再转为 P1，`mw-crystal/src/symmetrize.rs`；真实文件的对称化与 CIF 往返在 `mw-crystal-io/tests/symmetrize.rs`）、显示范围（晶体学设计稿 5.5 节：默认的一个晶胞加边界原子、晶胞块的原子数与 `check` 一致、斜晶胞里按到面的距离补边界原子、球的各层近邻、显示键不重复、拒绝的情况、10 × 10 × 10 金红石的耗时、以原子为中心的球跟着原子走，`mw-crystal/src/display.rs`）、配位多面体（5.6 节：金红石 TiO₆ 的顶点、面、棱和体积，SrTiO₃ 默认只画八面体、选上 Sr 是立方八面体，闪锌矿四面体，CsCl 立方体的正方形面不画对角线，平面四方和三角形，少于 3 个配体，重合的配体，跨周期边界补画的配体，阴离子作中心，10 × 10 × 10 金红石的耗时；每个多面体检查欧拉公式、每条棱接两个面、面朝外，`mw-crystal/src/polyhedra.rs`；多面体的配色和棱线、10 × 10 × 10 的组场景耗时，`mw-structure/src/scene.rs`）、电负性表、撤销与重做、选区、CIF 语法、数字格式 | 各 crate 的 `#[cfg(test)]` |
 | 导入测试 | 每个 fixture CIF 导入后的结构和诊断（含行号）、空间群号与 Wyckoff 位置、吸附与合并、P1 结构的对称性检测 | `crates/mw-crystal-io/tests/fixtures.rs` |
 | 导出测试 | 每个 fixture CIF 的"导入 → 导出 → 再导入"往返（结构、保留字段、二次导出文本相同）；保留字段在结构修改后的去留；其他设定的空间群名称；POSCAR 与扩展 XYZ 对照手写的期望文件，显式朝向按基矢写出，左手系写成 CIF 不变成镜像；部分占位和未知元素的拒绝 | `crates/mw-crystal-io/tests/export.rs` |
 | POSCAR 导入 | `fixtures/poscar/` 的手写文件（VASP 5、Cartesian 与显式朝向、负缩放因子、CONTCAR、VASP 4、左手系）；每种错误和警告的行号；能写成 POSCAR 的结构"导出 → 导入"后原子、晶格矢量和手性相同，再导出文本相同 | `crates/mw-crystal-io/tests/poscar.rs` |
-| 项目文件 | 全部内置示例、每个 fixture 能导入的结构和一个左手系显式朝向的结构写成项目再读回，结构、测量（含已失效的）、编辑记录、来源记录、视图状态逐项相同，重写一遍字节相同；只重写改过的文件、另存为、清理不再引用的文件、读不了的部分（损坏、朝向不正交、版本更新、源文件副本被改或缺失）；示例项目与重新生成的一致；旧版本的测试项目能打开、内容与当前示例相同，第一次保存时备份并写成当前版本 | `crates/mw-project-file/tests/roundtrip.rs`、`samples.rs`、`migration.rs` |
+| 项目文件 | 全部内置示例、每个 fixture 能导入的结构和一个左手系显式朝向的结构写成项目再读回，结构、测量（含已失效的）、编辑记录、来源记录、视图状态（含两种显示范围和多面体的中心）逐项相同，重写一遍字节相同；版本 1 的 `view.json` 照常读入，写回时是当前版本，多面体的中心排序去重；只重写改过的文件、另存为、清理不再引用的文件、读不了的部分（损坏、朝向不正交、版本更新、源文件副本被改或缺失）；示例项目与重新生成的一致；旧版本的测试项目能打开、内容与当前示例相同，第一次保存时备份并写成当前版本 | `crates/mw-project-file/tests/roundtrip.rs`、`samples.rs`、`migration.rs` |
 | 语料统计 | COD 批量导入与 CIF 往返，默认忽略，见第 2 节 | `crates/mw-crystal-io/tests/cod_corpus.rs`、`cod_roundtrip.rs` |
-| 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡），以及拾取结果 | `mw-crystal-render` |
+| 无头 GPU 测试 | 渲染一帧并检查像素（球、键的两端颜色、遮挡；半透明多面体透出背景和后面的球、被前面的球挡住、从远到近混合且随相机转向重排），以及拾取结果（点击穿过多面体）；没有适配器时跳过并打印原因，设了 `MW_REQUIRE_GPU` 时失败。多面体每帧耗时的测量默认忽略（第 2 节） | `mw-crystal-render` |
 | 模型服务的流式解析 | 按官方文档格式手写的 SSE 数据，逐个后端检查事件、组装出的轮次、拒绝和中途错误；请求 JSON 的构造 | `crates/mw-llm/tests/fixtures/` 与各后端模块的测试 |
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
 | 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部只读能力放进一个严格请求也合规，其余每 20 个一组（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试。对称化的预览与执行（M9）用示例里 P1 的超胞测试；项目能力用一个内存里的假宿主测试：列出和打开项目、没打开的结构返回 `structure_not_open`、打开后可用、没有项目的 `Host` 上返回 `unavailable` | `crates/mw-automation/tests/capabilities.rs`、`tests/projects.rs` |
 | MCP Server | 用 rmcp 的客户端经 stdio 驱动开发用的 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）；打开装在临时目录里的示例项目（再开一次得到同样的 ID）、没打开的结构先报错、打开结构、摘要、测量、诊断、导出 POSCAR、按项目 ID 读 CIF 资源（没打开的结构读时打开）、对 P1 的超胞检测对称性（M9，结构不变）；项目之外的 CIF 用 `file_open` 打开，放在未命名项目里；结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、不是项目、非 CIF 的路径和错误的参数都是模型能读的工具错误。访问策略（含从另一个工作目录算相对路径）、无界面宿主（只读、副本缺失、格式更新的项目、复制的项目、最近项目的过滤）和参数解析另有单元测试。连接应用的通道（M12）：令牌随机、整个比较，令牌文件和目录的权限，别人能进入的目录不被信任，令牌不对时拒绝，第二个实例不接管，停止后清掉文件，路径太长时什么都不留，遗留的套接字算没有应用；一个只回显的假应用确认转发进程把任意字节原样转发；经通道用 rmcp 的客户端调用宿主线程上的宿主；派发的调用在宿主线程上执行，线程不在时返回 `unavailable` | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/headless.rs`、`src/server.rs`、`src/cli.rs`、`src/endpoint.rs`、`src/relay.rs` |
+| 命令行与 Python 的共用层 | `mw-scripting` 的结果与注册表和领域函数直接调用的相同：摘要、对称性检测（含拒绝）、诊断与 `structure.diagnostics`；每个测试文件写成 CIF、POSCAR、扩展 XYZ 的文本与 `structure.export` 相同（含拒绝时的错误码）；超胞与 `make_supercell` 逐位相同、名字与界面相同、超大和行列式不为正时拒绝；晶胞变换与对称化可以撤销重做；分页的能力取全；按文件名认格式和给结构起名与界面的规则相同 | `crates/mw-scripting/src/` 各模块的测试 |
+| 命令行 | 运行 `mw` 可执行文件处理 `mw-crystal-io` 的测试文件，与直接读文件、在 `Documents` 里调用注册表或领域函数的结果逐项比较：`info`、`convert` 的三种格式、`supercell`（倍数和矩阵）、`transform`（预设、矩阵加原点、设定）、`symmetry` 和 `symmetrize`、`diagnostics`、`call`、`capabilities`；一批文件写进目录、不覆盖与 `--force`、按 `-o` 的文件名认格式、标准输入；错误输入的消息和退出码（读不了、认不出、导入错误带行号、格式装不下、多个结构写到一处、缺格式、错误的参数与互斥的选项、被拒绝的操作、JSON 模式下的错误）。参数解析另有单元测试 | `crates/mw-cli/tests/cli.rs`、`src/args.rs` |
+| Python 模块 | Rust 侧：参数的判断（超胞的三种写法与范围、晶胞变换的选择与矩阵形状、分数的文本、格式），不需要解释器。Python 侧的冒烟测试不在 `cargo test` 里：导入构建出的扩展模块，检查每个接口、每种错误，核对命令行写出同样的文本（第 2 节的命令）；CI 另用它测试 wheel | `crates/mw-python/src/lib.rs`、`tests/smoke.py` |
 | `materials-workbench mcp` | 经 stdio 驱动应用的可执行文件：用临时配置目录（`MW_CONFIG_DIR`）给出最近项目，只列出 `--allow` 范围内的，从它打开项目、打开结构、摘要、导出 POSCAR、读资源，结束后配置目录里的文件一字节不变；`mcp --help` 不开窗口。连接应用（M12）：测试里在 `MW_CONFIG_DIR` 下启动监听端，命令转接过去（只读工具里没有 `file_open`，相对路径从命令的工作目录算，读资源），监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用 | `apps/workbench/tests/mcp.rs` |
 | 外壳的界面集成测试 | 在无头窗口里用临时配置目录启动外壳：第一次启动打开示例项目；编辑、测量、换视角后 ⌘S、关闭项目、再打开，结构、测量、编辑记录和视图状态完整恢复（路线图 M6 的验收）；有未保存的更改时关闭和退出先问；导入的文件随项目保存，带源文件副本；POSCAR 和 CONTCAR 按文件名认出、以文件夹命名，随项目保存为 `.vasp` 副本，显式朝向存进结构文件，认不出的文件给通知；生成的超胞作为派生结构排在来源之后，保存后带着矩阵和来源记录；MCP 客户端连接应用（M12）：经 `Server::dispatching` 调用应用端的宿主，列出打开的项目和结构，打开没打开的结构时窗口显示它，读到用户的编辑，`project_open` 加进边栏而不切换显示、允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不崩溃 | `apps/workbench/src/ui_tests.rs` |
-| 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、转为 P1（选区跟随、撤销一步回到原样）与"转为 P1 后删除"、生成超胞交给外壳、坐标编辑（对称模式下的跟随坐标与吸附）、移动模式下用真实的鼠标事件拖动原子（沿特殊位置、⌥ 脱离且不移动指针也更新预览并保持视图不动、Esc 放回、按下后拾取还没回来就松手、移动模式外仍然旋转视图）、添加位点与重合时的对话框、晶胞变换对话框（预设填入 P、p，改动变成自定义，不成立的变换不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样）、对称化对话框（后台检测的预览，标准化改变预览，不是数的容差被拒绝且不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样；没有更高对称性时写明原因）、与对称性略有出入的晶胞（属性面板给出说明，"对齐"一步对齐、再对齐不产生一步、撤销回原样）、删除位点后的通知（写明位点和原子数）。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
+| 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、转为 P1（选区跟随、撤销一步回到原样）与"转为 P1 后删除"、生成超胞交给外壳、坐标编辑（对称模式下的跟随坐标与吸附）、移动模式下用真实的鼠标事件拖动原子（沿特殊位置、⌥ 脱离且不移动指针也更新预览并保持视图不动、Esc 放回、按下后拾取还没回来就松手、移动模式外仍然旋转视图）、添加位点与重合时的对话框、晶胞变换对话框（预设填入 P、p，改动变成自定义，不成立的变换不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样）、对称化对话框（后台检测的预览，标准化改变预览，不是数的容差被拒绝且不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样；没有更高对称性时写明原因）、与对称性略有出入的晶胞（属性面板给出说明，"对齐"一步对齐、再对齐不产生一步、撤销回原样）、删除位点后的通知（写明位点和原子数）、显示范围（M14：浮层的字段设晶胞块、增减按钮的事件、去掉边界原子、拒绝的值写明原因且范围不变、Esc 关闭；以选中的原子为中心的球、别的晶胞里的原子被选中和测量、转为 P1 和删除位点后球跟着原子或留在原处；在 2 × 2 × 1 的晶胞块里拖动另一个晶胞的原子；10 × 10 × 10 在后台准备、编辑后重新准备、拖动预览在后台一次一个；随视图状态保存，存的范围不成立时用默认范围）、多面体（M15：多面体模型画出八面体和补画的配体、不再提示"尚未实现"、悬停穿过多面体拾取中心原子和补画的配体、拖动预览里的多面体、切回球棍；命令面板的"多面体的中心原子…"切到多面体并打开浮层，按元素开关中心，随视图状态保存和恢复，没有选择时用默认规则，换显示模型关闭浮层；10 × 10 × 10 的多面体在后台准备）。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
 | 截图巡览 | 用 `screenshot` 特性把主要界面渲染成 PNG 逐张检查 | `apps/workbench/src/screenshot.rs` |
 | 手动检查 | 在窗口里走一遍改动涉及的流程，包括深色模式和英文界面 | — |
 
 改动界面时，至少手动检查：键盘能否完成操作、焦点去向、深浅色主题、中英文两种语言下的文字长度。
+
+**需要 GPU 的测试**：渲染器的像素和拾取测试、结构工作区的界面集成测试（拾取原子、数出帧、等最新一帧）都要一个 wgpu 适配器，没有显卡的机器上用软件适配器（第 2.1 节）。渲染器测试找不到适配器时跳过，在标准错误里写明原因和 `MW_REQUIRE_GPU=1`；设了 `MW_REQUIRE_GPU`（非 `0`）时失败，CI 总是设。结构工作区的界面集成测试离不开视口，打开工作区时视口没有渲染器就失败，并说明要装软件适配器，不会在后面的断言里莫名其妙地失败。外壳的界面集成测试不看画面，没有适配器也能跑。
 
 ### 4.1 测试数据
 

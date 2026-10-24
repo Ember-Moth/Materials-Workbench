@@ -33,12 +33,42 @@ v0.2 进行中：已经可以打开 VASP 的 POSCAR 和 CONTCAR（导入为 P1 �
 cargo run --bin materials-workbench
 ```
 
+## 命令行与 Python
+
+命令行 `mw` 不开窗口，一次处理一批文件，调用的是和应用相同的能力（`mw --help` 列出全部子命令和选项）：
+
+```bash
+cargo install --path crates/mw-cli
+mw info rutile.cif run/CONTCAR
+mw convert *.cif --to poscar --out-dir vasp/
+mw supercell rutile.cif --repeat 2x2x2 --to xyz -o rutile-222.xyz
+mw transform corundum.cif --cell primitive
+mw symmetrize relaxed/CONTCAR --standardize -o symmetrized.cif
+mw diagnostics --json downloads/*.cif
+```
+
+Python 模块 `materials_workbench` 还没有发布到 PyPI，wheel 由 CI 构建；在本地构建和试用的方法见[开发指南](docs/development.md)第 2 节。用起来是这样：
+
+```python
+import materials_workbench as mw
+
+rutile = mw.read("rutile.cif")
+rutile.summary()["space_group"]          # {'number': 136, 'setting': 'standard', 'symbol': 'P 4_2/m n m'}
+rutile.supercell([2, 2, 2]).write("rutile-222.vasp")
+relaxed = mw.read("relaxed/CONTCAR")
+relaxed.detect_symmetry(tolerance=0.05)  # 预览，不改结构
+relaxed.symmetrize(tolerance=0.05)       # 原地、可撤销：relaxed.undo()
+relaxed.call("structure.sites", {"offset": 0, "limit": 10})
+```
+
+设计见[命令行与 Python 设计稿](docs/design/scripting.md)。
+
 ## 文档
 
 - [产品路线图](docs/roadmap.md)：定位、竞品、各版本的功能、算法与验收标准
 - [架构](docs/architecture.md)：模块划分、依赖方向、模拟清单与当前里程碑
 - [开发指南](docs/development.md)：环境、命令、代码约定、测试与提交
-- 设计稿：[界面外壳](docs/design/ui-shell.md) · [晶体学数据模型](docs/design/crystallography-model.md) · [3D 视口](docs/design/viewport-rendering.md) · [AI 集成](docs/design/ai-integration.md)
+- 设计稿：[界面外壳](docs/design/ui-shell.md) · [晶体学数据模型](docs/design/crystallography-model.md) · [3D 视口](docs/design/viewport-rendering.md) · [AI 集成](docs/design/ai-integration.md) · [命令行与 Python](docs/design/scripting.md)
 
 ## 许可证
 

@@ -153,7 +153,7 @@ mod tests {
         let sample = load(SampleKey::Rutile);
         assert_eq!(sample.structure.symmetry.operations().len(), 16);
         // 8 corner Ti + 1 body-center Ti + 4 O, two of them repeated at z = 1.
-        assert_eq!(sample.derived.atoms.len(), 15);
+        assert_eq!(sample.derived.one_cell(&sample.structure).len(), 15);
         let density = sample.derived.density.expect("known elements");
         assert!((density - 4.25).abs() < 0.01, "{density}");
     }
@@ -162,7 +162,7 @@ mod tests {
     fn strontium_titanate_shows_a_full_cell() {
         let sample = load(SampleKey::StrontiumTitanate);
         assert_eq!(sample.structure.symmetry.operations().len(), 48);
-        assert_eq!(sample.derived.atoms.len(), 8 + 1 + 6);
+        assert_eq!(sample.derived.one_cell(&sample.structure).len(), 8 + 1 + 6);
         let density = sample.derived.density.expect("known elements");
         assert!((density - 5.12).abs() < 0.01, "{density}");
     }
@@ -258,7 +258,7 @@ mod tests {
     fn every_display_atom_refers_to_a_site() {
         for key in ALL {
             let sample = load(key);
-            for atom in &sample.derived.atoms {
+            for atom in &sample.derived.one_cell(&sample.structure) {
                 assert!(sample.structure.site(atom.atom.site).is_some(), "{key:?}");
             }
         }

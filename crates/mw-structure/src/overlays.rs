@@ -1,14 +1,15 @@
 //! Everything GPUI draws over the 3D image: the info chip, the hovered
 //! atom, the measuring or moving prompt, measurement labels and the
-//! floating view toolbar (`docs/design/ui-shell.md` §4.2). Only the toolbar takes the
-//! pointer; the chips and labels let clicks through to the atoms.
+//! floating view toolbar with its popovers (`docs/design/ui-shell.md`
+//! §4.2). Only the toolbar takes the pointer; the chips and labels let
+//! clicks through to the atoms.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
-};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::actions::{KEY_CONTEXT, ResetView, ToggleMeasure, ToggleMoveAtoms};
@@ -38,7 +39,8 @@ impl StructureWorkspace {
             self.measurement_labels(cx)
         };
         let hovered = self.render_hovered_atom(cx);
-        let atom_count = self.document.derived().atoms.len();
+        let info = self.display_info();
+        let preparing = self.is_preparing_display();
         let chip = || {
             div()
                 .absolute()
@@ -82,8 +84,12 @@ impl StructureWorkspace {
                         chip()
                             .relative()
                             .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
                             .text_color(theme.muted_foreground)
-                            .child(tr!("viewport.info", atoms = atom_count)),
+                            .when(preparing, |this| this.child(Spinner::new().xsmall()))
+                            .child(info),
                     )
                     .children(prompt.map(|prompt| {
                         h_flex()
@@ -189,6 +195,28 @@ impl StructureWorkspace {
                 tr!("toolbar.polyhedra"),
                 DisplayModel::Polyhedra,
             ))
+            // The centers belong to the polyhedra, so their popover only
+            // shows with them.
+            .when(self.display_model() == DisplayModel::Polyhedra, |this| {
+                let panel = self.polyhedra_panel.clone();
+                this.child(
+                    Popover::new("polyhedron-centers")
+                        .anchor(Anchor::BottomCenter)
+                        .open(self.polyhedra_open)
+                        .on_open_change(cx.listener(|this, open: &bool, _, cx| {
+                            this.set_polyhedra_open(*open, cx)
+                        }))
+                        .trigger(
+                            Button::new("polyhedron-centers-trigger")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ChevronUp)
+                                .tooltip(tr!("toolbar.polyhedron_centers"))
+                                .accessibility_label(tr!("toolbar.polyhedron_centers")),
+                        )
+                        .content(move |_, _, _| panel.clone()),
+                )
+            })
             .child(div().w_px().h_5().mx_1().bg(theme.border))
             .child(
                 Button::new("toggle-measure")
@@ -222,31 +250,22 @@ impl StructureWorkspace {
                         window.dispatch_action(Box::new(ToggleMoveAtoms), cx)
                     })),
             )
-            .child(
-                // Mock: the popover only explains that display ranges are not
-                // implemented yet.
+            .child({
+                let panel = self.range_panel.clone();
                 Popover::new("display-range")
                     .anchor(Anchor::BottomCenter)
+                    .open(self.range_open)
+                    .on_open_change(cx.listener(|this, open: &bool, window, cx| {
+                        this.set_range_open(*open, window, cx)
+                    }))
                     .trigger(
                         Button::new("display-range-trigger")
                             .ghost()
                             .small()
                             .label(tr!("toolbar.display_range")),
                     )
-                    .content(|_, _, cx| {
-                        v_flex()
-                            .w_64()
-                            .gap_1()
-                            .text_sm()
-                            .child(tr!("toolbar.display_range_title"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(tr!("toolbar.display_range_mock")),
-                            )
-                    }),
-            )
+                    .content(move |_, _, _| panel.clone())
+            })
             .child(div().w_px().h_5().mx_1().bg(theme.border))
             .child(
                 Button::new("reset-view")

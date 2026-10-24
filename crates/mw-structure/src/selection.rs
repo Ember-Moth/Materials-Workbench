@@ -1,6 +1,7 @@
 //! The workspace's one selection, shared by the site list and the viewport
 //! (`docs/design/ui-shell.md` §4.2–§4.3): the list selects whole sites, the
-//! viewport single atoms; ⇧- or ⌘-click adds and removes atoms.
+//! viewport single atoms; ⇧- or ⌘-click (Ctrl-click on Linux and Windows)
+//! adds and removes atoms.
 
 use gpui_kit::*;
 use mw_crystal::{AtomFate, AtomRef, IdMap, SiteId, Target};
@@ -41,6 +42,11 @@ impl Selection {
     /// The site the properties panel shows: that of the item added last.
     pub fn primary_site(&self) -> Option<SiteId> {
         self.0.last().map(|item| item.site())
+    }
+
+    /// The item added last.
+    pub fn last(&self) -> Option<Selected> {
+        self.0.last().copied()
     }
 
     /// Whether the site or any of its atoms is selected.
@@ -146,8 +152,8 @@ impl StructureWorkspace {
             }
         };
         let spheres: Vec<usize> = self
-            .document
-            .derived()
+            .display
+            .shown
             .atoms
             .iter()
             .enumerate()
@@ -158,10 +164,10 @@ impl StructureWorkspace {
     }
 
     /// The atom a viewport pick refers to; spheres are in the order of the
-    /// document's displayed atoms.
+    /// atoms the display range shows.
     pub(crate) fn picked_atom(&self, pick: Option<Pick>) -> Option<AtomRef> {
         match pick? {
-            Pick::Sphere(ix) => self.document.derived().atoms.get(ix).map(|atom| atom.atom),
+            Pick::Sphere(ix) => self.display.shown.atoms.get(ix).map(|atom| atom.atom),
             Pick::Bond(_) => None,
         }
     }
@@ -173,7 +179,7 @@ impl StructureWorkspace {
     /// if no such atom is displayed.
     pub fn displayed_atom_position(&self, fractional: [f64; 3], cx: &App) -> Option<Point<Pixels>> {
         let derived = self.document.derived();
-        let atom = derived.atoms.iter().find(|atom| {
+        let atom = self.display.shown.atoms.iter().find(|atom| {
             derived
                 .fractional(atom.atom)
                 .is_some_and(|f| (0..3).all(|i| (f[i] - fractional[i]).abs() < 1e-3))
@@ -211,7 +217,7 @@ impl StructureWorkspace {
             }
             return;
         }
-        let adding = modifiers.shift || modifiers.platform;
+        let adding = modifiers.shift || modifiers.secondary();
         let selection = match (atom, pick) {
             (Some(atom), _) if adding => {
                 let mut selection = self.selection.clone();

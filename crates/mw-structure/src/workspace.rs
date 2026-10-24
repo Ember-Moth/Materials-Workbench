@@ -15,19 +15,23 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use mw_crystal::{
     AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
-    CrystalDocument, Edit, EditMode, SiteId, Structure, element,
+    CrystalDocument, DisplayRange, Edit, EditMode, PolyhedronCenters, SiteId, SphereCenter,
+    Structure, element,
 };
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
-    Camera, DisplayModel as SavedDisplayModel, EntryView, PanelTab as SavedPanelTab, StructureFile,
+    Camera, DisplayModel as SavedDisplayModel, DisplayRange as SavedDisplayRange, EntryView,
+    PanelTab as SavedPanelTab, SphereCenter as SavedSphereCenter, StructureFile,
 };
 use mw_viewport::{CameraPose, Viewport};
 
 use crate::actions::*;
 use crate::cell_dialog::{self, CellDialog};
+use crate::display_range::{DisplayRangePanel, DisplayState};
 use crate::document::StructureDocument;
 use crate::moving::AtomDrag;
-use crate::scene::{self, DisplayModel, LineColors};
+use crate::polyhedra::PolyhedraPanel;
+use crate::scene::{self, Atoms, DisplayModel, LineColors};
 use crate::selection::Selection;
 use crate::symmetrize_dialog::{self, SymmetrizeDialog};
 use crate::{dialogs, format};
@@ -131,6 +135,20 @@ pub struct StructureWorkspace {
     pub(crate) panel: PanelTab,
     pub(crate) panel_open: bool,
     pub(crate) display_model: DisplayModel,
+    /// The centers of the polyhedra in the polyhedra model (crystallography
+    /// design §5.6): view state, like the display model.
+    pub(crate) polyhedron_centers: PolyhedronCenters,
+    pub(crate) polyhedra_panel: Entity<PolyhedraPanel>,
+    /// Whether the popover choosing the centers is open.
+    pub(crate) polyhedra_open: bool,
+    /// What part of the crystal the viewport shows (crystallography design
+    /// §5.5): view state, kept apart from the document and its undo.
+    pub(crate) display_range: DisplayRange,
+    /// The atoms shown for it (`display_range.rs`).
+    pub(crate) display: DisplayState,
+    pub(crate) range_panel: Entity<DisplayRangePanel>,
+    /// Whether the display range popover is open.
+    pub(crate) range_open: bool,
     pub(crate) measuring: bool,
     /// Atoms clicked for the measurement in progress.
     pub(crate) measure_picks: Vec<AtomRef>,
@@ -217,6 +235,10 @@ impl StructureWorkspace {
             .or(document.structure().sites.first())
             .map_or_else(Selection::default, |site| Selection::site(site.id));
 
+        let workspace = cx.entity().downgrade();
+        let range_panel = cx.new(|cx| DisplayRangePanel::new(workspace.clone(), window, cx));
+        let polyhedra_panel = cx.new(|_| PolyhedraPanel::new(workspace));
+
         let mut this = Self {
             document,
             viewport,
@@ -224,6 +246,13 @@ impl StructureWorkspace {
             panel: PanelTab::Properties,
             panel_open: true,
             display_model: DisplayModel::BallAndStick,
+            polyhedron_centers: PolyhedronCenters::default(),
+            polyhedra_panel,
+            polyhedra_open: false,
+            display_range: DisplayRange::default(),
+            display: DisplayState::default(),
+            range_panel,
+            range_open: false,
             measuring: false,
             measure_picks: Vec::new(),
             moving: false,
@@ -313,12 +342,32 @@ impl StructureWorkspace {
             PanelTab::Measurements => SavedPanelTab::Measurements,
             PanelTab::Diagnostics => SavedPanelTab::Diagnostics,
         };
-        EntryView::new(
+        let mut view = EntryView::new(
             Some(camera),
             Some(display_model),
             Some(panel),
             Some(self.panel_open),
-        )
+        );
+        // Left out when they are the default, as older views have none.
+        if let PolyhedronCenters::Elements(elements) = &self.polyhedron_centers {
+            view = view.with_polyhedron_centers(elements.iter().cloned().collect());
+        }
+        if self.display_range == DisplayRange::default() {
+            return view;
+        }
+        let range = match self.display_range {
+            DisplayRange::Cells { counts, boundary } => {
+                SavedDisplayRange::Cells { counts, boundary }
+            }
+            DisplayRange::Sphere { center, radius } => SavedDisplayRange::Sphere {
+                center: match center {
+                    SphereCenter::Atom(atom) => SavedSphereCenter::Atom(atom),
+                    SphereCenter::Point(point) => SavedSphereCenter::Point(point),
+                },
+                radius,
+            },
+        };
+        view.with_display_range(range)
     }
 
     /// Shows the structure as it was when saved.
@@ -334,6 +383,13 @@ impl StructureWorkspace {
                 self.refresh_scene(cx);
             }
         }
+        let centers = view
+            .polyhedron_centers
+            .as_ref()
+            .map_or(PolyhedronCenters::Default, |elements| {
+                PolyhedronCenters::Elements(elements.iter().cloned().collect())
+            });
+        self.set_polyhedron_centers(centers, cx);
         if let Some(panel) = view.panel {
             self.panel = match panel {
                 SavedPanelTab::Properties => PanelTab::Properties,
@@ -344,6 +400,21 @@ impl StructureWorkspace {
         }
         if let Some(open) = view.panel_open {
             self.panel_open = open;
+        }
+        if let Some(range) = view.display_range {
+            let range = match range {
+                SavedDisplayRange::Cells { counts, boundary } => {
+                    DisplayRange::Cells { counts, boundary }
+                }
+                SavedDisplayRange::Sphere { center, radius } => DisplayRange::Sphere {
+                    center: match center {
+                        SavedSphereCenter::Atom(atom) => SphereCenter::Atom(atom),
+                        SavedSphereCenter::Point(point) => SphereCenter::Point(point),
+                    },
+                    radius,
+                },
+            };
+            self.restore_display_range(range, cx);
         }
         // After the scene, so that the zoom is limited to its size.
         if let Some(camera) = view.camera {
@@ -369,17 +440,11 @@ impl StructureWorkspace {
         cx.notify();
     }
 
-    fn set_display_model(
-        &mut self,
-        model: DisplayModel,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if model == DisplayModel::Polyhedra {
-            dialogs::not_implemented(tr!("feature.polyhedra"), window, cx);
-        }
+    fn set_display_model(&mut self, model: DisplayModel, _: &mut Window, cx: &mut Context<Self>) {
         if self.display_model != model {
             self.display_model = model;
+            // The centers' popover belongs to the polyhedra.
+            self.polyhedra_open &= model == DisplayModel::Polyhedra;
             self.refresh_scene(cx);
             cx.notify();
         }
@@ -495,13 +560,31 @@ impl StructureWorkspace {
         self.occupants.get(index).map(|editor| editor.label.clone())
     }
 
-    /// Rebuilds what the viewport draws, after the display model or the
-    /// measurements change.
+    /// Rebuilds what the viewport draws, after the structure, the display
+    /// range, the display model or the measurements change. While the atoms
+    /// of a large range are worked out in the background, the viewport
+    /// keeps the previous scene, and this runs again when they are ready.
     pub(crate) fn refresh_scene(&mut self, cx: &mut Context<Self>) {
+        if !self.update_display(cx) {
+            return;
+        }
         let colors = self.line_colors(cx);
-        let scene = scene::scene(&self.document, self.display_model, colors);
-        self.viewport
-            .update(cx, |viewport, cx| viewport.set_scene(scene, cx));
+        let derived = self.document.derived();
+        let atoms = Atoms {
+            structure: self.document.structure(),
+            orbits: &derived.orbits,
+            displayed: &self.display.shown,
+            ids: None,
+        };
+        let annotations = self.document.crystal.annotations();
+        let scene = scene::draw(&atoms, annotations, self.display_model, colors);
+        let reframe = self.take_reframe();
+        self.viewport.update(cx, |viewport, cx| {
+            viewport.set_scene(scene, cx);
+            if reframe {
+                viewport.frame_scene(cx);
+            }
+        });
         self.sync_viewport_selection(cx);
     }
 
@@ -884,6 +967,8 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::show_ball_and_stick))
             .on_action(cx.listener(Self::show_space_filling))
             .on_action(cx.listener(Self::show_polyhedra))
+            .on_action(cx.listener(Self::edit_polyhedra))
+            .on_action(cx.listener(Self::edit_display_range))
             .on_action(cx.listener(Self::show_properties))
             .on_action(cx.listener(Self::show_sites))
             .on_action(cx.listener(Self::show_measurements))

@@ -2079,9 +2079,10 @@ mod tests {
     fn every_atom_in_p1_is_its_own_site() {
         let (supercell, derived) = load(SampleKey::RutileSupercell);
         // The first displayed atoms are a corner atom and its images.
-        let targets: Vec<Target> = derived.atoms[..3]
+        let atoms = derived.one_cell(&supercell);
+        let targets: Vec<Target> = atoms[..3]
             .iter()
-            .chain(derived.atoms.iter().filter(|a| a.atom.site == SiteId(5)))
+            .chain(atoms.iter().filter(|a| a.atom.site == SiteId(5)))
             .map(|atom| Target::Atom(atom.atom))
             .collect();
         let sites = target_sites(&supercell, &derived, &targets).unwrap();
@@ -2096,7 +2097,8 @@ mod tests {
         assert_eq!(applied.structure.sites.len(), 6);
         // Every atom follows to the site it became, in the same cell.
         let expanded = Derived::compute(&applied.structure);
-        for atom in &derived.atoms {
+        let atoms = derived.one_cell(&rutile);
+        for atom in &atoms {
             let AtomFate::Kept(kept) = applied.ids.atom(atom.atom) else {
                 panic!("{:?} lost", atom.atom);
             };
@@ -2107,7 +2109,7 @@ mod tests {
         }
         // And back: the P1 atoms become members of the symmetric sites again.
         let undone = applied.inverse.apply(&applied.structure).unwrap();
-        for atom in &derived.atoms {
+        for atom in &atoms {
             let AtomFate::Kept(kept) = applied.ids.atom(atom.atom) else {
                 unreachable!()
             };
@@ -2124,7 +2126,7 @@ mod tests {
         let (rutile, derived) = load(SampleKey::Rutile);
         let o1 = site(&rutile, "O1");
         let one = derived
-            .atoms
+            .one_cell(&rutile)
             .iter()
             .map(|a| a.atom)
             .find(|a| a.site == o1 && a.member == 2)

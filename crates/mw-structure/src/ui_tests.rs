@@ -9,7 +9,7 @@
 //! keystrokes and typed text go through the real key bindings and inputs.
 
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputState, NumberInputEvent, StepAction};
 use std::time::Duration;
 
 use gpui_kit::{
@@ -62,6 +62,17 @@ fn open_document(
         .expect("open a test window")
     });
     let mut cx = VisualTestContext::from_window(window, cx);
+    // The tests pick atoms and count frames; without a renderer they would
+    // fail for reasons that have nothing to do with what they test.
+    let error = workspace.read_with(&cx, |workspace, cx| {
+        workspace.viewport.read(cx).renderer_error().cloned()
+    });
+    if let Some(error) = error {
+        panic!(
+            "the 3D view has no renderer ({error}): UI tests need a wgpu adapter, on a \
+             machine without a GPU a software one (docs/development.md §4)"
+        );
+    }
     focus_workspace(&workspace, &mut cx);
     (workspace, cx)
 }
@@ -84,7 +95,7 @@ fn focus_workspace(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestCo
 fn type_into(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str) {
     cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
     draw(cx);
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input(text);
     cx.simulate_keystrokes("enter");
     draw(cx);
@@ -95,7 +106,7 @@ fn type_into(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str)
 fn type_text(cx: &mut VisualTestContext, input: &Entity<InputState>, text: &str) {
     cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
     draw(cx);
-    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input(text);
     draw(cx);
 }
@@ -205,7 +216,7 @@ fn the_selection_stays_ringed_through_edits(cx: &mut TestAppContext) {
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
 
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
 }
@@ -225,11 +236,11 @@ fn typed_cell_parameters_follow_the_symmetry_and_undo(cx: &mut TestAppContext) {
     focus_workspace(&workspace, &mut cx);
     assert_eq!(steps(&workspace, &mut cx), 1);
 
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(cell(&workspace, CellParam::B, &mut cx), 4.594);
     assert_eq!(text(&a, &mut cx), "4.594");
-    cx.simulate_keystrokes("cmd-shift-z");
+    cx.simulate_keystrokes("secondary-shift-z");
     draw(&mut cx);
     assert_eq!(cell(&workspace, CellParam::A, &mut cx), 4.7);
 }
@@ -291,7 +302,7 @@ fn mixed_occupancy_from_the_occupant_fields(cx: &mut TestAppContext) {
     type_into(&mut cx, &f, "0.2");
     assert_eq!(occupancies(&mut cx), [0.75, 0.2]);
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z cmd-z cmd-z");
+    cx.simulate_keystrokes("secondary-z secondary-z secondary-z");
     draw(&mut cx);
     assert_eq!(occupancies(&mut cx), [1.0]);
     let labels = workspace.read_with(&cx, |workspace, _| workspace.occupants.len());
@@ -346,11 +357,11 @@ fn labels_are_renamed_from_their_field_and_undo(cx: &mut TestAppContext) {
     assert_eq!(steps(&workspace, &mut cx), 2);
 
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z cmd-z");
+    cx.simulate_keystrokes("secondary-z secondary-z");
     draw(&mut cx);
     assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O1"]);
     assert_eq!(text(&field, &mut cx), "O1");
-    cx.simulate_keystrokes("cmd-shift-z");
+    cx.simulate_keystrokes("secondary-shift-z");
     draw(&mut cx);
     assert_eq!(labels(&workspace, SiteId(2), &mut cx), ["O2"]);
     assert_eq!(text(&field, &mut cx), "O2");
@@ -428,7 +439,7 @@ fn delete_removes_whole_sites_and_undo_brings_them_back(cx: &mut TestAppContext)
     let selected = workspace.read_with(&cx, |workspace, _| workspace.selected_site());
     assert_eq!(selected, None);
 
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(
         sites(&workspace, &mut cx),
@@ -464,7 +475,7 @@ fn a_cell_off_its_symmetry_is_aligned_in_one_step(cx: &mut TestAppContext) {
     draw(&mut cx);
     assert_eq!(steps(&workspace, &mut cx), 1);
 
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(cell(&workspace, CellParam::B, &mut cx), 3.9051);
     assert_eq!(cell(&workspace, CellParam::Alpha, &mut cx), 90.01);
@@ -553,7 +564,7 @@ fn typed_coordinates_keep_the_special_position(cx: &mut TestAppContext) {
     assert_eq!(notifications(&mut cx), before + 2);
 
     focus_workspace(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(position(&rutile, o1, &mut cx), [0.31, 0.31, 0.0]);
     assert_eq!(text(&x, &mut cx), "0.31");
@@ -566,16 +577,26 @@ fn hover_atom_of(
     site: SiteId,
     cx: &mut VisualTestContext,
 ) -> (AtomRef, gpui_kit::Point<gpui_kit::Pixels>) {
+    hover_atom_where(workspace, |atom| atom.site == site, cx)
+}
+
+/// Points at the displayed atoms `wanted` accepts in turn until one is not
+/// hidden behind another, and returns where it is in the window, hovered.
+fn hover_atom_where(
+    workspace: &Entity<StructureWorkspace>,
+    wanted: impl Fn(&AtomRef) -> bool,
+    cx: &mut VisualTestContext,
+) -> (AtomRef, gpui_kit::Point<gpui_kit::Pixels>) {
     let candidates: Vec<(AtomRef, gpui_kit::Point<gpui_kit::Pixels>)> =
         workspace.read_with(cx, |workspace, cx| {
             let viewport = workspace.viewport.read(cx);
             let origin = viewport.bounds().expect("laid out").origin;
             workspace
-                .document
-                .derived()
+                .display
+                .shown
                 .atoms
                 .iter()
-                .filter(|atom| atom.atom.site == site)
+                .filter(|atom| wanted(&atom.atom))
                 .filter_map(|atom| Some((atom.atom, origin + viewport.project(atom.position)?)))
                 .collect()
         });
@@ -588,7 +609,7 @@ fn hover_atom_of(
             return (atom, at);
         }
     }
-    panic!("no atom of site {} is visible", site.0);
+    panic!("no such atom is visible");
 }
 
 fn alt() -> Modifiers {
@@ -629,7 +650,7 @@ fn dragging_an_atom_moves_its_site_along_its_special_position(cx: &mut TestAppCo
     assert_eq!(selected, [Target::Atom(atom)]);
 
     focus_workspace(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(position(&rutile, o1, &mut cx), [0.3048, 0.3048, 0.0]);
 }
@@ -858,7 +879,7 @@ fn converting_to_p1_follows_the_selection_and_undoes_at_once(cx: &mut TestAppCon
     assert_eq!(ringed(&rutile, &mut cx), (1, true));
 
     focus_workspace(&rutile, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(sites(&rutile, &mut cx), [SiteId(1), SiteId(2)]);
     let selected = rutile.read_with(&cx, |workspace, _| workspace.selection.targets());
@@ -894,7 +915,7 @@ fn the_delete_dialog_converts_to_p1_and_deletes_one_atom(cx: &mut TestAppContext
     assert_eq!(labels, ["Sr1", "Ti1", "O1_1", "O1_3"]);
     assert_eq!(steps(&srtio3, &mut cx), 1);
     focus_workspace(&srtio3, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(sites(&srtio3, &mut cx), [SiteId(1), SiteId(2), SiteId(3)]);
 }
@@ -944,7 +965,7 @@ fn an_edit_renders_one_frame(cx: &mut TestAppContext) {
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
 
     focus_workspace(&workspace, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(frames(&workspace, &mut cx), before + 2);
     assert_eq!(ringed(&workspace, &mut cx), (8, true));
@@ -1172,7 +1193,7 @@ fn transforming_the_cell(cx: &mut TestAppContext) {
 
     // One undo puts the conventional cell and the selection back.
     focus_workspace(&salt, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(cell(&salt, CellParam::Alpha, &mut cx), 90.0);
     let selected = salt.read_with(&cx, |workspace, _| workspace.selection.targets());
@@ -1322,7 +1343,7 @@ fn symmetrizing_a_p1_structure(cx: &mut TestAppContext) {
 
     // One undo puts the supercell and the selection back.
     focus_workspace(&supercell, &mut cx);
-    cx.simulate_keystrokes("cmd-z");
+    cx.simulate_keystrokes("secondary-z");
     draw(&mut cx);
     assert_eq!(sites(&supercell, &mut cx).len(), 48);
     let selected = supercell.read_with(&cx, |workspace, _| workspace.selection.targets());
@@ -1403,4 +1424,549 @@ fn ai_edits_say_whose_they_are(cx: &mut TestAppContext) {
     });
     assert!(refused.is_err());
     assert_eq!(steps(&workspace, &mut cx), 1);
+}
+
+fn range_panel(
+    workspace: &Entity<StructureWorkspace>,
+    cx: &mut VisualTestContext,
+) -> Entity<crate::display_range::DisplayRangePanel> {
+    workspace.read_with(cx, |workspace, _| workspace.range_panel.clone())
+}
+
+fn display_range(
+    workspace: &Entity<StructureWorkspace>,
+    cx: &mut VisualTestContext,
+) -> mw_crystal::DisplayRange {
+    workspace.read_with(cx, |workspace, _| workspace.display_range())
+}
+
+/// Atoms the viewport draws, as the scene holds them.
+fn shown_atoms(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) -> Vec<AtomRef> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .display
+            .shown
+            .atoms
+            .iter()
+            .map(|a| a.atom)
+            .collect()
+    })
+}
+
+fn open_range_popover(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditDisplayRange), cx));
+    draw(cx);
+}
+
+/// Milestone M14: the popover's fields set a block of cells; refused values
+/// say why and leave the range as it was; Escape closes the popover.
+#[gpui_kit::test]
+fn the_popover_shows_blocks_of_cells(cx: &mut TestAppContext) {
+    use mw_crystal::DisplayRange;
+    let (srtio3, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    assert_eq!(display_range(&srtio3, &mut cx), DisplayRange::default());
+    assert_eq!(shown_atoms(&srtio3, &mut cx).len(), 15);
+    let info = srtio3.read_with(&cx, |workspace, _| workspace.display_info().to_string());
+    assert!(info.contains("1 × 1 × 1"), "{info}");
+
+    open_range_popover(&mut cx);
+    assert!(srtio3.read_with(&cx, |workspace, _| workspace.range_open));
+    let panel = range_panel(&srtio3, &mut cx);
+    let counts = panel.read_with(&cx, |panel, _| panel.counts.clone());
+    assert_eq!(text(&counts[0], &mut cx), "1");
+
+    // Typed: two cells along a, with the boundary atoms of 2 × 1 × 1.
+    type_into(&mut cx, &counts[0], "2");
+    let cells = |counts, boundary| DisplayRange::Cells { counts, boundary };
+    assert_eq!(display_range(&srtio3, &mut cx), cells([2, 1, 1], true));
+    // 3 × 2 × 2 corner Sr, two Ti, and 3 + 4 + 4 face-center O.
+    assert_eq!(shown_atoms(&srtio3, &mut cx).len(), 12 + 2 + 11);
+    // The stepper's + steps a count, at once.
+    cx.update(|_, cx| {
+        counts[2].update(cx, |_, cx| {
+            cx.emit(NumberInputEvent::Step(StepAction::Increment))
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(display_range(&srtio3, &mut cx), cells([2, 1, 2], true));
+    assert_eq!(text(&counts[2], &mut cx), "2");
+    // Without boundary atoms: five atoms in each of the four cells.
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.set_boundary(false, window, cx)));
+    draw(&mut cx);
+    assert_eq!(display_range(&srtio3, &mut cx), cells([2, 1, 2], false));
+    assert_eq!(shown_atoms(&srtio3, &mut cx).len(), 5 * 4);
+    // A view state, not an edit.
+    assert_eq!(steps(&srtio3, &mut cx), 0);
+
+    // Refused: no cells, or far too many atoms. The range stays.
+    type_into(&mut cx, &counts[1], "0");
+    let error = panel.read_with(&cx, |panel, _| panel.error());
+    assert!(error.is_some_and(|e| !e.is_empty()));
+    type_into(&mut cx, &counts[1], "100000");
+    let error = panel
+        .read_with(&cx, |panel, _| panel.error())
+        .expect("too many atoms")
+        .to_string();
+    assert!(error.contains("2\u{202F}000\u{202F}000"), "{error}");
+    assert!(error.contains("100\u{202F}000"), "{error}");
+    assert_eq!(display_range(&srtio3, &mut cx), cells([2, 1, 2], false));
+    // A good value clears the error.
+    type_into(&mut cx, &counts[1], "3");
+    assert_eq!(panel.read_with(&cx, |panel, _| panel.error()), None);
+    assert_eq!(display_range(&srtio3, &mut cx), cells([2, 3, 2], false));
+
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(!srtio3.read_with(&cx, |workspace, _| workspace.range_open));
+}
+
+/// A sphere around the selected atom shows its neighbors in every cell;
+/// selections and measurements name the atoms with their cells, and the
+/// sphere follows its atom through edits.
+#[gpui_kit::test]
+fn spheres_center_on_the_selected_atom_and_follow_it(cx: &mut TestAppContext) {
+    use mw_crystal::{DisplayRange, Edit, SphereCenter};
+    let (srtio3, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    let ti = AtomRef::new(SiteId(2), 0, [0; 3]);
+    select(&srtio3, Selection::atom(ti), &mut cx);
+    open_range_popover(&mut cx);
+    let panel = range_panel(&srtio3, &mut cx);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.show_sphere(window, cx)));
+    draw(&mut cx);
+    let around = |radius| DisplayRange::Sphere {
+        center: SphereCenter::Atom(ti),
+        radius,
+    };
+    assert_eq!(display_range(&srtio3, &mut cx), around(6.0));
+    let (center, radius) =
+        panel.read_with(&cx, |panel, _| (panel.center.clone(), panel.radius.clone()));
+    assert_eq!(text(&center[0], &mut cx), "0.5");
+    assert_eq!(text(&radius, &mut cx), "6");
+
+    // 3.4 Å: the Ti, its six O and the eight Sr around it.
+    type_into(&mut cx, &radius, "3.4");
+    assert_eq!(display_range(&srtio3, &mut cx), around(3.4));
+    let atoms = shown_atoms(&srtio3, &mut cx);
+    assert_eq!(atoms.len(), 15);
+    // The Sr are corners of the cells around the Ti: some in other cells.
+    assert!(
+        atoms
+            .iter()
+            .any(|a| a.site == SiteId(1) && a.cell == [1, 1, 1])
+    );
+    // Selecting the site rings each of its atoms shown, in every cell.
+    select(&srtio3, Selection::site(SiteId(1)), &mut cx);
+    assert_eq!(ringed(&srtio3, &mut cx).0, 8);
+    // A distance to an atom in another cell is measured like any other.
+    let sr = AtomRef::new(SiteId(1), 0, [1, 1, 1]);
+    let distance = Measurement::Distance([ti, sr]);
+    let outcome = cx.update(|window, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.execute(Command::AddMeasurement(distance), window, cx)
+        })
+    });
+    assert!(outcome.is_ok());
+    let value = srtio3.read_with(&cx, |workspace, _| {
+        crate::measure::value(&workspace.document, &distance)
+    });
+    assert_eq!(value.as_deref(), Some("3.382 Å"));
+
+    // Typing the center's own coordinates keeps the atom; others make a
+    // point.
+    type_into(&mut cx, &center[0], "0.5");
+    assert_eq!(display_range(&srtio3, &mut cx), around(3.4));
+
+    // Converting to P1 renames the Ti's site; the sphere follows the atom.
+    let outcome = cx.update(|window, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.edit(Edit::ExpandToP1, window, cx)
+        })
+    });
+    assert!(outcome.is_ok());
+    let DisplayRange::Sphere {
+        center: SphereCenter::Atom(atom),
+        ..
+    } = display_range(&srtio3, &mut cx)
+    else {
+        panic!("still around an atom");
+    };
+    assert_ne!(atom.site, ti.site);
+    assert_eq!(shown_atoms(&srtio3, &mut cx).len(), 15);
+    // Deleting that atom's site leaves the sphere where the atom was.
+    let outcome = cx.update(|window, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.edit(Edit::RemoveSite { site: atom.site }, window, cx)
+        })
+    });
+    assert!(outcome.is_ok());
+    let range = display_range(&srtio3, &mut cx);
+    assert_eq!(
+        range,
+        DisplayRange::Sphere {
+            center: SphereCenter::Point([0.5; 3]),
+            radius: 3.4
+        }
+    );
+    assert_eq!(shown_atoms(&srtio3, &mut cx).len(), 14);
+    let label = panel.read_with(&cx, |panel, _| panel.error());
+    assert_eq!(label, None);
+    // Undo brings the atom back; the sphere stays around its place.
+    focus_workspace(&srtio3, &mut cx);
+    cx.simulate_keystrokes("secondary-z");
+    draw(&mut cx);
+    assert_eq!(display_range(&srtio3, &mut cx), range);
+    assert_eq!(shown_atoms(&srtio3, &mut cx).len(), 15);
+
+    // Back to cells: the block shown before.
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.show_cells(window, cx)));
+    draw(&mut cx);
+    assert_eq!(display_range(&srtio3, &mut cx), DisplayRange::default());
+}
+
+/// Atoms of other cells are picked, ringed and dragged like those of the
+/// cell at the origin.
+#[gpui_kit::test]
+fn atoms_move_in_any_cell_of_the_range(cx: &mut TestAppContext) {
+    use mw_crystal::DisplayRange;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let range = DisplayRange::Cells {
+        counts: [2, 2, 1],
+        boundary: false,
+    };
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(range, cx)
+    });
+    assert!(set.is_ok());
+    draw(&mut cx);
+    assert_eq!(shown_atoms(&rutile, &mut cx).len(), 24);
+
+    let o1 = SiteId(2);
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let (atom, at) = hover_atom_where(&rutile, |a| a.site == o1 && a.cell != [0; 3], &mut cx);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let to = at + point(px(40.), px(25.));
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    // The preview moves the site's atoms in every cell: all sixteen ringed.
+    assert_eq!(ringed(&rutile, &mut cx).0, 16);
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    let [x, y, _] = position(&rutile, o1, &mut cx);
+    assert!(
+        (x - y).abs() < 1e-12 && (x - 0.3048).abs() > 1e-3,
+        "{x} {y}"
+    );
+    // The dragged atom, with its cell, is the selection.
+    let selected = rutile.read_with(&cx, |workspace, _| workspace.selection.targets());
+    assert_eq!(selected, [Target::Atom(atom)]);
+    assert_eq!(display_range(&rutile, &mut cx), range);
+    assert_eq!(shown_atoms(&rutile, &mut cx).len(), 24);
+}
+
+/// Large ranges are worked out in the background: until then the viewport
+/// keeps the previous atoms and the chip says what is coming.
+#[gpui_kit::test]
+fn large_ranges_are_prepared_in_the_background(cx: &mut TestAppContext) {
+    use mw_crystal::DisplayRange;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let range = DisplayRange::Cells {
+        counts: [10, 10, 10],
+        boundary: true,
+    };
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(range, cx)
+    });
+    assert!(set.is_ok());
+    let (preparing, info, shown) = rutile.read_with(&cx, |workspace, _| {
+        (
+            workspace.is_preparing_display(),
+            workspace.display_info().to_string(),
+            workspace.display.shown.atoms.len(),
+        )
+    });
+    assert!(preparing);
+    assert!(info.contains("10 × 10 × 10"), "{info}");
+    assert_eq!(shown, 15);
+    draw(&mut cx);
+    assert!(!rutile.read_with(&cx, |workspace, _| workspace.is_preparing_display()));
+    assert_eq!(shown_atoms(&rutile, &mut cx).len(), 6531);
+
+    // An edit prepares them again, and the selection still rings every
+    // atom of its site.
+    select(&rutile, Selection::site(SiteId(1)), &mut cx);
+    assert_eq!(ringed(&rutile, &mut cx).0, 11 * 11 * 11 + 1000);
+    let a = cell_input(&rutile, CellParam::A, &mut cx);
+    type_into(&mut cx, &a, "4.7");
+    assert_eq!(cell(&rutile, CellParam::A, &mut cx), 4.7);
+    assert!(!rutile.read_with(&cx, |workspace, _| workspace.is_preparing_display()));
+    assert_eq!(ringed(&rutile, &mut cx).0, 11 * 11 * 11 + 1000);
+    let x = rutile.read_with(&cx, |workspace, _| {
+        let atom = workspace.display.shown.atoms.last().unwrap();
+        workspace
+            .document
+            .structure()
+            .lattice
+            .to_fractional(atom.position)
+    });
+    assert!(x.iter().all(|v| (-0.01..=10.01).contains(v)), "{x:?}");
+}
+
+/// In a large range the drag preview is worked out in the background, one
+/// at a time; the drop is still one step from where the pointer let go.
+#[gpui_kit::test]
+fn dragging_in_a_large_range_previews_in_the_background(cx: &mut TestAppContext) {
+    use mw_crystal::DisplayRange;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let range = DisplayRange::Cells {
+        counts: [10, 10, 10],
+        boundary: true,
+    };
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(range, cx)
+    });
+    assert!(set.is_ok());
+    draw(&mut cx);
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let o1 = SiteId(2);
+    let (atom, at) = hover_atom_of(&rutile, o1, &mut cx);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let first = at + point(px(20.), px(10.));
+    cx.simulate_mouse_move(first, MouseButton::Left, Modifiers::none());
+    // Two more moves while the first preview is worked out: shown together.
+    let to = at + point(px(40.), px(25.));
+    cx.simulate_mouse_move(
+        at + point(px(30.), px(15.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    let (previewed, rings) = rutile.read_with(&cx, |workspace, cx| {
+        let drag = workspace.drag.as_ref().expect("dragging");
+        (
+            drag.previewed_position(o1),
+            workspace.viewport.read(cx).selection().len(),
+        )
+    });
+    // O1's four atoms per cell, the boundary planes included, all ringed.
+    assert_eq!(rings, 4 * 1000 + 2 * 100);
+    assert_eq!(steps(&rutile, &mut cx), 0);
+
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    // The drop lands where the last preview showed.
+    assert_eq!(Some(position(&rutile, o1, &mut cx)), previewed);
+    let selected = rutile.read_with(&cx, |workspace, _| workspace.selection.targets());
+    assert_eq!(selected, [Target::Atom(atom)]);
+    assert_eq!(shown_atoms(&rutile, &mut cx).len(), 6531);
+}
+
+/// The range is saved with the view, and a saved range that no longer fits
+/// the structure gives way to the default.
+#[gpui_kit::test]
+fn the_display_range_is_saved_with_the_view(cx: &mut TestAppContext) {
+    use mw_crystal::{DisplayRange, SphereCenter};
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let sphere = DisplayRange::Sphere {
+        center: SphereCenter::Atom(AtomRef::new(SiteId(2), 1, [0, 1, 0])),
+        radius: 5.0,
+    };
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(sphere, cx)
+    });
+    assert!(set.is_ok());
+    let view = cx.update(|_, cx| rutile.read(cx).view(cx));
+    assert!(view.display_range.is_some());
+
+    let default = DisplayRange::default();
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(default, cx)
+    });
+    assert!(set.is_ok());
+    rutile.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    assert_eq!(display_range(&rutile, &mut cx), sphere);
+    let shown = shown_atoms(&rutile, &mut cx);
+    assert!(shown.contains(&AtomRef::new(SiteId(2), 1, [0, 1, 0])));
+
+    // Saved for another structure: rutile has no eighth O1 atom.
+    let missing = mw_project_file::DisplayRange::Sphere {
+        center: mw_project_file::SphereCenter::Atom(AtomRef::new(SiteId(2), 7, [0; 3])),
+        radius: 5.0,
+    };
+    let view = view.with_display_range(missing);
+    rutile.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    assert_eq!(display_range(&rutile, &mut cx), default);
+    // The default is left out of the saved view.
+    let view = cx.update(|_, cx| rutile.read(cx).view(cx));
+    assert_eq!(view.display_range, None);
+}
+
+/// Polyhedra the viewport draws, as the scene holds them.
+fn polyhedra(workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext) -> usize {
+    workspace.read_with(cx, |workspace, _| workspace.display.shown.polyhedra.len())
+}
+
+/// Milestone M15: the polyhedra model draws the coordination polyhedra,
+/// with the ligands outside the cell; clicks pass through them to the
+/// atoms; dragging an atom previews the polyhedra too; it is a view, not
+/// an edit.
+#[gpui_kit::test]
+fn the_polyhedra_model_draws_coordination_polyhedra(cx: &mut TestAppContext) {
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let shown = notifications(&mut cx);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowPolyhedra), cx));
+    draw(&mut cx);
+    // No "not implemented" any more.
+    assert_eq!(notifications(&mut cx), shown);
+    // The eight corner Ti and the body-center one, each an octahedron.
+    assert_eq!(polyhedra(&rutile, &mut cx), 9);
+    let atoms = shown_atoms(&rutile, &mut cx);
+    assert!(atoms.len() > 15, "{}", atoms.len());
+    // The cell's atoms come first; the O added for the corners' octahedra
+    // lie in the cells around.
+    assert!(atoms[15..].iter().all(|a| a.site == SiteId(2)));
+    assert!(atoms[15..].iter().all(|a| a.cell != [0; 3]));
+    assert_eq!(steps(&rutile, &mut cx), 0);
+
+    // Every Ti sits inside its octahedron, and is picked through it.
+    let (ti, _) = hover_atom_of(&rutile, SiteId(1), &mut cx);
+    assert_eq!(ti.site, SiteId(1));
+    // So is an O added for a corner's octahedron.
+    let (o, _) = hover_atom_where(
+        &rutile,
+        |a| a.site == SiteId(2) && a.cell != [0; 3],
+        &mut cx,
+    );
+    assert_eq!(o.site, SiteId(2));
+
+    // Dragging an O deforms the octahedra in the preview.
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    let (_, at) = hover_atom_of(&rutile, SiteId(2), &mut cx);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    let to = at + point(px(30.), px(20.));
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    let previewed = rutile.read_with(&cx, |workspace, _| {
+        workspace
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.previewed_polyhedra())
+    });
+    assert_eq!(previewed, Some(9));
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    assert_eq!(polyhedra(&rutile, &mut cx), 9);
+
+    // Ball and stick again: the cell's atoms, no polyhedra.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowBallAndStick), cx));
+    draw(&mut cx);
+    assert_eq!(polyhedra(&rutile, &mut cx), 0);
+    assert_eq!(shown_atoms(&rutile, &mut cx).len(), 15);
+}
+
+/// The popover chooses the centers by element; the choice is view state,
+/// saved with the view.
+#[gpui_kit::test]
+fn polyhedron_centers_are_chosen_by_element(cx: &mut TestAppContext) {
+    use mw_crystal::PolyhedronCenters;
+    let (srtio3, mut cx) = open(cx, SampleKey::StrontiumTitanate);
+    // The palette's "Polyhedron centers…" shows the polyhedra and opens
+    // the popover.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditPolyhedra), cx));
+    draw(&mut cx);
+    let (model, open) = srtio3.read_with(&cx, |workspace, _| {
+        (workspace.display_model(), workspace.polyhedra_open)
+    });
+    assert_eq!(model, crate::scene::DisplayModel::Polyhedra);
+    assert!(open);
+    // By default the TiO₆ octahedron only: Sr has twelve O.
+    assert_eq!(polyhedra(&srtio3, &mut cx), 1);
+
+    // The Sr too: the eight corners' cuboctahedra.
+    cx.update(|_, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.set_center_element("Sr", true, cx)
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 9);
+    let both = PolyhedronCenters::Elements(["Sr".to_string(), "Ti".to_string()].into());
+    let centers = srtio3.read_with(&cx, |workspace, _| workspace.polyhedron_centers().clone());
+    assert_eq!(centers, both);
+    assert_eq!(steps(&srtio3, &mut cx), 0);
+
+    // Saved with the view, and restored from it.
+    let view = cx.update(|_, cx| srtio3.read(cx).view(cx));
+    assert_eq!(
+        view.polyhedron_centers.as_deref(),
+        Some(&["Sr".to_string(), "Ti".to_string()][..])
+    );
+    cx.update(|_, cx| {
+        srtio3.update(cx, |workspace, cx| {
+            workspace.set_center_element("Ti", false, cx);
+            workspace.set_center_element("Sr", false, cx);
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 0);
+    srtio3.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 9);
+    // A view without a choice is the default.
+    let default = mw_project_file::EntryView::new(None, view.display_model, None, None);
+    srtio3.update(&mut cx, |workspace, cx| workspace.set_view(&default, cx));
+    draw(&mut cx);
+    assert_eq!(polyhedra(&srtio3, &mut cx), 1);
+
+    // Escape closes the popover, which has the focus.
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(!srtio3.read_with(&cx, |workspace, _| workspace.polyhedra_open));
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditPolyhedra), cx));
+    draw(&mut cx);
+    assert!(srtio3.read_with(&cx, |workspace, _| workspace.polyhedra_open));
+
+    // Leaving the polyhedra closes their popover.
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowSpaceFilling), cx));
+    draw(&mut cx);
+    assert!(!srtio3.read_with(&cx, |workspace, _| workspace.polyhedra_open));
+    assert_eq!(polyhedra(&srtio3, &mut cx), 0);
+}
+
+/// Polyhedra of a large range are worked out in the background with its
+/// atoms.
+#[gpui_kit::test]
+fn polyhedra_of_large_ranges_are_prepared_in_the_background(cx: &mut TestAppContext) {
+    use mw_crystal::DisplayRange;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::ShowPolyhedra), cx));
+    draw(&mut cx);
+    let range = DisplayRange::Cells {
+        counts: [10, 10, 10],
+        boundary: true,
+    };
+    let started = std::time::Instant::now();
+    let set = rutile.update(&mut cx, |workspace, cx| {
+        workspace.set_display_range(range, cx)
+    });
+    assert!(set.is_ok());
+    assert!(rutile.read_with(&cx, |workspace, _| workspace.is_preparing_display()));
+    assert_eq!(polyhedra(&rutile, &mut cx), 9);
+    draw(&mut cx);
+    assert!(!rutile.read_with(&cx, |workspace, _| workspace.is_preparing_display()));
+    // 11³ corner Ti and 1000 body-center ones.
+    assert_eq!(polyhedra(&rutile, &mut cx), 11 * 11 * 11 + 1000);
+    eprintln!(
+        "10 × 10 × 10 rutile polyhedra: {} atoms ready {:?} after setting the range",
+        shown_atoms(&rutile, &mut cx).len(),
+        started.elapsed()
+    );
 }

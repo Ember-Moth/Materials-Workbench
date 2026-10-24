@@ -1,3 +1,9 @@
+# Text files are checked out with LF on every platform, Windows included
+# (where Git converts to CRLF by default): tests compare exported text and
+# fixtures byte for byte, and the sample projects are generated from the
+# fixtures.
+* text=auto eol=lf
+
 # The sample projects and the test projects of older format versions hold
 # byte-exact copies of imported files, checked against their SHA-256
 # (docs/design/project-format.md §7.1): no line-ending conversion.

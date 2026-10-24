@@ -186,7 +186,10 @@ pub(crate) mod tests {
         let file = StructureFile::new(block.structure.clone().unwrap(), Vec::new(), Vec::new());
         let document =
             StructureDocument::new("p", "x", file.clone(), provenance.clone(), Some(block));
-        assert_eq!(document.derived().atoms.len(), 8);
+        let one_cell = document
+            .derived()
+            .display(document.structure(), &Default::default());
+        assert_eq!(one_cell.atoms.len(), 8);
         // Three defaulted angles and one element taken from its label.
         assert_eq!(document.diagnostics.len(), 4);
         assert_eq!(document.space_group_symbol().as_deref(), Some("P1"));

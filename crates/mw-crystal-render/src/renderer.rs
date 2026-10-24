@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use glam::{Mat4, Vec3};
+
 use crate::camera::CameraMatrices;
 use crate::scene::{BondInstance, HighlightRing, LineInstance, Scene, SphereInstance};
 
@@ -38,6 +40,19 @@ const BOND_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
 const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
+const TRIANGLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+
+/// One face of a polyhedron as uploaded: its corners in Å (xyz) and its
+/// polyhedron's linear RGB and opacity.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct TriangleInstance {
+    a: [f32; 4],
+    b: [f32; 4],
+    c: [f32; 4],
+    color: [f32; 4],
+}
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -341,10 +356,122 @@ impl Instances {
     }
 }
 
+/// The scene's polyhedra, kept on the CPU so that their faces can be put in
+/// back-to-front order for each view (`docs/design/viewport-rendering.md`
+/// §5.6): polyhedra by the depth of their centroids, and within each, the
+/// faces turned away from the camera before those turned toward it, which
+/// is exact for a convex polyhedron.
+struct Polyhedra {
+    /// Each polyhedron's centroid and its faces in `faces`.
+    groups: Vec<([f32; 3], std::ops::Range<usize>)>,
+    /// Every face, polyhedron by polyhedron, and its normal.
+    faces: Vec<TriangleInstance>,
+    normals: Vec<[f32; 3]>,
+    /// The faces in the order last uploaded; kept to spare an allocation
+    /// per frame while the camera turns.
+    ordered: Vec<TriangleInstance>,
+    buffer: wgpu::Buffer,
+    /// The view the buffer's order is for.
+    ordered_for: Option<Mat4>,
+}
+
+impl Polyhedra {
+    fn new(device: &wgpu::Device, scene: &Scene) -> Option<Self> {
+        let mut groups = Vec::with_capacity(scene.polyhedra.len());
+        let mut faces = Vec::new();
+        let mut normals = Vec::new();
+        for polyhedron in &scene.polyhedra {
+            let corners: Vec<Vec3> = polyhedron
+                .vertices
+                .iter()
+                .map(|v| Vec3::from_array(*v))
+                .collect();
+            if corners.is_empty() {
+                continue;
+            }
+            let centroid = corners.iter().sum::<Vec3>() / corners.len() as f32;
+            let start = faces.len();
+            for triangle in &polyhedron.triangles {
+                let corner = |i: u32| corners.get(i as usize).copied();
+                let (Some(a), Some(b), Some(c)) = (
+                    corner(triangle[0]),
+                    corner(triangle[1]),
+                    corner(triangle[2]),
+                ) else {
+                    continue;
+                };
+                let point = |p: Vec3| [p.x, p.y, p.z, 0.0];
+                faces.push(TriangleInstance {
+                    a: point(a),
+                    b: point(b),
+                    c: point(c),
+                    color: polyhedron.color,
+                });
+                normals.push((b - a).cross(c - a).to_array());
+            }
+            groups.push((centroid.to_array(), start..faces.len()));
+        }
+        (!faces.is_empty()).then(|| Self {
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("polyhedra"),
+                size: (faces.len() * std::mem::size_of::<TriangleInstance>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            ordered: Vec::with_capacity(faces.len()),
+            groups,
+            faces,
+            normals,
+            ordered_for: None,
+        })
+    }
+
+    /// Puts the faces in back-to-front order for `view`, unless they are
+    /// in it already. Runs on the UI thread for every frame of a turning
+    /// camera, so it keeps to plain loops (viewport design §8.6).
+    fn order(&mut self, queue: &wgpu::Queue, view: Mat4) {
+        if self.ordered_for == Some(view) {
+            return;
+        }
+        // Depth along the view direction: the camera looks down −z, so the
+        // farthest comes first in increasing z.
+        let row = view.row(2);
+        let toward = [row.x, row.y, row.z];
+        let dot = |v: &[f32; 3]| toward[0] * v[0] + toward[1] * v[1] + toward[2] * v[2];
+        let mut depths: Vec<(f32, usize)> = self
+            .groups
+            .iter()
+            .enumerate()
+            .map(|(i, (centroid, _))| (dot(centroid), i))
+            .collect();
+        depths.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        self.ordered.clear();
+        for &(_, group) in &depths {
+            let range = self.groups[group].1.clone();
+            for facing in [false, true] {
+                for i in range.clone() {
+                    if (dot(&self.normals[i]) >= 0.0) == facing {
+                        self.ordered.push(self.faces[i]);
+                    }
+                }
+            }
+        }
+        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.ordered));
+        self.ordered_for = Some(view);
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
+        pass.set_pipeline(pipeline);
+        pass.set_vertex_buffer(0, self.buffer.slice(..));
+        pass.draw(0..3, 0..self.faces.len() as u32);
+    }
+}
+
 struct Pipelines {
     spheres: wgpu::RenderPipeline,
     bonds: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    polyhedra: wgpu::RenderPipeline,
     rings: wgpu::RenderPipeline,
     sphere_ids: wgpu::RenderPipeline,
     bond_ids: wgpu::RenderPipeline,
@@ -362,6 +489,9 @@ struct PipelineSpec<'a> {
     ids: bool,
     /// Rings are drawn over the scene without hiding anything behind them.
     depth_write: bool,
+    /// Blended over what is behind, rather than covering the samples its
+    /// alpha says; polyhedra.
+    blend: bool,
 }
 
 impl Pipelines {
@@ -376,6 +506,7 @@ impl Pipelines {
         let sphere = shader("sphere.wgsl", include_str!("sphere.wgsl"));
         let bond = shader("bond.wgsl", include_str!("bond.wgsl"));
         let line = shader("line.wgsl", include_str!("line.wgsl"));
+        let polyhedron = shader("polyhedron.wgsl", include_str!("polyhedron.wgsl"));
         let sphere_size = std::mem::size_of::<SphereInstance>();
         let pipeline = |spec: PipelineSpec| {
             let (format, samples, write_mask) = if spec.ids {
@@ -408,7 +539,7 @@ impl Pipelines {
                 multisample: wgpu::MultisampleState {
                     count: samples,
                     mask: !0,
-                    alpha_to_coverage_enabled: samples > 1,
+                    alpha_to_coverage_enabled: samples > 1 && !spec.blend,
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: spec.module,
@@ -416,7 +547,7 @@ impl Pipelines {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: None,
+                        blend: spec.blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask,
                     })],
                 }),
@@ -433,6 +564,7 @@ impl Pipelines {
             attributes: &SPHERE_ATTRIBUTES,
             ids,
             depth_write: true,
+            blend: false,
         };
         let bonds = |label, fragment, ids| PipelineSpec {
             label,
@@ -443,6 +575,7 @@ impl Pipelines {
             attributes: &BOND_ATTRIBUTES,
             ids,
             depth_write: true,
+            blend: false,
         };
         Self {
             spheres: pipeline(spheres("spheres", "fs_main", false)),
@@ -458,6 +591,18 @@ impl Pipelines {
                 attributes: &LINE_ATTRIBUTES,
                 ids: false,
                 depth_write: true,
+                blend: false,
+            }),
+            polyhedra: pipeline(PipelineSpec {
+                label: "polyhedra",
+                module: &polyhedron,
+                vertex: "vs_main",
+                fragment: "fs_main",
+                stride: std::mem::size_of::<TriangleInstance>(),
+                attributes: &TRIANGLE_ATTRIBUTES,
+                ids: false,
+                depth_write: false,
+                blend: true,
             }),
             rings: pipeline(PipelineSpec {
                 label: "highlight rings",
@@ -483,6 +628,7 @@ pub struct Renderer {
     spheres: Option<Instances>,
     bonds: Option<Instances>,
     lines: Option<Instances>,
+    polyhedra: Option<Polyhedra>,
     rings: Option<Instances>,
     /// Counts scene changes, so a stale ID texture is redrawn.
     scene_generation: u64,
@@ -498,21 +644,50 @@ pub struct Renderer {
 impl Renderer {
     /// Creates a renderer on the high-performance adapter. Blocks while the
     /// device is requested.
+    ///
+    /// wgpu's environment variables narrow the choice: `WGPU_BACKEND`
+    /// (`vulkan`, `dx12`, `metal`, `gl`), `WGPU_ADAPTER_NAME` (part of the
+    /// adapter's name, any case), `WGPU_POWER_PREF` and the instance
+    /// flags. CI pins the software adapters with them
+    /// (`docs/development.md` §2.1).
     pub fn new() -> Result<Self, RenderError> {
         pollster::block_on(Self::new_async())
     }
 
     async fn new_async() -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|e| RenderError::NoAdapter(e.to_string()))?;
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = match std::env::var("WGPU_ADAPTER_NAME") {
+            Ok(name) if !name.is_empty() => {
+                let wanted = name.to_lowercase();
+                let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+                let names: Vec<String> = adapters.iter().map(|a| a.get_info().name).collect();
+                adapters
+                    .into_iter()
+                    .find(|a| a.get_info().name.to_lowercase().contains(&wanted))
+                    .ok_or_else(|| {
+                        RenderError::NoAdapter(format!(
+                            "none is named like WGPU_ADAPTER_NAME={name}; there are {names:?}"
+                        ))
+                    })?
+            }
+            _ => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::from_env()
+                        .unwrap_or(wgpu::PowerPreference::HighPerformance),
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(|e| RenderError::NoAdapter(e.to_string()))?,
+        };
         let info = adapter.get_info();
+        log::info!(
+            "renderer adapter: {} ({:?}, {:?})",
+            info.name,
+            info.backend,
+            info.device_type
+        );
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("mw-crystal-render"),
@@ -565,6 +740,7 @@ impl Renderer {
             spheres: None,
             bonds: None,
             lines: None,
+            polyhedra: None,
             rings: None,
             scene_generation: 0,
             targets: Vec::new(),
@@ -585,6 +761,7 @@ impl Renderer {
         self.spheres = Instances::upload(&self.device, "spheres", &scene.spheres);
         self.bonds = Instances::upload(&self.device, "bonds", &scene.bonds);
         self.lines = Instances::upload(&self.device, "lines", &scene.lines);
+        self.polyhedra = Polyhedra::new(&self.device, scene);
         self.rings = None;
         self.scene_generation += 1;
         scene.bounding_radius()
@@ -615,6 +792,9 @@ impl Renderer {
             return Err(RenderError::EmptyViewport);
         };
         self.write_camera(&request.camera, width, height, request.scale_factor);
+        if let Some(polyhedra) = &mut self.polyhedra {
+            polyhedra.order(&self.queue, request.camera.view);
+        }
 
         let padded_row = padded_bytes_per_row(width);
         let buffer = take_readback_buffer(
@@ -656,6 +836,10 @@ impl Renderer {
             Instances::draw(&self.spheres, &mut pass, &pipelines.spheres);
             Instances::draw(&self.bonds, &mut pass, &pipelines.bonds);
             Instances::draw(&self.lines, &mut pass, &pipelines.lines);
+            // Translucent, over everything opaque; rings stay on top.
+            if let Some(polyhedra) = &self.polyhedra {
+                polyhedra.draw(&mut pass, &pipelines.polyhedra);
+            }
             Instances::draw(&self.rings, &mut pass, &pipelines.rings);
         }
         encoder.copy_texture_to_buffer(
@@ -713,7 +897,8 @@ impl Renderer {
             .as_ref()
             .is_some_and(|t| t.drawn != Some(drawn));
         if stale {
-            // Widths do not matter: lines and rings are not pickable.
+            // Widths do not matter: lines, rings and polyhedra are not
+            // pickable.
             self.write_camera(&request.camera, width, height, 1.0);
         }
         let Some(targets) = &mut self.id_targets else {
@@ -983,9 +1168,20 @@ mod tests {
 
     const SIZE: u32 = 65;
 
-    /// A renderer, or `None` (and the test passes) on machines without a GPU.
+    /// A renderer, or `None` on machines without a GPU adapter: the test
+    /// is skipped and says why. Where `MW_REQUIRE_GPU` is set, as in CI
+    /// with its software adapters, a missing adapter fails the test.
     fn renderer() -> Option<Renderer> {
-        Renderer::new().map_err(|e| eprintln!("skipping: {e}")).ok()
+        match Renderer::new() {
+            Ok(renderer) => Some(renderer),
+            Err(e) if std::env::var_os("MW_REQUIRE_GPU").is_some_and(|v| v != "0") => {
+                panic!("MW_REQUIRE_GPU is set, but there is no renderer: {e}")
+            }
+            Err(e) => {
+                eprintln!("skipped, there is no renderer: {e} (MW_REQUIRE_GPU=1 fails instead)");
+                None
+            }
+        }
     }
 
     fn submit(renderer: &mut Renderer, size: u32, camera: CameraMatrices) -> PendingFrame {
@@ -1117,6 +1313,184 @@ mod tests {
             ..Scene::default()
         });
         assert_eq!(pick(&mut renderer, camera, 60, 32), None);
+    }
+
+    /// Looking down −z from z = 10, five units across.
+    fn from_front() -> CameraMatrices {
+        CameraMatrices {
+            view: glam::Mat4::look_at_rh(glam::Vec3::Z * 10.0, glam::Vec3::ZERO, glam::Vec3::Y),
+            proj: glam::Mat4::orthographic_rh(-2.5, 2.5, -2.5, 2.5, 0.1, 20.0),
+        }
+    }
+
+    /// A square facing the z axis at height `z`, from −`half` to `half`.
+    fn square(z: f32, half: f32, color: [f32; 4]) -> crate::Polyhedron {
+        crate::Polyhedron {
+            vertices: vec![
+                [-half, -half, z],
+                [half, -half, z],
+                [half, half, z],
+                [-half, half, z],
+            ],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+            color,
+        }
+    }
+
+    /// A translucent face over the background lets it show through; over a
+    /// sphere behind it, both colors mix; a sphere in front hides it. It is
+    /// not picked: the sphere behind is, and nothing where it covers only
+    /// the background.
+    #[test]
+    fn polyhedra_are_seen_through_and_clicked_through() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let behind = SphereInstance {
+            center_radius: [0.0, 0.0, -1.0, 0.8],
+            color: BLUE,
+        };
+        let in_front = SphereInstance {
+            center_radius: [1.5, 0.0, 2.0, 0.5],
+            color: [0.0, 1.0, 0.0, 1.0],
+        };
+        renderer.set_scene(&Scene {
+            spheres: vec![behind, in_front],
+            polyhedra: vec![square(1.0, 2.0, [1.0, 0.0, 0.0, 0.5])],
+            ..Scene::default()
+        });
+        let camera = from_front();
+        let frame = frame(&mut renderer, camera);
+
+        // Over the background: red, but not as red as the face itself; the
+        // highlight adds as much green as blue.
+        let over_background = bgra(&frame, 12, 32);
+        let [b, g, r, _] = over_background;
+        assert!(
+            (60..235).contains(&r) && r > b + 80 && b == g,
+            "BGRA {over_background:?}"
+        );
+        // The frame stays opaque.
+        assert_eq!(over_background[3], 255);
+        // Over the blue sphere: blue through red.
+        let over_sphere = bgra(&frame, 32, 32);
+        assert!(
+            over_sphere[0] > 60 && over_sphere[2] > 60,
+            "BGRA {over_sphere:?}"
+        );
+        // The green sphere is in front of the face: no red on it, as much
+        // red as blue from its highlight.
+        let green = bgra(&frame, 52, 32);
+        assert!(green[1] > 100 && green[2] == green[0], "BGRA {green:?}");
+        // Beyond the face, the background.
+        assert_eq!(bgra(&frame, 1, 1), [0, 0, 0, 255]);
+
+        assert_eq!(pick(&mut renderer, camera, 32, 32), Some(Pick::Sphere(0)));
+        assert_eq!(pick(&mut renderer, camera, 12, 32), None);
+    }
+
+    /// Faces are blended from the farthest to the nearest whatever their
+    /// order in the scene, and again when the camera turns round.
+    #[test]
+    fn polyhedra_are_drawn_back_to_front() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        renderer.set_scene(&Scene {
+            polyhedra: vec![
+                square(1.0, 2.0, [1.0, 0.0, 0.0, 0.5]),
+                square(-1.0, 2.0, [0.0, 0.0, 1.0, 0.5]),
+            ],
+            ..Scene::default()
+        });
+        // The near face counts twice as much as the far one.
+        let front = bgra(&frame(&mut renderer, from_front()), 32, 32);
+        assert!(front[2] > front[0] + 30, "from the front BGRA {front:?}");
+
+        let behind = CameraMatrices {
+            view: glam::Mat4::look_at_rh(glam::Vec3::Z * -10.0, glam::Vec3::ZERO, glam::Vec3::Y),
+            ..from_front()
+        };
+        let back = bgra(&frame(&mut renderer, behind), 32, 32);
+        assert!(back[0] > back[2] + 30, "from behind BGRA {back:?}");
+        // Back to the front: the order follows the camera.
+        let again = bgra(&frame(&mut renderer, from_front()), 32, 32);
+        assert_eq!(again, front);
+    }
+
+    /// Viewport design §8.6: what translucent polyhedra cost per frame while
+    /// the camera turns, each frame sorting them again. 2331 octahedra and
+    /// their edges among 7897 spheres, as 10 × 10 × 10 rutile cells in the
+    /// polyhedra model, against the spheres alone. A measurement, not a
+    /// check:
+    ///
+    /// cargo test -p mw-crystal-render --release frame_timings -- --ignored --nocapture
+    #[test]
+    #[ignore = "a measurement that prints frame timings"]
+    fn polyhedra_frame_timings() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let spheres = crate::synthetic_lattice(7897);
+        let polyhedra: Vec<crate::Polyhedron> = crate::synthetic_polyhedra(&spheres, 3)
+            .into_iter()
+            .take(2331)
+            .collect();
+        let mut lines = Vec::new();
+        for polyhedron in &polyhedra {
+            let mut edges = std::collections::BTreeSet::new();
+            for t in &polyhedron.triangles {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    edges.insert((a.min(b), a.max(b)));
+                }
+            }
+            for (a, b) in edges {
+                let [x, y, z] = polyhedron.vertices[a as usize];
+                let [ex, ey, ez] = polyhedron.vertices[b as usize];
+                lines.push(LineInstance {
+                    start_width: [x, y, z, 1.0],
+                    end_dash: [ex, ey, ez, 0.0],
+                    color: [0.2, 0.2, 0.2, 1.0],
+                });
+            }
+        }
+        let loads = [
+            ("spheres", Vec::new(), Vec::new()),
+            ("polyhedra", polyhedra, lines),
+        ];
+        for (name, polyhedra, lines) in loads {
+            let count = polyhedra.len();
+            let radius = renderer.set_scene(&Scene {
+                spheres: spheres.clone(),
+                lines,
+                polyhedra,
+                ..Scene::default()
+            });
+            for (width, height) in [(896, 800), (1792, 1600)] {
+                let mut camera = OrbitCamera::framing(radius);
+                let (mut encode, mut wait, frames) = (Duration::ZERO, Duration::ZERO, 30);
+                for _ in 0..frames {
+                    camera.rotate(0.03, 0.01);
+                    let request = RenderRequest {
+                        width,
+                        height,
+                        camera: camera.matrices(width as f32 / height as f32),
+                        clear_color: [0.9, 0.9, 0.9, 1.0],
+                        scale_factor: 2.0,
+                    };
+                    let frame = renderer.render(&request).unwrap().wait().unwrap();
+                    encode += frame.timings.encode;
+                    wait += frame.timings.gpu_wait;
+                }
+                eprintln!(
+                    "{name} ({count} polyhedra) {width}x{height}: encode and submit {:.2} ms, \
+                     GPU and readback {:.2} ms per frame on {}",
+                    encode.as_secs_f64() * 1e3 / f64::from(frames),
+                    wait.as_secs_f64() * 1e3 / f64::from(frames),
+                    renderer.adapter_name()
+                );
+            }
+        }
     }
 
     /// A frame overtaken by a newer submission is not copied; the newest

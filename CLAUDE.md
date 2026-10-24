@@ -2,20 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用）；剩下的模拟（mock）属于之后的版本。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）进行中；第 9 节的模拟已全部替换。
 
 ## 文档是设计的依据
 
 动手前先读对应的文档，设计需要改时先改设计稿：
 
-- `docs/architecture.md`：crate 划分、依赖方向、运行时结构；**第 9 节是模拟清单，第 10 节是 v0.1（M1–M6）和 v0.2（M7–M12）的里程碑及状态**。
+- `docs/architecture.md`：crate 划分、依赖方向、运行时结构；**第 9 节是模拟清单，第 10 节是 v0.1（M1–M6）、v0.2（M7–M12）和 v0.3（M13–M20）的里程碑及状态**。
 - `docs/development.md`：命令、代码约定（图标、文字、命令、模拟）、测试分层、交付流程、提交规范。
 - `docs/roadmap.md`：各版本的功能、算法与验收标准。
 - `docs/design/`：
   - `crystallography-model.md`：数据模型与编辑语义；
   - `viewport-rendering.md`：视口技术选型与 GPUI 源码核查结论；
   - `ui-shell.md`：界面布局与术语表；
-  - `ai-integration.md`：MCP、内置助手与模型服务层。
+  - `ai-integration.md`：MCP、内置助手与模型服务层；
+  - `scripting.md`：命令行 `mw` 与 Python 模块（M19）。
 
 文档用中文写，API 名、crate 名、文件名保留原文。实现与设计不一致时，要修订设计稿，不让两者分叉。
 
@@ -29,9 +30,12 @@ cargo test -p mw-structure rutile_apical_bond_and_angle   # 单个测试（按�
 cargo test -p mw-structure ui_tests                       # 结构工作区的界面集成测试
 cargo test -p workbench ui_tests                          # 外壳的界面集成测试（项目的保存与恢复）
 cargo test -p workbench --test mcp                        # materials-workbench mcp 经 stdio 的端到端测试（含转接到监听端）
+cargo test -p mw-cli                                      # 命令行 mw：运行可执行文件，与注册表和领域函数直接调用的结果比较
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
+
+- **CI**：`.github/workflows/ci.yml` 在 macOS、Linux、Windows 上跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告算失败）、渲染一帧、`cargo test --workspace --locked` 和构建应用。运行器没有显卡，出帧的测试用软件适配器（Linux 的 lavapipe、Windows 的 WARP），由 `WGPU_BACKEND` 和 `WGPU_ADAPTER_NAME` 固定；`MW_REQUIRE_GPU=1` 让找不到适配器的渲染器测试失败而不是跳过。CI 只在推送后运行，推送前先问用户。本地复现和各平台依赖见 `docs/development.md` 第 1 节和 2.1 节。
 
 - **截图巡览**：改界面后自查用。依次切换主要界面并渲染成 PNG，然后自动退出，不需要屏幕录制权限。巡览的步骤在 `apps/workbench/src/screenshot.rs` 的 `TOUR` 里，每步之后等 `Viewport::is_current` 再截图；它用 `screenshots/config` 作配置目录，每次都像第一次启动一样装好示例项目；点选、测量、选中要删除的原子和移动模式下拖动原子都发送真实的鼠标事件（`Pointer` 动作），走的是和用户一样的拾取路径；拖动原子时的预览用 `Hold` 按住截图，下一步再 `Release`；原子的位置按屏幕上那一帧算，所以转动视图的拖动要单独放进一步，等新画面到了再点选；编辑步骤用 `StructureWorkspace::execute` 执行领域命令，再撤销回原样。
 
@@ -43,6 +47,15 @@ cargo fmt --all
 - **无窗口渲染一帧**：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000`
 - **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 1 分钟后自动退出；包括带键的负载和拾取延迟。窗口失去焦点的档位（输出里 `window_lost_focus=true`）数据作废。
 - **MCP Server**：`cargo run --bin materials-workbench -- mcp --allow crates/mw-project-file/samples` 不开窗口，启动后在 stdio 上等客户端；只读，不会改动允许目录里的项目。最近项目来自配置目录（`MW_CONFIG_DIR`）。应用开着且设置里打开了"允许 MCP 客户端连接"（默认关）时，这条命令改为把 stdio 原样转发给应用，客户端看到的是窗口里的项目；应用在用户运行目录里监听，设了 `MW_CONFIG_DIR` 时在它的 `run/` 下，两边要用同一个值（套接字路径不能超过 103 字节）。开发用的 `cargo run -p mw-mcp -- --allow 目录` 是同一个服务器，但不读配置目录。连接 MCP Inspector 和 Claude Code 的写法见 `docs/development.md` 第 2 节；Inspector 要从 npm 下载，运行前先问用户。
+- **命令行 `mw`**：`cargo run -p mw-cli -- info crates/mw-crystal-io/tests/fixtures/rutile.cif`；子命令 `info`、`diagnostics`、`convert`、`supercell`、`transform`、`symmetry`、`symmetrize`、`call`、`capabilities`，一次一批文件，`--json` 给结构化结果（`docs/design/scripting.md` 第 4 节，`docs/development.md` 第 2 节）。
+- **Python 模块**：绑定在 `mw-python` 的可选特性后面，工作区的构建和测试不需要 Python。本机试用和冒烟测试不安装任何东西（不用 pip、不装 maturin）：
+
+  ```bash
+  cargo build -p mw-cli -p mw-python --features mw-python/extension-module
+  python3 -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
+  ```
+
+  脚本把动态库复制成临时目录里的 `materials_workbench.so` 再导入；`-I` 忽略 `PYTHONPATH`，所以目录由脚本加进 `sys.path`。改了绑定还要跑 `cargo clippy -p mw-python --features extension-module --all-targets`。wheel 由 CI 的 maturin 构建，不发布。
 - **模型服务示例**：`cargo run -p mw-llm --example chat -- "问题"` 发一轮对话并打印流式事件，配置全部来自 `MW_LLM_*` 环境变量（见 `docs/development.md` 第 2 节）。它会发真实请求并计费，运行前先问用户；本机的 Ollama 不花钱（`MW_LLM_PROVIDER=ollama`）。
 - **POSCAR 外部核对**：`cargo run -p mw-crystal-io --example export_atoms -- /tmp/mw-poscar` 把全部测试文件和内置示例写成 POSCAR 和清单，再用 pymatgen 和 ASE 读回核对，命令和脚本见 `docs/development.md` 第 2 节。两者要从 PyPI 下载，装进仓库外的临时虚拟环境，不加进仓库，运行前先问用户。
 - **示例项目**：随应用附带的项目在 `crates/mw-project-file/samples/`，由测试生成。改了项目格式（包括 `mw-crystal` 类型的 serde 形式）或 `mw-crystal-io` 的 fixture 后重新生成，`the_samples_are_up_to_date` 会提醒：
@@ -68,17 +81,20 @@ cargo fmt --all
 - **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源；第一个参数是 `mcp` 时在初始化 GPUI 之前转给 `mw_mcp::main`（`src/mcp.rs`），不开窗口。设置里允许 MCP 客户端连接时，`Workbench` 监听并在主线程上逐个运行它们的调用，宿主是借用工作台的 `AppHost`（`src/host.rs`）：列出和打开窗口里的项目与结构，读工作区里的 `CrystalDocument`，编辑经 `StructureWorkspace::execute_by` 进同一个撤销栈并记下客户端，写文件前弹确认（`mcp::ask`）；权限是设置里的 `AiSetting`，审计记录在保存、关闭、退出时追加进项目（`src/ai_log.rs`），打开的项目由应用持锁（`projects.rs`）。
 - **能力 crate（依赖 GPUI）**：
   - `mw-project`：打开着的项目（`ProjectCatalog`：清单、目录、导入或派生后还没保存的结构）和左侧边栏；
-  - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区；移动模式（在视口里拖动原子）在 `src/moving.rs`，拖动中只画预览（`scene::Preview`，不做对称性分析），松手才执行一条 `MoveSite`；"对称化…"对话框在 `src/symmetrize_dialog.rs`，在后台运行 `DetectSymmetry` 预览，确认后执行一条 `Symmetrize`。
+  - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区；移动模式（在视口里拖动原子）在 `src/moving.rs`，拖动中只画预览（`scene::Preview`，不做对称性分析），松手才执行一条 `MoveSite`；"对称化…"对话框在 `src/symmetrize_dialog.rs`，在后台运行 `DetectSymmetry` 预览，确认后执行一条 `Symmetrize`。多面体模型下选中心元素的浮层在 `src/polyhedra.rs`，选择随视图状态保存。
 
   两者互不引用，由外壳通过事件转接，例如 `ProjectSidebarEvent::OpenStructure`。
 - **`mw-viewport`**：把渲染结果放进 GPUI，负责相机交互、异步出帧、拾取（`ViewportEvent::Clicked` / `Hovered`）、悬停高亮和投影。宿主用 `set_sphere_dragging` 打开后，按在球上的拖动报告屏幕平面内的位移（`SphereDragged` / `SphereDropped`，Å）而不转相机；预览用 `preview_scene`，它保持相机绕的中心，画面不平移。它不知道晶体是什么。
 - **纯 Rust、不依赖 GPUI 的 crate**：
-  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1、晶胞变换与超胞（`src/transform.rs`；(P, p) 和 moyo 给出的预设在 `src/cell_transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`；对称性检测与对称化 `DetectSymmetry` 在 `src/symmetrize.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
+  - `mw-crystal`：模型（晶格是参数加朝向，见下文"晶体学模型"）、对称操作、原子展开、转为 P1、晶胞变换与超胞（`src/transform.rs`；(P, p) 和 moyo 给出的预设在 `src/cell_transform.rs`）、派生数据（含对称性分析：空间群识别、位点对称性、Wyckoff 位置、晶胞约束；成键，见 `src/bonds.rs`；化学式、近邻）、显示范围画出的原子与键（`src/display.rs`，`DisplayRange` 和 `Displayed`；配位多面体与凸包在 `src/polyhedra.rs`，配体就是成键的原子）、`AtomRef` 与测量的几何、元素表、内置示例；编辑命令（`src/edit.rs`；对称模式下移动、输入坐标、添加位点的投影与吸附在 `src/placement.rs`；对称性检测与对称化 `DetectSymmetry` 在 `src/symmetrize.rs`）和带撤销栈的 `CrystalDocument`（`src/document.rs`）；符号表和对称性搜索来自 moyo，只在 `src/tables.rs` 里调用；
   - `mw-crystal-io`：CIF 1.1 子集解析和位点整理（吸附到特殊位置、合并混合占位），产出带行号的诊断，并保留模型不存的字段（`CifFields`）；POSCAR / CONTCAR 导入（`src/poscar_read.rs`，P1 结构）；导出 CIF（写回保留的字段）、POSCAR 和扩展 XYZ，写出函数返回文本；
-  - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段和高亮圈，并用 ID 纹理回答"这个像素上是第几个球或键"；
+  - `mw-crystal-render`：wgpu 离屏渲染器，画球、键、线段、高亮圈和半透明多面体（在不透明物体之后画，相机变了时在 CPU 上从远到近排序，不参与拾取），并用 ID 纹理回答"这个像素上是第几个球或键"；
   - `mw-automation`：能力注册表（`ai-integration.md` 第 4 节）。每个能力有英文说明、输入输出 Schema、副作用等级和处理函数，调用的是 `mw-crystal` 的领域命令，导入诊断和导出文本用 `mw-crystal-io`（`src/files.rs`）；项目的列出与打开（`project.list`、`project.open`、`structure.list`、`structure.open`、只在无界面时可用的 `file.open`）在 `src/project.rs`，经 `Host::projects` 拿到 `Projects` trait，没有项目的 `Host`（`Documents`）上返回 `unavailable`；对称化有只读的预览 `structure.detect_symmetry`（MCP Server 自动提供）和可撤销的 `structure.symmetrize`；Schema 由 `schema_struct!` 从 Rust 类型和字段文档注释生成，测试用 `mw-llm` 的检查函数确认它们在严格子集内。`StructureEntryId` 定义在这里，`mw-project` 重新导出；
   - `mw-project-file`：项目文件（`docs/design/project-format.md`）。`.mwproj` 目录里有清单 `project.json`、`structures/<uuid>.json`、`sources/<sha256>.cif`（导入文件的原样副本，POSCAR 为 `.vasp`）和 `view.json`；`read_manifest` 打开项目并按需读取各部分，`save` 原子地写出、清单最后写、再清理不再引用的文件。结构直接用 `mw-crystal` 类型的 serde 形式，改了这些类型的字段要升格式版本（`VERSION`，现为 2）、在 `store.rs` 的 `UPGRADES` 里写迁移，并先把当前示例复制成旧版本的测试项目（`tests/fixtures/projects/v<n>/`）再重新生成示例。示例项目在 `samples/`，由 `tests/samples.rs` 生成并嵌进可执行文件；
   - `mw-mcp`：实验性只读 MCP Server（`ai-integration.md` 第 5 节），由 `materials-workbench mcp` 经库函数 `mw_mcp::main` 启动，走 stdio（另有开发用的可执行文件 `mw-mcp`，总是无界面）。`Server` 把注册表里只读、当前模式下可用的能力映射成工具（名称里的 `.` 换成 `_`，带只读注解和输出 Schema）；`Server::new(host)` 自己持有宿主，调用在阻塞线程池里执行，`Server::dispatching` 的宿主在另一个线程上，调用经 `Dispatcher` 交过去、由那边从 `Calls` 里取出运行（`src/dispatch.rs`）。无界面的宿主 `Headless`（`src/headless.rs`）只读地打开 `--allow` 目录里的 `.mwproj` 项目和项目之外的 CIF 文件（放进不保存的未命名项目），什么都不写。连接运行中的应用（M12）：应用经 `listen`（`src/listen.rs`）在 `Endpoint`（`src/endpoint.rs`：用户运行目录里 0700 的目录，0600 的 Unix 域套接字和令牌文件，Windows 为命名管道）上监听，每个连接握手后跑一个 `Server::dispatching`；`materials-workbench mcp` 先 `relay::connect`，连上就原样转发字节（`src/relay.rs`），否则无界面运行。每个打开的结构的 CIF 文本是资源 `mw://project/{项目 ID}/structure/{条目 ID}.cif`（项目文件里的 UUID）；结果和资源的 `_meta` 带 `materials-workbench/untrusted`。SDK 是官方的 `rmcp`，同时支持 `initialize` 和 2026-07-28 的无状态生命周期。集成测试用 rmcp 的客户端驱动 `mw-mcp`（`tests/stdio.rs`）和 `materials-workbench mcp`（`apps/workbench/tests/mcp.rs`）；
+  - `mw-scripting`：命令行和 Python 共用的一层（`docs/design/scripting.md`）。`read_file` 按界面的规则认格式（`Format::of_input`，与 `mw_structure::import::format_of` 相同）、读文件、给结构起名，得到 `FileReport`；每个结构是一个 `Document`，放在只装它的 `mw_automation::Documents` 里，摘要、诊断、对称性检测与对称化、晶胞变换（`NewCell`）、撤销经 `Registry::standard()` 调用，超胞（`make_supercell`）和写出文本（与 `structure.export` 同样的选择，不限大小）调用界面调用的领域函数；`diagnostics_json`、`capabilities_json` 是两边共用的 JSON。命令行和 Python 要用的新操作在这里包一层，不在两边各写一套；
+  - `mw-cli`：命令行，可执行文件 `mw`（clap），不链接 GPUI。子命令在 `src/commands.rs`，参数在 `src/args.rs`，文字、JSON 和退出码（0 / 1 / 2）在 `src/report.rs`；集成测试 `tests/cli.rs` 运行可执行文件，与直接调用比较；
+  - `mw-python`：Python 模块 `materials_workbench`（PyO3 0.30，`abi3-py310`）。绑定在 `src/python.rs`，只在 `python` / `extension-module` 特性下编译（默认关，工作区的构建和测试不需要 Python）；参数的判断在 `src/lib.rs`，不需要解释器就能测试。macOS 的链接参数在 `build.rs`；wheel 用 maturin（`pyproject.toml`）；Python 侧的冒烟测试是 `tests/smoke.py`；
   - `mw-llm`：内置助手的模型服务客户端。`ChatProvider` 接口下有 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 三个后端；HTTP 跑在专用线程的 tokio runtime 上，返回的流可以由 GPUI 的执行器直接轮询。目前还没有使用者，以后由 `mw-assistant` 依赖（`ai-integration.md` 6.2 节）。它的测试只用手写的 SSE 数据和本机回环服务器，不访问外网。
 
   这些 crate 都要能在命令行和测试里单独使用。纯计算一律放在这一层并在这里写单元测试。
@@ -98,13 +114,14 @@ cargo fmt --all
 - stock GPUI 在任何平台上都没有零拷贝的表面，理由见 `viewport-rendering.md` 第 3 节。
 - 拾取用单独的 1× `R32Uint` ID 通道，只在拾取时、相机或场景变过之后才重画（`viewport-rendering.md` 5.4 节）。
 - `mw-structure` 决定画什么和叠什么：
-  - 原子颜色与半径、键、晶胞边和测量线在 `src/scene.rs` 组成场景，第 i 个球就是 `derived.atoms[i]`；
+  - 原子颜色与半径、键、晶胞边和测量线在 `src/scene.rs` 组成场景，第 i 个球就是显示范围里的第 i 个原子（`Displayed::atoms[i]`）；
+  - 显示范围（`mw_crystal::DisplayRange`，多个晶胞或以原子、点为中心的球）是视图状态，不进撤销栈：工作区在 `src/display_range.rs` 里按它算出显示原子（原子多时在后台），工具条的浮层设置它，随 `view.json` 保存；
   - 选区（位点列表和视口共用）在 `src/selection.rs`，测量模式在 `src/measure.rs`；
   - 测量标注等浮层的位置用 `Viewport::project` 计算。
 
 ### 命令与快捷键
 
-- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。
+- 每个 crate 用 `gpui_kit::actions!` 定义动作，在自己的 `bind_keys` 里注册快捷键。修饰键写 `secondary-`（macOS 上是 ⌘，Linux 和 Windows 上是 Ctrl），不写 `cmd-`（那在其他平台是 Super / Win 键）；界面集成测试里按键也写 `secondary-`，鼠标事件的修饰键用 `Modifiers::secondary()`。
 - 按键上下文有两个：`Workbench`（外壳）和 `StructureWorkspace`（只在结构工作区内有效的快捷键）。
 - 处理器写在拥有该命令的视图上。按钮、快捷键和命令面板都派发同一个动作。
 - 撤销和重做是 `Undo` / `Redo`（⌘Z / ⇧⌘Z，绑定在 `StructureWorkspace` 上下文里；输入框更深的上下文里是撤销文字）。

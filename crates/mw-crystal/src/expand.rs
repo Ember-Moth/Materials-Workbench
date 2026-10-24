@@ -1,12 +1,12 @@
 //! The minimal expansion of the asymmetric unit (design §5.1): every site's
-//! equivalent atoms in the unit cell, the atoms drawn for one cell, and
-//! atoms that come too close to each other.
+//! equivalent atoms in the unit cell, and atoms that come too close to each
+//! other. What a display range draws of them is in `display.rs`.
 //!
 //! Distances use the minimum image found by rounding fractional differences.
 //! That is exact for distances below half the smallest spacing between
 //! lattice planes, which holds for the tolerances used here in any real cell.
 
-use crate::{AtomRef, DisplayAtom, Site, SiteId, Structure};
+use crate::{Site, SiteId, Structure};
 
 /// One site's equivalent atoms in the unit cell.
 #[derive(Clone, Debug, PartialEq)]
@@ -109,47 +109,6 @@ pub fn orbits(structure: &Structure) -> Vec<Orbit> {
             }
         })
         .collect()
-}
-
-/// The atoms drawn for one unit cell: every orbit member, plus a copy on the
-/// opposite face for members that lie on a face, edge or corner.
-///
-/// Mock: stands in for the view layer's display range (design §5.3, v0.3).
-pub fn display_atoms(structure: &Structure, orbits: &[Orbit]) -> Vec<DisplayAtom> {
-    let params = structure.lattice.params();
-    let lengths = [params.a.value(), params.b.value(), params.c.value()];
-    let tolerance = lengths.map(|l| structure.tolerances.position / l);
-    let mut atoms = Vec::new();
-    for orbit in orbits {
-        let Some(site) = structure.site(orbit.site) else {
-            continue;
-        };
-        for (member, position) in orbit.positions.iter().enumerate() {
-            let images = |axis: usize| {
-                let v = position[axis];
-                if v < tolerance[axis] {
-                    vec![v, v + 1.0]
-                } else if v > 1.0 - tolerance[axis] {
-                    vec![v - 1.0, v]
-                } else {
-                    vec![v]
-                }
-            };
-            for x in images(0) {
-                for y in images(1) {
-                    for z in images(2) {
-                        let cell = [x, y, z].map(|v: f64| v.floor() as i32);
-                        atoms.push(DisplayAtom {
-                            atom: AtomRef::new(site.id, member as u16, cell),
-                            element: site.element().to_string(),
-                            position: structure.lattice.to_cartesian([x, y, z]),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    atoms
 }
 
 /// Pairs of different sites with atoms closer than `max_distance` Å, each
@@ -273,25 +232,6 @@ mod tests {
         let orbit = &orbits(&s)[0];
         assert_eq!(orbit.positions.len(), 2);
         assert!((orbit.nearest_image.unwrap() - 0.08).abs() < 1e-9);
-    }
-
-    #[test]
-    fn face_atoms_are_repeated_on_the_opposite_face() {
-        let s = structure(
-            &CUBIC,
-            vec![
-                Site::single(1, "Sr1", "Sr", [0.0, 0.0, 0.0]),
-                Site::single(2, "Ti1", "Ti", [0.5, 0.5, 0.5]),
-                Site::single(3, "O1", "O", [0.0, 0.5, 0.5]),
-            ],
-        );
-        let atoms = display_atoms(&s, &orbits(&s));
-        assert_eq!(atoms.len(), 8 + 1 + 6);
-        assert!(
-            atoms
-                .iter()
-                .all(|a| a.position.iter().all(|v| (0.0..=4.0).contains(v)))
-        );
     }
 
     #[test]

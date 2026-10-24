@@ -20,16 +20,17 @@ gpui_kit::actions!(
     ]
 );
 
-/// Window-wide key bindings (`docs/design/ui-shell.md` §8).
+/// Window-wide key bindings (`docs/design/ui-shell.md` §8). `secondary` is
+/// ⌘ on macOS and Ctrl elsewhere.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-k", ToggleCommandPalette, None),
-        KeyBinding::new("cmd-\\", ToggleSidebar, None),
-        KeyBinding::new("cmd-o", OpenFile, None),
-        KeyBinding::new("cmd-shift-o", OpenProject, None),
-        KeyBinding::new("cmd-s", SaveProject, None),
-        KeyBinding::new("cmd-shift-s", SaveProjectAs, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-k", ToggleCommandPalette, None),
+        KeyBinding::new("secondary-\\", ToggleSidebar, None),
+        KeyBinding::new("secondary-o", OpenFile, None),
+        KeyBinding::new("secondary-shift-o", OpenProject, None),
+        KeyBinding::new("secondary-s", SaveProject, None),
+        KeyBinding::new("secondary-shift-s", SaveProjectAs, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
     ]);
 }

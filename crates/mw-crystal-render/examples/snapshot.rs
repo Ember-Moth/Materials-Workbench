@@ -1,12 +1,13 @@
 //! Renders the synthetic lattice once and saves it as a PNG, for checking
 //! the renderer's output without a window: spheres, bonds, a bounding box of
-//! lines and a highlight ring on the last sphere.
+//! lines, translucent octahedra around every ninth sphere and a highlight
+//! ring on the last sphere.
 //!
 //! cargo run -p mw-crystal-render --example snapshot -- out.png [atoms]
 
 use mw_crystal_render::{
     HighlightRing, LineInstance, OrbitCamera, PendingFrame, RenderRequest, Renderer, Scene,
-    synthetic_bonds, synthetic_lattice,
+    synthetic_bonds, synthetic_lattice, synthetic_polyhedra,
 };
 
 /// The twelve edges of an axis-aligned box from −h to h.
@@ -45,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let radius = renderer.set_scene(&Scene {
         bonds: synthetic_bonds(&spheres),
         lines: box_edges(extent, [0.1, 0.1, 0.1, 1.0]),
+        polyhedra: synthetic_polyhedra(&spheres, 9),
         spheres,
     });
     if let Some(last) = last {
@@ -72,8 +74,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("frame size mismatch")?
         .save(&path)?;
     println!(
-        "{} atoms -> {path} ({}x{})",
-        atoms, frame.width, frame.height
+        "{} atoms -> {path} ({}x{}) on {}",
+        atoms,
+        frame.width,
+        frame.height,
+        renderer.adapter_name()
     );
     Ok(())
 }

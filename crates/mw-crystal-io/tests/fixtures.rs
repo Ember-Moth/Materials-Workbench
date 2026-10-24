@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use mw_crystal::sample::{self, SampleKey};
-use mw_crystal::{Adp, Derived, EditMode, Setting, SymOp};
+use mw_crystal::{Adp, Derived, DisplayRange, EditMode, Setting, SymOp};
 use mw_crystal_io::{DiagnosticKind, ImportReport, Severity, cif};
 
 fn fixture(name: &str) -> (String, ImportReport) {
@@ -88,7 +88,8 @@ fn rutile_matches_the_built_in_sample() {
 
     let derived = Derived::compute(structure);
     assert_eq!(derived.atoms_in_cell(), 6);
-    assert_eq!(derived.atoms.len(), 15);
+    let one_cell = derived.display(structure, &DisplayRange::default());
+    assert_eq!(one_cell.atoms.len(), 15);
     assert!((derived.density.unwrap() - 4.25).abs() < 0.01);
     // The same Wyckoff positions as the file's own columns.
     assert_eq!(
@@ -115,7 +116,8 @@ fn strontium_titanate_expands_to_one_formula_unit() {
         .map(|s| derived.multiplicity(s.id))
         .collect();
     assert_eq!(multiplicities, [Some(1), Some(1), Some(3)]);
-    assert_eq!(derived.atoms.len(), 8 + 1 + 6);
+    let one_cell = derived.display(structure, &DisplayRange::default());
+    assert_eq!(one_cell.atoms.len(), 8 + 1 + 6);
     assert_eq!(
         symmetry(&derived, structure),
         (

@@ -6,7 +6,11 @@
 //! atom of the crystal named by an [`AtomRef`], and analyzes its symmetry:
 //! the space group type, cell constraints, and each site's site symmetry,
 //! coordinate constraints and Wyckoff position ([`SymmetryAnalysis`]). The
-//! space group tables and the symmetry search come from moyo.
+//! space group tables and the symmetry search come from moyo. A
+//! [`DisplayRange`] chooses the part of the crystal the view shows, a block
+//! of cells or a sphere, and gives its atoms and bonds ([`Displayed`]); in
+//! the polyhedra model also the coordination [`Polyhedron`]s of the centers
+//! [`PolyhedronCenters`] chooses.
 //!
 //! Editing (design §7): an [`Edit`] is a serializable command on whole
 //! sites with an exact inverse; [`target_sites`] refuses edits of single
@@ -24,6 +28,7 @@ mod bonds;
 mod cell_transform;
 mod constraints;
 mod derived;
+mod display;
 mod document;
 mod edit;
 pub mod element;
@@ -35,6 +40,7 @@ mod linalg;
 mod measured;
 mod neighbors;
 mod placement;
+mod polyhedra;
 pub mod sample;
 mod site;
 mod space_group;
@@ -45,7 +51,7 @@ mod tables;
 mod transform;
 
 pub use atom_ref::{AtomRef, Measurement, angle, distance};
-pub use bonds::{Bond, BondRules, bonds, covalent_radius, display_bonds};
+pub use bonds::{Bond, BondRules, bonds, covalent_radius};
 pub use cell_transform::{
     CellPreset, CellTransform, MAX_VOLUME_FACTOR, SettingChoice, TransformError, find_setting,
     other_settings,
@@ -53,7 +59,10 @@ pub use cell_transform::{
 pub use constraints::{CELL_DEVIATION, cell_deviation};
 pub use derived::{
     Axis, CellConstraints, CellParam, Constraint, CoordinateConstraint, CrystalSystem,
-    DETECTION_LIMIT, Derived, DisplayAtom, SymmetryAnalysis,
+    DETECTION_LIMIT, Derived, SymmetryAnalysis,
+};
+pub use display::{
+    DisplayAtom, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS, SphereCenter,
 };
 pub use document::{Agent, Annotation, Checkpoint, Command, CrystalDocument, Outcome};
 pub use edit::{
@@ -61,12 +70,16 @@ pub use edit::{
     Target, expand_and_remove, target_sites,
 };
 pub use element::UNKNOWN_ELEMENT;
-pub use expand::{Contact, Orbit, close_contacts, display_atoms, orbits};
+pub use expand::{Contact, Orbit, close_contacts, orbits};
 pub use formula::Formula;
 pub use id_map::{AtomFate, IdMap, PositionMap, Rebasing, Relocation, SiteFate};
 pub use lattice::{CellParams, Lattice, Orientation, Rotation};
 pub use measured::Measured;
 pub use neighbors::Neighbor;
+pub use polyhedra::{
+    CenterElement, Coordination, DEFAULT_MAX_COORDINATION, MAX_LIGANDS, Polyhedron,
+    PolyhedronCenters,
+};
 pub use site::{CoordinateForm, SiteSymmetry, SpecialPosition, special_position};
 pub use space_group::{
     DetectedSymmetry, Setting, SpaceGroupType, Wyckoff, detect_symmetry, it_number_of,

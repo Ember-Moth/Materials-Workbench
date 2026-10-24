@@ -20,7 +20,10 @@ use crate::{
 const FORMAT: &str = "materials-workbench/project";
 const WRITER: &str = concat!("Materials Workbench ", env!("CARGO_PKG_VERSION"));
 const VIEW: &str = "view.json";
-const VIEW_VERSION: u32 = 1;
+/// 2 since a structure's view has a display range, 3 since it has the
+/// centers of its polyhedra (design §8); older files are read as they are,
+/// with the defaults.
+const VIEW_VERSION: u32 = 3;
 const STRUCTURES: &str = "structures";
 const SOURCES: &str = "sources";
 
@@ -123,7 +126,8 @@ impl ProjectDir {
     pub fn read_view(&self) -> Option<ViewState> {
         let bytes = fs::read(self.path.join(VIEW)).ok()?;
         let value: Value = serde_json::from_slice(&bytes).ok()?;
-        if value.get("version")?.as_u64()? != u64::from(VIEW_VERSION) {
+        let version = value.get("version")?.as_u64()?;
+        if !(1..=u64::from(VIEW_VERSION)).contains(&version) {
             return None;
         }
         serde_json::from_value(value).ok()

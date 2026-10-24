@@ -10,8 +10,8 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomRef, Axis, CellParam, CellParams, CellPreset, CellValues, Command, Edit, Measured, SiteId,
-    Species, Target,
+    AtomRef, Axis, CellParam, CellParams, CellPreset, CellValues, Command, DisplayRange, Edit,
+    Measured, SiteId, Species, SphereCenter, Target,
 };
 use mw_project::StructureEntryId;
 use mw_structure::import::OpenedFile;
@@ -590,9 +590,114 @@ const TOUR: &[(&str, Step)] = &[
         focus_workspace(workbench, window, cx);
         window.dispatch_action(Box::new(mw_structure::AlignCell), cx);
     }),
+    // Display ranges (M14), on rutile: the popover shows one cell with its
+    // boundary atoms, the default.
+    ("_show-rutile-range", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        workbench.open_structure(StructureEntryId(1), window, cx);
+    }),
+    ("57-display-range", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditDisplayRange), cx);
+    }),
+    // 3 × 3 × 2 cells with their boundary atoms; the view frames them.
+    ("58-cells", |workbench, window, cx| {
+        let range = DisplayRange::Cells {
+            counts: [3, 3, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    // A sphere of 6 Å around the body-center Ti: its octahedron, the Ti
+    // around it and their O, in the cells around.
+    ("59-sphere", |workbench, window, cx| {
+        let range = DisplayRange::Sphere {
+            center: SphereCenter::Atom(AtomRef::new(SiteId(1), 1, [0; 3])),
+            radius: 6.0,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    ("60-sphere-popover", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditDisplayRange), cx);
+    }),
+    // 10 × 10 × 10 cells, 6531 atoms, worked out in the background.
+    ("61-large-range", |workbench, window, cx| {
+        let range = DisplayRange::Cells {
+            counts: [10, 10, 10],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    ("_default-range", |workbench, window, cx| {
+        set_display_range(workbench, DisplayRange::default(), window, cx);
+    }),
+    // Coordination polyhedra (M15), on rutile: a TiO₆ octahedron around
+    // every Ti of the cell, the corners' completed with O beyond it. The
+    // view is reset to take in the octahedra beyond the cell.
+    ("62-polyhedra", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+        window.dispatch_action(Box::new(mw_structure::ResetView), cx);
+    }),
+    // The popover beside the button: Ti chosen, the threefold O not.
+    ("63-polyhedron-centers", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::EditPolyhedra), cx);
+    }),
+    // 3 × 3 × 2 cells, as in step 58: chains of edge-sharing octahedra
+    // along c, joined at their corners.
+    ("64-polyhedra-cells", |workbench, window, cx| {
+        set_polyhedra_open(workbench, false, cx);
+        let range = DisplayRange::Cells {
+            counts: [3, 3, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    // The SrTiO₃ imported in step 21 (entry 6): the sample's own was
+    // converted to P1 and lost an O in step 18.
+    ("_show-srtio3-polyhedra", |workbench, window, cx| {
+        set_display_range(workbench, DisplayRange::default(), window, cx);
+        workbench.open_structure(StructureEntryId(6), window, cx);
+    }),
+    // SrTiO₃: the TiO₆ octahedron only; the twelvefold Sr are lone atoms.
+    ("65-perovskite-polyhedra", |workbench, window, cx| {
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+    }),
+    // Zincite, imported once more: ZnO₄ tetrahedra.
+    ("_import-zincite-polyhedra", |workbench, window, cx| {
+        workbench.import_paths(vec![fixture("zincite_legacy.cif")], window, cx);
+    }),
+    ("66-tetrahedra", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ShowPolyhedra), cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+    }),
+    // 3 × 3 × 2 cells: the corner-sharing tetrahedra of wurtzite.
+    ("67-tetrahedra-cells", |workbench, window, cx| {
+        let range = DisplayRange::Cells {
+            counts: [3, 3, 2],
+            boundary: true,
+        };
+        set_display_range(workbench, range, window, cx);
+    }),
+    ("68-tetrahedra-dark", |_, window, cx| {
+        settings::set_dark_mode(true, window, cx);
+    }),
+    ("_light-again", |_, window, cx| {
+        settings::set_dark_mode(false, window, cx);
+    }),
+    // MCP clients editing in the window (M18), on rutile.
+    ("_show-rutile-ai", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        workbench.open_structure(StructureEntryId(1), window, cx);
+    }),
     // An MCP client's edit (M18): the same undo step, and a notification
     // that names the client.
-    ("57-ai-edit", |workbench, window, cx| {
+    ("69-ai-edit", |workbench, window, cx| {
         if let Some(workspace) = workbench.workspace().cloned() {
             let values = mw_crystal::CellValues::default().with(mw_crystal::CellParam::C, 3.0);
             let edit = Command::Edit(Edit::SetCell { values });
@@ -603,7 +708,7 @@ const TOUR: &[(&str, Step)] = &[
         }
     }),
     // Writing a file waits for the user in the window.
-    ("58-ai-confirm", |_, window, cx| {
+    ("70-ai-confirm", |_, window, cx| {
         window.clear_notifications(cx);
         let client = mw_automation::Client::new("claude-code", Some("Claude Code".into()));
         let question = mw_automation::Confirmation::WriteFile {
@@ -617,13 +722,37 @@ const TOUR: &[(&str, Step)] = &[
     }),
     // The client is remembered: the settings list it with its own
     // permissions.
-    ("59-settings-ai-clients", |_, window, cx| {
+    ("71-settings-ai-clients", |_, window, cx| {
         window.close_dialog(cx);
         let client = mw_automation::Client::new("claude-code", Some("Claude Code".into()));
         settings::AiSetting::remember(&client, cx);
         settings::open(window, cx)
     }),
 ];
+
+/// Opens or closes the popover choosing the polyhedra's centers.
+fn set_polyhedra_open(workbench: &Workbench, open: bool, cx: &mut App) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| workspace.set_polyhedra_open(open, cx));
+    }
+}
+
+/// Closes the display range popover and shows `range`, as its fields do.
+fn set_display_range(
+    workbench: &Workbench,
+    range: DisplayRange,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(workspace) = workbench.workspace().cloned() {
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_range_open(false, window, cx);
+            if let Err(error) = workspace.set_display_range(range, cx) {
+                log::warn!("screenshot tour: {error}");
+            }
+        });
+    }
+}
 
 /// A fresh directory for the tour's settings, session and sample projects
 /// (`<MW_SCREENSHOT_DIR>/config`), so that every run starts as a first

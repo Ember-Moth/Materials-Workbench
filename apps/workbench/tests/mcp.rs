@@ -270,19 +270,21 @@ async fn relays_to_the_running_application() {
     client.cancel().await.unwrap();
 }
 
-/// An application that did not quit cleanly leaves its socket and token
-/// behind; the command runs without a window then.
-#[cfg(unix)]
+/// An application that did not quit cleanly leaves its token file behind,
+/// and on Unix its socket; the command runs without a window then.
 #[tokio::test]
-async fn a_stale_socket_is_no_application() {
-    use std::os::unix::fs::PermissionsExt as _;
+async fn files_left_behind_are_no_application() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config");
     let run = config.join("run");
     fs::create_dir_all(&run).unwrap();
-    fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
     let endpoint = mw_mcp::Endpoint::in_dir(&run);
-    drop(std::os::unix::net::UnixListener::bind(endpoint.socket()).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+        drop(std::os::unix::net::UnixListener::bind(endpoint.socket()).unwrap());
+    }
     fs::write(endpoint.token_file(), "0".repeat(64)).unwrap();
     let client = start(&config, temp.path(), temp.path()).await;
     assert!(tools(&client).await.contains(&"file_open".to_string()));

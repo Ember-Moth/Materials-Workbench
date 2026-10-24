@@ -8,13 +8,14 @@ use std::sync::Arc;
 
 use mw_crystal::sample::{self, SampleKey};
 use mw_crystal::{
-    Command, CrystalDocument, Edit, Lattice, Measurement, Orientation, Rotation, Structure,
+    AtomRef, Command, CrystalDocument, Edit, Lattice, Measurement, Orientation, Rotation, SiteId,
+    Structure,
 };
 use mw_project_file::{
-    Camera, Derived, DisplayModel, Entry, EntryId, EntryKind, EntryView, Import, Manifest,
-    Operation, PanelTab, Provenance, ReadError, Save, SaveError, Sha256, Source, SourceFormat,
-    StructureFile, Timestamp, VERSION, ViewState, read_manifest, save, structure_sha256,
-    write_view,
+    Camera, Derived, DisplayModel, DisplayRange, Entry, EntryId, EntryKind, EntryView, Import,
+    Manifest, Operation, PanelTab, Provenance, ReadError, Save, SaveError, Sha256, Source,
+    SourceFormat, SphereCenter, StructureFile, Timestamp, VERSION, ViewState, read_manifest, save,
+    structure_sha256, write_view,
 };
 
 /// The import fixtures of `mw-crystal-io`.
@@ -26,7 +27,10 @@ fn fixtures() -> PathBuf {
 /// made the way the interface makes them: through a document.
 fn document_file(structure: Structure) -> StructureFile {
     let mut document = CrystalDocument::new(structure);
-    let atoms: Vec<_> = document.derived().atoms.iter().map(|a| a.atom).collect();
+    let one_cell = document
+        .derived()
+        .display(document.structure(), &Default::default());
+    let atoms: Vec<_> = one_cell.atoms.iter().map(|a| a.atom).collect();
     let mut distinct = atoms.clone();
     distinct.dedup();
     if let [a, b, ..] = distinct[..] {
@@ -176,7 +180,7 @@ fn build() -> Built {
             bytes,
         });
     }
-    add(
+    let oriented_id = add(
         &mut manifest,
         "金红石（左手系）".into(),
         Provenance::Created(mw_project_file::Created::new(now.clone())),
@@ -184,6 +188,7 @@ fn build() -> Built {
     );
     let mut view = ViewState::default();
     view.open = Some(rutile_id);
+    let center = SphereCenter::Atom(AtomRef::new(SiteId(2), 1, [0, -1, 2]));
     view.entries.insert(
         rutile_id,
         EntryView::new(
@@ -191,7 +196,22 @@ fn build() -> Built {
             Some(DisplayModel::SpaceFilling),
             Some(PanelTab::Measurements),
             Some(false),
-        ),
+        )
+        .with_display_range(DisplayRange::Sphere {
+            center,
+            radius: 6.5,
+        }),
+    );
+    let range = DisplayRange::Cells {
+        counts: [3, 2, 4],
+        boundary: false,
+    };
+    let centers = vec!["Ti".to_string(), "O".to_string()];
+    view.entries.insert(
+        oriented_id,
+        EntryView::default()
+            .with_display_range(range)
+            .with_polyhedron_centers(centers),
     );
     Built {
         save: Save {
@@ -487,7 +507,7 @@ fn unreadable_view_state_is_dropped() {
     assert!(dir.read_view().is_some());
     let view = path.join("view.json");
     let text = fs::read_to_string(&view).unwrap();
-    fs::write(&view, text.replace("\"version\": 1", "\"version\": 2")).unwrap();
+    fs::write(&view, text.replace("\"version\": 3", "\"version\": 4")).unwrap();
     assert_eq!(dir.read_view(), None);
     fs::write(&view, "{").unwrap();
     assert_eq!(dir.read_view(), None);
@@ -495,4 +515,59 @@ fn unreadable_view_state_is_dropped() {
     assert_eq!(dir.read_view(), Some(ViewState::default()));
     fs::remove_file(&view).unwrap();
     assert_eq!(dir.read_view(), None);
+}
+
+#[test]
+fn version_1_view_state_reads_with_the_default_range() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = project_dir(&temp, "a");
+    let dir = save(&path, &build().save).unwrap();
+    // As v0.2 wrote it: no display range.
+    let entry = EntryId::new();
+    let v1 = format!(
+        r#"{{
+  "version": 1,
+  "open": "{entry}",
+  "entries": {{
+    "{entry}": {{
+      "camera": {{ "yaw": 0.6, "pitch": 0.35, "half_height": 6.2, "target": [0.0, 0.0, 0.0] }},
+      "display_model": "ball_and_stick",
+      "panel": "sites",
+      "panel_open": true
+    }}
+  }}
+}}"#
+    );
+    fs::write(path.join("view.json"), v1).unwrap();
+    let view = dir.read_view().expect("a version 1 view");
+    assert_eq!(view.open, Some(entry));
+    let saved = view.entries[&entry].clone();
+    assert_eq!(saved.display_model, Some(DisplayModel::BallAndStick));
+    assert_eq!(saved.panel, Some(PanelTab::Sites));
+    assert_eq!(saved.display_range, None);
+    assert_eq!(saved.polyhedron_centers, None);
+    // Written back as version 3, ranges and polyhedra included.
+    let range = DisplayRange::Sphere {
+        center: SphereCenter::Point([0.5, 0.25, 0.0]),
+        radius: 4.0,
+    };
+    let mut view = view;
+    let saved = saved
+        .with_display_range(range)
+        .with_polyhedron_centers(vec!["Zn".into(), "Si".into(), "Zn".into()]);
+    view.entries.insert(entry, saved);
+    write_view(&path, &view).unwrap();
+    let text = fs::read_to_string(path.join("view.json")).unwrap();
+    assert!(text.contains("\"version\": 3"), "{text}");
+    // Sorted, each once.
+    let compact: String = text.split_whitespace().collect();
+    assert!(
+        compact.contains(r#""polyhedron_centers":["Si","Zn"]"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#""display_range": {"#) && text.contains(r#""point": ["#),
+        "{text}"
+    );
+    assert_eq!(dir.read_view(), Some(view));
 }

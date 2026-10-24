@@ -294,6 +294,17 @@ mod tests {
         check_private_dir(&dir).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn each_directory_has_its_own_pipe() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipe = Endpoint::in_dir(temp.path().join("a")).pipe();
+        assert!(pipe.starts_with(r"\\.\pipe\materials-workbench-"), "{pipe}");
+        assert_eq!(pipe.len(), r"\\.\pipe\materials-workbench-".len() + 16);
+        assert_eq!(pipe, Endpoint::in_dir(temp.path().join("a")).pipe());
+        assert_ne!(pipe, Endpoint::in_dir(temp.path().join("b")).pipe());
+    }
+
     #[test]
     fn the_runtime_dir_is_found() {
         #[cfg(any(target_os = "macos", windows))]

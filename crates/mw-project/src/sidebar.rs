@@ -115,7 +115,7 @@ impl ProjectSidebar {
                     IconName::Folder,
                     ProjectSidebarEvent::OpenProject,
                 )
-                .suffix(shortcut("cmd-shift-o")),
+                .suffix(shortcut("secondary-shift-o")),
             )
             .child(
                 item(
@@ -123,7 +123,7 @@ impl ProjectSidebar {
                     IconName::FolderOpen,
                     ProjectSidebarEvent::OpenFile,
                 )
-                .suffix(shortcut("cmd-o")),
+                .suffix(shortcut("secondary-o")),
             )
             .child(
                 item(
@@ -131,7 +131,7 @@ impl ProjectSidebar {
                     IconName::Search,
                     ProjectSidebarEvent::SearchCommands,
                 )
-                .suffix(shortcut("cmd-k")),
+                .suffix(shortcut("secondary-k")),
             )
     }
 
