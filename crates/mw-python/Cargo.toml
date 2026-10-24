@@ -1,0 +1,31 @@
+[package]
+name = "mw-python"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "The Materials Workbench Python module, materials_workbench"
+
+[lib]
+# The extension module is `materials_workbench` (src/python.rs); the Rust
+# library keeps the package's name, so that it collides with no file of
+# the application's executable `materials-workbench` (its crate name is
+# `materials_workbench` too).
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The Python module itself: PyO3 and the bindings. Off by default, so that
+# `cargo build` and `cargo test --workspace` need no Python
+# (docs/design/scripting.md §5.5).
+python = ["dep:pyo3"]
+# The bindings, not linking libpython, as an extension module must not on
+# Linux and macOS: for the wheels (pyproject.toml) and the smoke test.
+# PyO3 0.26 and newer also do this when PYO3_BUILD_EXTENSION_MODULE is
+# set, as maturin 1.9.4 and newer set it.
+extension-module = ["python", "pyo3/extension-module"]
+
+[dependencies]
+mw-automation.workspace = true
+mw-scripting.workspace = true
+serde_json.workspace = true
+pyo3 = { workspace = true, optional = true }

@@ -1,0 +1,24 @@
+[package]
+name = "mw-cli"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "The Materials Workbench command line: convert, supercell, change of cell, symmetry"
+
+[[bin]]
+name = "mw"
+path = "src/main.rs"
+
+[dependencies]
+mw-automation.workspace = true
+mw-crystal-io.workspace = true
+mw-scripting.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The tests compare what the executable writes with the domain functions
+# and the registry called directly.
+mw-crystal.workspace = true
+tempfile.workspace = true

@@ -101,6 +101,24 @@ jobs:
       - name: Build the application
         run: cargo build --bin materials-workbench --locked
 
+      # The command line and the Python module (docs/design/scripting.md
+      # §6). The test step above ran the command line's tests; the Python
+      # bindings are behind a feature the workspace leaves off, so they
+      # are linted, built and imported here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Python module, lints
+        run: cargo clippy -p mw-python --features extension-module --all-targets --locked -- -D warnings
+
+      - name: Command line and Python module, smoke test
+        shell: bash
+        run: |
+          cargo build -p mw-cli -p mw-python --features mw-python/extension-module --locked
+          target/debug/mw info crates/mw-crystal-io/tests/fixtures/rutile.cif crates/mw-crystal-io/tests/fixtures/poscar/CONTCAR
+          python -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
+
       - name: Keep the rendered frame
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,3 +126,57 @@ jobs:
           name: snapshot-${{ matrix.name }}
           path: snapshot.png
           if-no-files-found: ignore
+
+  # One abi3 wheel of the Python module per platform, for CPython 3.10 and
+  # newer (docs/design/scripting.md §5.7), installed into a fresh virtual
+  # environment from the file alone and smoke-tested. Kept as artifacts;
+  # nothing is published.
+  wheels:
+    name: Wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+            # Apple silicon and Intel in one wheel.
+            target: universal2-apple-darwin
+          - name: Linux
+            os: ubuntu-24.04
+            target: x86_64
+          - name: Windows
+            os: windows-2025
+            target: x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # On Linux in a manylinux container, so that the wheel runs on old
+      # distributions too.
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/mw-python
+          target: ${{ matrix.target }}
+          manylinux: auto
+          rust-toolchain: "1.97"
+          args: --release --locked --out dist
+
+      - name: Test the wheel
+        shell: bash
+        run: |
+          python -m venv wheel-venv
+          if [ "$RUNNER_OS" = Windows ]; then venv=wheel-venv/Scripts/python; else venv=wheel-venv/bin/python; fi
+          "$venv" -m pip install --no-index --no-deps crates/mw-python/dist/*.whl
+          "$venv" -I crates/mw-python/tests/smoke.py --installed
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: crates/mw-python/dist/*.whl
+          if-no-files-found: error

@@ -15,7 +15,8 @@ Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工�
   - `crystallography-model.md`：数据模型与编辑语义；
   - `viewport-rendering.md`：视口技术选型与 GPUI 源码核查结论；
   - `ui-shell.md`：界面布局与术语表；
-  - `ai-integration.md`：MCP、内置助手与模型服务层。
+  - `ai-integration.md`：MCP、内置助手与模型服务层；
+  - `scripting.md`：命令行 `mw` 与 Python 模块（M19）。
 
 文档用中文写，API 名、crate 名、文件名保留原文。实现与设计不一致时，要修订设计稿，不让两者分叉。
 
@@ -29,6 +30,7 @@ cargo test -p mw-structure rutile_apical_bond_and_angle   # 单个测试（按�
 cargo test -p mw-structure ui_tests                       # 结构工作区的界面集成测试
 cargo test -p workbench ui_tests                          # 外壳的界面集成测试（项目的保存与恢复）
 cargo test -p workbench --test mcp                        # materials-workbench mcp 经 stdio 的端到端测试（含转接到监听端）
+cargo test -p mw-cli                                      # 命令行 mw：运行可执行文件，与注册表和领域函数直接调用的结果比较
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
@@ -45,6 +47,15 @@ cargo fmt --all
 - **无窗口渲染一帧**：`cargo run -p mw-crystal-render --example snapshot -- snapshot.png 1000`
 - **视口性能基准**：`VIEWPORT_POC_BENCH=1 cargo run -p viewport-poc`，会打开窗口，约 1 分钟后自动退出；包括带键的负载和拾取延迟。窗口失去焦点的档位（输出里 `window_lost_focus=true`）数据作废。
 - **MCP Server**：`cargo run --bin materials-workbench -- mcp --allow crates/mw-project-file/samples` 不开窗口，启动后在 stdio 上等客户端；只读，不会改动允许目录里的项目。最近项目来自配置目录（`MW_CONFIG_DIR`）。应用开着且设置里打开了"允许 MCP 客户端连接"（默认关）时，这条命令改为把 stdio 原样转发给应用，客户端看到的是窗口里的项目；应用在用户运行目录里监听，设了 `MW_CONFIG_DIR` 时在它的 `run/` 下，两边要用同一个值（套接字路径不能超过 103 字节）。开发用的 `cargo run -p mw-mcp -- --allow 目录` 是同一个服务器，但不读配置目录。连接 MCP Inspector 和 Claude Code 的写法见 `docs/development.md` 第 2 节；Inspector 要从 npm 下载，运行前先问用户。
+- **命令行 `mw`**：`cargo run -p mw-cli -- info crates/mw-crystal-io/tests/fixtures/rutile.cif`；子命令 `info`、`diagnostics`、`convert`、`supercell`、`transform`、`symmetry`、`symmetrize`、`call`、`capabilities`，一次一批文件，`--json` 给结构化结果（`docs/design/scripting.md` 第 4 节，`docs/development.md` 第 2 节）。
+- **Python 模块**：绑定在 `mw-python` 的可选特性后面，工作区的构建和测试不需要 Python。本机试用和冒烟测试不安装任何东西（不用 pip、不装 maturin）：
+
+  ```bash
+  cargo build -p mw-cli -p mw-python --features mw-python/extension-module
+  python3 -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
+  ```
+
+  脚本把动态库复制成临时目录里的 `materials_workbench.so` 再导入；`-I` 忽略 `PYTHONPATH`，所以目录由脚本加进 `sys.path`。改了绑定还要跑 `cargo clippy -p mw-python --features extension-module --all-targets`。wheel 由 CI 的 maturin 构建，不发布。
 - **模型服务示例**：`cargo run -p mw-llm --example chat -- "问题"` 发一轮对话并打印流式事件，配置全部来自 `MW_LLM_*` 环境变量（见 `docs/development.md` 第 2 节）。它会发真实请求并计费，运行前先问用户；本机的 Ollama 不花钱（`MW_LLM_PROVIDER=ollama`）。
 - **POSCAR 外部核对**：`cargo run -p mw-crystal-io --example export_atoms -- /tmp/mw-poscar` 把全部测试文件和内置示例写成 POSCAR 和清单，再用 pymatgen 和 ASE 读回核对，命令和脚本见 `docs/development.md` 第 2 节。两者要从 PyPI 下载，装进仓库外的临时虚拟环境，不加进仓库，运行前先问用户。
 - **示例项目**：随应用附带的项目在 `crates/mw-project-file/samples/`，由测试生成。改了项目格式（包括 `mw-crystal` 类型的 serde 形式）或 `mw-crystal-io` 的 fixture 后重新生成，`the_samples_are_up_to_date` 会提醒：
@@ -81,6 +92,9 @@ cargo fmt --all
   - `mw-automation`：能力注册表（`ai-integration.md` 第 4 节）。每个能力有英文说明、输入输出 Schema、副作用等级和处理函数，调用的是 `mw-crystal` 的领域命令，导入诊断和导出文本用 `mw-crystal-io`（`src/files.rs`）；项目的列出与打开（`project.list`、`project.open`、`structure.list`、`structure.open`、只在无界面时可用的 `file.open`）在 `src/project.rs`，经 `Host::projects` 拿到 `Projects` trait，没有项目的 `Host`（`Documents`）上返回 `unavailable`；对称化有只读的预览 `structure.detect_symmetry`（MCP Server 自动提供）和可撤销的 `structure.symmetrize`；Schema 由 `schema_struct!` 从 Rust 类型和字段文档注释生成，测试用 `mw-llm` 的检查函数确认它们在严格子集内。`StructureEntryId` 定义在这里，`mw-project` 重新导出；
   - `mw-project-file`：项目文件（`docs/design/project-format.md`）。`.mwproj` 目录里有清单 `project.json`、`structures/<uuid>.json`、`sources/<sha256>.cif`（导入文件的原样副本，POSCAR 为 `.vasp`）和 `view.json`；`read_manifest` 打开项目并按需读取各部分，`save` 原子地写出、清单最后写、再清理不再引用的文件。结构直接用 `mw-crystal` 类型的 serde 形式，改了这些类型的字段要升格式版本（`VERSION`，现为 2）、在 `store.rs` 的 `UPGRADES` 里写迁移，并先把当前示例复制成旧版本的测试项目（`tests/fixtures/projects/v<n>/`）再重新生成示例。示例项目在 `samples/`，由 `tests/samples.rs` 生成并嵌进可执行文件；
   - `mw-mcp`：实验性只读 MCP Server（`ai-integration.md` 第 5 节），由 `materials-workbench mcp` 经库函数 `mw_mcp::main` 启动，走 stdio（另有开发用的可执行文件 `mw-mcp`，总是无界面）。`Server` 把注册表里只读、当前模式下可用的能力映射成工具（名称里的 `.` 换成 `_`，带只读注解和输出 Schema）；`Server::new(host)` 自己持有宿主，调用在阻塞线程池里执行，`Server::dispatching` 的宿主在另一个线程上，调用经 `Dispatcher` 交过去、由那边从 `Calls` 里取出运行（`src/dispatch.rs`）。无界面的宿主 `Headless`（`src/headless.rs`）只读地打开 `--allow` 目录里的 `.mwproj` 项目和项目之外的 CIF 文件（放进不保存的未命名项目），什么都不写。连接运行中的应用（M12）：应用经 `listen`（`src/listen.rs`）在 `Endpoint`（`src/endpoint.rs`：用户运行目录里 0700 的目录，0600 的 Unix 域套接字和令牌文件，Windows 为命名管道）上监听，每个连接握手后跑一个 `Server::dispatching`；`materials-workbench mcp` 先 `relay::connect`，连上就原样转发字节（`src/relay.rs`），否则无界面运行。每个打开的结构的 CIF 文本是资源 `mw://project/{项目 ID}/structure/{条目 ID}.cif`（项目文件里的 UUID）；结果和资源的 `_meta` 带 `materials-workbench/untrusted`。SDK 是官方的 `rmcp`，同时支持 `initialize` 和 2026-07-28 的无状态生命周期。集成测试用 rmcp 的客户端驱动 `mw-mcp`（`tests/stdio.rs`）和 `materials-workbench mcp`（`apps/workbench/tests/mcp.rs`）；
+  - `mw-scripting`：命令行和 Python 共用的一层（`docs/design/scripting.md`）。`read_file` 按界面的规则认格式（`Format::of_input`，与 `mw_structure::import::format_of` 相同）、读文件、给结构起名，得到 `FileReport`；每个结构是一个 `Document`，放在只装它的 `mw_automation::Documents` 里，摘要、诊断、对称性检测与对称化、晶胞变换（`NewCell`）、撤销经 `Registry::standard()` 调用，超胞（`make_supercell`）和写出文本（与 `structure.export` 同样的选择，不限大小）调用界面调用的领域函数；`diagnostics_json`、`capabilities_json` 是两边共用的 JSON。命令行和 Python 要用的新操作在这里包一层，不在两边各写一套；
+  - `mw-cli`：命令行，可执行文件 `mw`（clap），不链接 GPUI。子命令在 `src/commands.rs`，参数在 `src/args.rs`，文字、JSON 和退出码（0 / 1 / 2）在 `src/report.rs`；集成测试 `tests/cli.rs` 运行可执行文件，与直接调用比较；
+  - `mw-python`：Python 模块 `materials_workbench`（PyO3 0.30，`abi3-py310`）。绑定在 `src/python.rs`，只在 `python` / `extension-module` 特性下编译（默认关，工作区的构建和测试不需要 Python）；参数的判断在 `src/lib.rs`，不需要解释器就能测试。macOS 的链接参数在 `build.rs`；wheel 用 maturin（`pyproject.toml`）；Python 侧的冒烟测试是 `tests/smoke.py`；
   - `mw-llm`：内置助手的模型服务客户端。`ChatProvider` 接口下有 Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 三个后端；HTTP 跑在专用线程的 tokio runtime 上，返回的流可以由 GPUI 的执行器直接轮询。目前还没有使用者，以后由 `mw-assistant` 依赖（`ai-integration.md` 6.2 节）。它的测试只用手写的 SSE 数据和本机回环服务器，不访问外网。
 
   这些 crate 都要能在命令行和测试里单独使用。纯计算一律放在这一层并在这里写单元测试。

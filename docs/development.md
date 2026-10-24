@@ -48,6 +48,10 @@ cargo fmt --all
 | 渲染一帧 | `cargo run -p mw-crystal-render --example snapshot --locked -- snapshot.png 1000` | 打印渲染器用的适配器；图片作为任务的产物保存（`snapshot-<平台>`），可以下载下来看软件渲染的结果 |
 | 测试 | `cargo test --workspace --locked` | 全部测试，含渲染器的像素测试和界面集成测试 |
 | 构建应用 | `cargo build --bin materials-workbench --locked` | |
+| Python 模块的静态检查 | `cargo clippy -p mw-python --features extension-module --all-targets --locked -- -D warnings` | 绑定在可选特性后面，上面的 clippy 不检查它们；Python 3.13 由 `actions/setup-python` 装 |
+| 命令行与 Python 模块的冒烟测试 | `cargo build -p mw-cli -p mw-python --features mw-python/extension-module --locked`，运行一次 `mw info`，再 `python -I crates/mw-python/tests/smoke.py target/debug target/debug/mw` | 命令行的测试已经在上面的 `cargo test --workspace` 里 |
+
+另有 `wheels` 任务，三个平台各一个：`PyO3/maturin-action` 在 `crates/mw-python` 里构建 release wheel（macOS universal2、Linux 在 manylinux 容器里、Windows x64），装进新的虚拟环境（`pip install --no-index --no-deps`，只装这个文件）后运行 `smoke.py --installed`，wheel 作为产物保存（`wheel-<平台>`），不发布（[命令行与 Python 设计稿](design/scripting.md)第 6 节）。
 
 GitHub 的运行器没有显卡，出帧的测试用软件适配器：Linux 装 Mesa 的 lavapipe（Vulkan，适配器名 `llvmpipe (…)`），Windows 用系统自带的 WARP（Direct3D 12，`Microsoft Basic Render Driver`），macOS 运行器有虚拟的 Metal 设备。渲染器读 wgpu 的环境变量（`mw-crystal-render` 的 `Renderer::new`）：`WGPU_BACKEND` 限定后端（`vulkan`、`dx12`、`metal`），`WGPU_ADAPTER_NAME` 只取名字里含这段文字的适配器（不分大小写），CI 用两者把测试固定在软件适配器上；`MW_REQUIRE_GPU=1` 让找不到适配器的测试失败而不是跳过（第 4 节）。其他环境变量：`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 缩小目标目录和缓存；`AWS_LC_SYS_PREBUILT_NASM=1` 见第 1 节。依赖的编译结果由 `Swatinem/rust-cache` 缓存，只有 `main` 上的运行写缓存。
 
@@ -308,6 +312,46 @@ claude mcp add --transport stdio materials-workbench -- "$PWD/target/release/mat
 
 用 `claude mcp get materials-workbench` 或会话里的 `/mcp` 确认已连接。工具在 Claude Code 里叫 `mcp__materials-workbench__project_open` 这样的名字；打开结构后，它的 CIF 文本可以用 `@materials-workbench:mw://project/{项目 ID}/structure/{条目 ID}.cif` 引用，URI 在 `project_open` 和 `structure_open` 的结果里。Claude Desktop 的 `claude_desktop_config.json` 也是同样的 `mcpServers` 写法，但它可能在 `/` 启动服务器，所以必须给 `--allow`；这一点还没有按 Claude Desktop 当前的文档核对。
 
+命令行 `mw`（`crates/mw-cli`，[命令行与 Python 设计稿](design/scripting.md)第 4 节）不开窗口、不链接 GPUI。文件按界面的规则认格式，一次可以给多个；结构写到标准输出、`-o 文件`（一个结构）或 `--out-dir 目录`（按结构名命名，不覆盖已有文件，`--force` 覆盖）；`--json` 在标准输出上给一个 JSON 文档。退出码 0 是全部完成，1 是有文件或结构失败（其余照常完成），2 是用法错误。`mw --help` 和 `mw 子命令 --help` 列出全部选项：
+
+```bash
+cargo run -p mw-cli -- info crates/mw-crystal-io/tests/fixtures/rutile.cif crates/mw-crystal-io/tests/fixtures/poscar/CONTCAR
+```
+
+```bash
+cargo run -p mw-cli -- convert crates/mw-crystal-io/tests/fixtures/*.cif --to poscar --out-dir /tmp/mw-poscar-out
+```
+
+```bash
+cargo run -p mw-cli -- supercell crates/mw-crystal-io/tests/fixtures/rutile.cif --repeat 2x2x2 --to xyz
+```
+
+```bash
+cargo run -p mw-cli -- transform crates/mw-crystal-io/tests/fixtures/corundum_hall.cif --cell primitive
+```
+
+```bash
+cargo run -p mw-cli -- symmetrize crates/mw-crystal-io/tests/fixtures/poscar/CONTCAR --standardize
+```
+
+```bash
+cargo run -p mw-cli -- diagnostics --json crates/mw-crystal-io/tests/fixtures/malformed.cif
+```
+
+`cargo install --path crates/mw-cli` 把 `mw` 装进 `~/.cargo/bin`。
+
+Python 模块 `materials_workbench`（`crates/mw-python`，设计稿第 5 节）的绑定在可选特性后面：默认的 `cargo build` 和 `cargo test --workspace` 不编译它们，不需要 Python。在本机试用不必安装任何东西：构建扩展模块（`extension-module` 特性不链接 libpython），再运行冒烟测试，它把动态库复制到临时目录、改名为 Python 能导入的名字后导入，检查每个接口，给出 `mw` 时还核对命令行写出同样的文本：
+
+```bash
+cargo build -p mw-cli -p mw-python --features mw-python/extension-module
+```
+
+```bash
+python3 -I crates/mw-python/tests/smoke.py target/debug target/debug/mw
+```
+
+`-I` 让 Python 忽略 `PYTHONPATH` 和用户目录里的包，所以模块所在的目录由脚本自己加进 `sys.path`。在自己的脚本或 Jupyter 里用，把 `target/debug/libmw_python.dylib`（Linux 是 `libmw_python.so`，Windows 是 `mw_python.dll`）复制成某个目录里的 `materials_workbench.so`（Windows 上 `materials_workbench.pyd`），把那个目录加进 `sys.path`，再 `import materials_workbench as mw`。打成 wheel 用 maturin（`crates/mw-python/pyproject.toml`），要从 PyPI 下载，运行前先问用户；CI 已经为三个平台构建。
+
 debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编译（见根目录 `Cargo.toml`），所以界面在 debug 下也足够流畅。
 
 ## 3. 代码约定
@@ -327,6 +371,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 - 新增依赖前确认它的许可证与 MIT OR Apache-2.0 兼容（MIT、Apache-2.0、BSD、ISC、Zlib 等宽松许可）；不引入 GPL 类许可的依赖，也不复制 GPL 代码。
 - 纯计算（解析、对称性、物理量）放在不依赖 GPUI 的 crate 里，并在那里写单元测试。
 - `apps/workbench` 只做组装：创建实体、转接事件、注册全局命令，不放业务逻辑。
+- 命令行和 Python 要用的操作先进能力注册表（或领域 crate），再在 `mw-scripting` 里包一层，`mw-cli` 和 `mw-python` 都调它，不在两边各写一套（[命令行与 Python 设计稿](design/scripting.md)第 2 节）。
 
 ### 3.3 样式
 
@@ -377,6 +422,9 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 | 模型服务的 HTTP 路径 | 本机回环上的临时服务器：请求头与鉴权、错误状态、丢弃流即断开连接。不访问外网 | `crates/mw-llm/tests/provider.rs` |
 | 能力注册表 | 每个能力的输入、输出 Schema 都在严格子集内（`mw_llm::schema::check_schema`），全部只读能力放进一个严格请求也合规，其余每 20 个一组（`check_tools`）；在内存里的文档上逐个调用，输入和输出都按 Schema 校验，并检查拒绝时的错误码和引导；导入诊断（分页、行号、英文说明）和导出文本用从 CIF 文本导入的文档测试。对称化的预览与执行（M9）用示例里 P1 的超胞测试；项目能力用一个内存里的假宿主测试：列出和打开项目、没打开的结构返回 `structure_not_open`、打开后可用、没有项目的 `Host` 上返回 `unavailable` | `crates/mw-automation/tests/capabilities.rs`、`tests/projects.rs` |
 | MCP Server | 用 rmcp 的客户端经 stdio 驱动开发用的 `mw-mcp` 可执行文件，分别走 `initialize` 和 2026-07-28 的 `server/discover`：列出工具（只读注解，Schema 在严格子集内）；打开装在临时目录里的示例项目（再开一次得到同样的 ID）、没打开的结构先报错、打开结构、摘要、测量、诊断、导出 POSCAR、按项目 ID 读 CIF 资源（没打开的结构读时打开）、对 P1 的超胞检测对称性（M9，结构不变）；项目之外的 CIF 用 `file_open` 打开，放在未命名项目里；结构化结果按输出 Schema 校验；带给 AI 的指令的 CIF 只出现在标为不可信的结果里；目录外、不存在、不是项目、非 CIF 的路径和错误的参数都是模型能读的工具错误。访问策略（含从另一个工作目录算相对路径）、无界面宿主（只读、副本缺失、格式更新的项目、复制的项目、最近项目的过滤）和参数解析另有单元测试。连接应用的通道（M12）：令牌随机、整个比较，令牌文件和目录的权限，别人能进入的目录不被信任，令牌不对时拒绝，第二个实例不接管，停止后清掉文件，路径太长时什么都不留，遗留的套接字算没有应用；一个只回显的假应用确认转发进程把任意字节原样转发；经通道用 rmcp 的客户端调用宿主线程上的宿主；派发的调用在宿主线程上执行，线程不在时返回 `unavailable` | `crates/mw-mcp/tests/stdio.rs`、`src/access.rs`、`src/headless.rs`、`src/server.rs`、`src/cli.rs`、`src/endpoint.rs`、`src/relay.rs` |
+| 命令行与 Python 的共用层 | `mw-scripting` 的结果与注册表和领域函数直接调用的相同：摘要、对称性检测（含拒绝）、诊断与 `structure.diagnostics`；每个测试文件写成 CIF、POSCAR、扩展 XYZ 的文本与 `structure.export` 相同（含拒绝时的错误码）；超胞与 `make_supercell` 逐位相同、名字与界面相同、超大和行列式不为正时拒绝；晶胞变换与对称化可以撤销重做；分页的能力取全；按文件名认格式和给结构起名与界面的规则相同 | `crates/mw-scripting/src/` 各模块的测试 |
+| 命令行 | 运行 `mw` 可执行文件处理 `mw-crystal-io` 的测试文件，与直接读文件、在 `Documents` 里调用注册表或领域函数的结果逐项比较：`info`、`convert` 的三种格式、`supercell`（倍数和矩阵）、`transform`（预设、矩阵加原点、设定）、`symmetry` 和 `symmetrize`、`diagnostics`、`call`、`capabilities`；一批文件写进目录、不覆盖与 `--force`、按 `-o` 的文件名认格式、标准输入；错误输入的消息和退出码（读不了、认不出、导入错误带行号、格式装不下、多个结构写到一处、缺格式、错误的参数与互斥的选项、被拒绝的操作、JSON 模式下的错误）。参数解析另有单元测试 | `crates/mw-cli/tests/cli.rs`、`src/args.rs` |
+| Python 模块 | Rust 侧：参数的判断（超胞的三种写法与范围、晶胞变换的选择与矩阵形状、分数的文本、格式），不需要解释器。Python 侧的冒烟测试不在 `cargo test` 里：导入构建出的扩展模块，检查每个接口、每种错误，核对命令行写出同样的文本（第 2 节的命令）；CI 另用它测试 wheel | `crates/mw-python/src/lib.rs`、`tests/smoke.py` |
 | `materials-workbench mcp` | 经 stdio 驱动应用的可执行文件：用临时配置目录（`MW_CONFIG_DIR`）给出最近项目，只列出 `--allow` 范围内的，从它打开项目、打开结构、摘要、导出 POSCAR、读资源，结束后配置目录里的文件一字节不变；`mcp --help` 不开窗口。连接应用（M12）：测试里在 `MW_CONFIG_DIR` 下启动监听端，命令转接过去（只读工具里没有 `file_open`，相对路径从命令的工作目录算，读资源），监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用 | `apps/workbench/tests/mcp.rs` |
 | 外壳的界面集成测试 | 在无头窗口里用临时配置目录启动外壳：第一次启动打开示例项目；编辑、测量、换视角后 ⌘S、关闭项目、再打开，结构、测量、编辑记录和视图状态完整恢复（路线图 M6 的验收）；有未保存的更改时关闭和退出先问；导入的文件随项目保存，带源文件副本；POSCAR 和 CONTCAR 按文件名认出、以文件夹命名，随项目保存为 `.vasp` 副本，显式朝向存进结构文件，认不出的文件给通知；生成的超胞作为派生结构排在来源之后，保存后带着矩阵和来源记录；MCP 客户端连接应用（M12）：经 `Server::dispatching` 调用应用端的宿主，列出打开的项目和结构，打开没打开的结构时窗口显示它，读到用户的编辑，`project_open` 加进边栏而不切换显示、允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不崩溃 | `apps/workbench/src/ui_tests.rs` |
 | 界面集成测试 | 用 `#[gpui_kit::test]` 在无头窗口里打开工作区，像用户一样聚焦字段、打字、按键（回车、Delete、Esc、⌘Z / ⇧⌘Z），检查字段显示的值和文档的变化：晶胞参数联动与撤销重做、被拒绝的输入恢复原值、混合占位的字段、元素选择器、删除位点与对称模式下的对话框、转为 P1（选区跟随、撤销一步回到原样）与"转为 P1 后删除"、生成超胞交给外壳、坐标编辑（对称模式下的跟随坐标与吸附）、移动模式下用真实的鼠标事件拖动原子（沿特殊位置、⌥ 脱离且不移动指针也更新预览并保持视图不动、Esc 放回、按下后拾取还没回来就松手、移动模式外仍然旋转视图）、添加位点与重合时的对话框、晶胞变换对话框（预设填入 P、p，改动变成自定义，不成立的变换不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样）、对称化对话框（后台检测的预览，标准化改变预览，不是数的容差被拒绝且不关对话框，Enter 执行一步，选中的原子跟着走，撤销回原样；没有更高对称性时写明原因）、与对称性略有出入的晶胞（属性面板给出说明，"对齐"一步对齐、再对齐不产生一步、撤销回原样）、删除位点后的通知（写明位点和原子数）、显示范围（M14：浮层的字段设晶胞块、增减按钮的事件、去掉边界原子、拒绝的值写明原因且范围不变、Esc 关闭；以选中的原子为中心的球、别的晶胞里的原子被选中和测量、转为 P1 和删除位点后球跟着原子或留在原处；在 2 × 2 × 1 的晶胞块里拖动另一个晶胞的原子；10 × 10 × 10 在后台准备、编辑后重新准备、拖动预览在后台一次一个；随视图状态保存，存的范围不成立时用默认范围）。GPUI Kit 的 `test-support` 与本工作区的依赖冲突，所以直接开启 `gpui-pre` 的 `test-support`，用 GPUI 的 `VisualTestContext` 驱动，没有 `gpui_kit::test` 的按 ID 点击 | `crates/mw-structure/src/ui_tests.rs` |
