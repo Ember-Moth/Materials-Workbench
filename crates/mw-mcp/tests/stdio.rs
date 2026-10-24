@@ -555,7 +555,8 @@ async fn file_text_is_marked_untrusted_and_triggers_no_unconfirmed_write() {
     let written = call(&client, "structure_export_file", write(&into_projects)).await;
     assert_eq!(error_code(&written), "not_confirmed");
     assert_eq!(user.asked().len(), 1);
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    // Not $HOME, which Windows does not set.
+    let home = std::env::home_dir().unwrap();
     let ssh = call(
         &client,
         "structure_export_file",
