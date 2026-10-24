@@ -4,9 +4,9 @@
 
 use mw_crystal::Command;
 
-use crate::registry::{Availability, CallError, Effect, Host, Output, Registry, Spec};
+use crate::registry::{CallError, Effect, Host, Output, Registry, Spec};
 use crate::schema::schema_struct;
-use crate::structure::{StructureInput, document_mut};
+use crate::structure::{StructureInput, document};
 
 schema_struct! {
     pub struct HistoryOutput {
@@ -33,12 +33,7 @@ fn kind(command: &Command) -> String {
 }
 
 pub(crate) fn register(registry: &mut Registry) {
-    let spec = |name, description| Spec {
-        name,
-        description,
-        effect: Effect::Undoable,
-        availability: Availability::Both,
-    };
+    let spec = |name, description| Spec::new(name, description, Effect::Undoable);
 
     registry.register(
         spec(
@@ -47,12 +42,12 @@ pub(crate) fn register(registry: &mut Registry) {
              application or a tool call.",
         ),
         |host: &mut dyn Host, input: StructureInput| {
-            let document = document_mut(host, input.structure)?;
-            let command = document.undo_command().map(kind);
-            let changed = document.undo().is_some();
+            let command = document(host, input.structure)?.undo_command().map(kind);
+            let agent = host.agent();
+            let changed = host.undo(input.structure, agent)?.is_some();
             let output = HistoryOutput {
                 changed,
-                revision: document.revision(),
+                revision: document(host, input.structure)?.revision(),
                 command,
             };
             let summary = match &output.command {
@@ -70,12 +65,12 @@ pub(crate) fn register(registry: &mut Registry) {
              what can be redone.",
         ),
         |host: &mut dyn Host, input: StructureInput| {
-            let document = document_mut(host, input.structure)?;
-            let command = document.redo_command().map(kind);
-            let changed = document.redo().is_some();
+            let command = document(host, input.structure)?.redo_command().map(kind);
+            let agent = host.agent();
+            let changed = host.redo(input.structure, agent)?.is_some();
             let output = HistoryOutput {
                 changed,
-                revision: document.revision(),
+                revision: document(host, input.structure)?.revision(),
                 command,
             };
             let summary = match &output.command {

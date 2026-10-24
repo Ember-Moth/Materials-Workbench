@@ -11,7 +11,7 @@ use mw_viewport::{BondInstance, LineInstance, Polyhedron, Scene, SphereInstance,
 /// the coordination polyhedra of the chosen centers over them
 /// (crystallography design §5.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DisplayModel {
+pub enum DisplayModel {
     BallAndStick,
     SpaceFilling,
     Polyhedra,

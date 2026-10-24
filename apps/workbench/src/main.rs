@@ -11,6 +11,7 @@ macro_rules! tr {
 }
 
 mod actions;
+mod ai_log;
 mod assets;
 mod config;
 mod host;

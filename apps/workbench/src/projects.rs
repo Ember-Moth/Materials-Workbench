@@ -11,12 +11,30 @@ use gpui_kit::component::{WindowExt, h_flex};
 use gpui_kit::*;
 use mw_crystal::Checkpoint;
 use mw_project::{ProjectId, SaveSnapshot, StructureEntryId};
-use mw_project_file::{EXTENSION, Manifest, ProjectDir, ReadError, SaveError, ViewState};
+use mw_project_file::{
+    EXTENSION, LockError, Manifest, ProjectDir, ProjectLock, ReadError, SaveError, ViewState,
+};
 use mw_structure::StructureWorkspace;
 
 use crate::actions::*;
 use crate::config::AppPaths;
 use crate::workbench::{Workbench, prompt_result, read_error};
+
+/// How the lock names the application (`docs/design/project-format.md` §15).
+const LOCK_HOLDER: &str = "Materials Workbench";
+
+/// Who holds a project's lock, in the interface language.
+fn lock_holder(error: &LockError) -> String {
+    match error {
+        LockError::Held(Some(holder)) => tr!(
+            "lock.holder",
+            program = holder.holder.as_str(),
+            pid = holder.pid
+        )
+        .to_string(),
+        LockError::Held(None) | LockError::Io(_) => tr!("lock.someone").to_string(),
+    }
+}
 
 /// What reading one project gave.
 type ReadProject = (
@@ -112,7 +130,7 @@ impl Workbench {
         for (path, result) in projects {
             match result {
                 Ok((dir, manifest, view)) => {
-                    let id = self.add_project(&path, dir, manifest, view, cx);
+                    let id = self.add_project(&path, dir, manifest, view, window, cx);
                     if shown.is_none() || activate.as_deref() == Some(path.as_path()) {
                         shown = Some(id);
                     }
@@ -141,15 +159,18 @@ impl Workbench {
 
     /// Adds a project read from `path` to the sidebar, or finds it there
     /// when it is open already, and puts it first among the recent ones.
-    /// Shows nothing; the caller saves the session.
+    /// Takes the project's lock, or says who holds it. Shows nothing; the
+    /// caller saves the session.
     pub(crate) fn add_project(
         &mut self,
         path: &Path,
         dir: ProjectDir,
         manifest: Manifest,
         view: ViewState,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ProjectId {
+        let digest = dir.manifest_digest();
         let (id, name, file_id) = self.sidebar.update(cx, |sidebar, cx| {
             sidebar.update_catalog(cx, |catalog| {
                 let id = catalog
@@ -160,7 +181,65 @@ impl Workbench {
             })
         });
         self.session.remember(path, file_id, &name);
+        if !self.locks.contains_key(&id) && !self.unlocked.contains_key(&id) {
+            match ProjectLock::acquire(path, LOCK_HOLDER) {
+                Ok(lock) => {
+                    self.locks.insert(id, lock);
+                }
+                Err(error) => {
+                    self.unlocked.insert(id, digest);
+                    let holder = lock_holder(&error);
+                    window.push_notification(
+                        Notification::warning(tr!("lock.opened", holder = holder, name = name)),
+                        cx,
+                    );
+                }
+            }
+        }
         id
+    }
+
+    /// Makes sure this process may save the project in place: it holds the
+    /// lock, or takes it now, and no one saved the project since it was
+    /// opened here (`docs/design/project-format.md` §15). Says why not.
+    fn ensure_writable(
+        &mut self,
+        project: ProjectId,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.locks.contains_key(&project) {
+            return true;
+        }
+        let name = self
+            .catalog(cx)
+            .project(project)
+            .map_or_else(String::new, |p| p.name().to_string());
+        let lock = match ProjectLock::acquire(path, LOCK_HOLDER) {
+            Ok(lock) => lock,
+            Err(error) => {
+                let holder = lock_holder(&error);
+                window.push_notification(
+                    Notification::error(tr!("save.locked", name = name, holder = holder)),
+                    cx,
+                );
+                return false;
+            }
+        };
+        let opened = self.unlocked.get(&project).cloned().flatten();
+        let now = self
+            .catalog(cx)
+            .project(project)
+            .and_then(|p| p.dir())
+            .and_then(ProjectDir::manifest_digest);
+        if self.unlocked.contains_key(&project) && opened != now {
+            window.push_notification(Notification::error(tr!("save.changed", name = name)), cx);
+            return false;
+        }
+        self.unlocked.remove(&project);
+        self.locks.insert(project, lock);
+        true
     }
 
     /// Shows the structure last open in a project, or its first.
@@ -347,6 +426,10 @@ impl Workbench {
             window.push_notification(Notification::error(tr!("save.exists", name = name)), cx);
             return None;
         }
+        if own && !self.ensure_writable(project, path, window, cx) {
+            return None;
+        }
+        let found = self.catalog(cx).project(project)?;
         let mut structures = Vec::new();
         let mut checkpoints = Vec::new();
         for opened in &self.opened {
@@ -397,6 +480,22 @@ impl Workbench {
                     self.session.remember(path, file_id, &name);
                     self.session.save(cx.global::<AppPaths>());
                 }
+                // Saved somewhere new, the first time or "save as": the lock
+                // goes with the project.
+                let held_here = self.locks.get(&project).is_some_and(|lock| {
+                    lock.path().parent().is_some_and(|dir| same_dir(dir, path))
+                });
+                if !held_here {
+                    self.locks.remove(&project);
+                    self.unlocked.remove(&project);
+                    match ProjectLock::acquire(path, LOCK_HOLDER) {
+                        Ok(lock) => {
+                            self.locks.insert(project, lock);
+                        }
+                        Err(error) => log::warn!("could not lock {}: {error}", path.display()),
+                    }
+                }
+                self.write_audit(project, cx);
                 self.refresh_status(cx);
                 true
             }
@@ -463,8 +562,9 @@ impl Workbench {
         );
     }
 
-    /// Closes a project without asking: its open structures go, and its
-    /// view state is written.
+    /// Closes a project without asking: its open structures go, its view
+    /// state and the records waiting for its audit log are written, and
+    /// its lock is let go.
     fn remove_project(&mut self, project: ProjectId, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(path) = self.catalog(cx).project(project).and_then(|p| p.path())
             && let Err(error) = mw_project_file::write_view(path, &self.view_state(project, cx))
@@ -474,6 +574,10 @@ impl Workbench {
                 path.display()
             );
         }
+        self.write_audit(project, cx);
+        self.audit.remove(&project);
+        self.locks.remove(&project);
+        self.unlocked.remove(&project);
         let Some(closed) = self.sidebar.update(cx, |sidebar, cx| {
             sidebar.update_catalog(cx, |catalog| catalog.close(project))
         }) else {
@@ -611,8 +715,13 @@ impl Workbench {
     }
 
     /// Writes what a restart restores: each saved project's view state, and
-    /// the projects open now.
+    /// the projects open now; and the records waiting for the projects'
+    /// audit logs.
     pub(crate) fn persist(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<ProjectId> = self.catalog(cx).projects().iter().map(|p| p.id()).collect();
+        for id in ids {
+            self.write_audit(id, cx);
+        }
         let mut open = Vec::new();
         for project in self.catalog(cx).projects() {
             let Some(path) = project.path() else {

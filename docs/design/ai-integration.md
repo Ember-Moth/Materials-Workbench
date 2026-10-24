@@ -89,7 +89,7 @@ Capability
 
 **v0.1 的实现（M4，`crates/mw-automation`）**：
 
-- `Registry::standard()` 注册了 29 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`）：
+- `Registry::standard()` 注册了 37 个能力（M8 加了 `structure.transform_cell`，M9 加了 `structure.detect_symmetry` 和 `structure.symmetrize`，M18 加了下面最后两项里的八个）：
   - 项目（M11 加入，见 5.2 节"项目工具"）：`project.list`、`project.open`、`structure.list`、`structure.open`，以及只在无界面时可用的 `file.open`；
   - 结构查询：`structure.summary`、`structure.sites`（分页）、`structure.site_symmetry`、`structure.measure_distance`、`structure.measure_angle`、`structure.neighbors`；
   - 导入诊断与导出（v0.2 原型时加入，见下文）：`structure.diagnostics`（分页）、`structure.export`；
@@ -97,17 +97,20 @@ Capability
   - 对称模式下的几何编辑（M7，晶体学设计稿 7.4–7.6 节）：`structure.move_site`（拖动一个原子，分数位移，`leave_special_position` 决定是否投影到约束子空间）、`structure.set_coordinate`（`axis` 为 `"x"`/`"y"`/`"z"`，跟随坐标联动，常数坐标返回 `fixed_coordinate`）、`structure.add_site`（元素、分数坐标、占位率，吸附到特殊位置；重合时返回 `coincident_site`，引导 `{"kind": "add_occupant", "site": …}`）。`structure.set_position` 在对称模式下也可用，位点取新位置的位点对称性；
   - 晶胞变换（M8，晶体学设计稿 7.8 节）：`structure.transform_cell`，`cell` 取 `primitive`、`conventional`、`niggli`、`setting`（`setting` 给出 H-M 符号，如 `P 1 1 21/a`、`R -3 c :R`）或 `matrix`（`matrix` 是 P 的三行分数文本，`origin` 是 p，空数组表示原点不动）；不用的字段给空字符串或空数组。结果有变换的 ITA 写法（如 `c, b, -a; 0, 0, 0`）、P 和 p、新的空间群设定、晶胞参数、晶胞内原子数和操作数。拒绝时返回 `transform_not_positive`、`transform_volume`、`transform_not_a_translation`、`transform_breaks_symmetry`、`transform_too_large`，名称不对时 `invalid_arguments`，别的类型的设定 `other_type`，moyo 给不出时 `no_transformation`；
   - 对称性检测与对称化（M9，晶体学设计稿 7.10 节）：只读的 `structure.detect_symmetry` 给出对称化的预览而不改结构：检测到的空间群类型、结果的空间群（保持的晶胞容纳不下全部对称性时是子群）、位点数、晶胞内原子数、操作数、原子的最大位移和移动最大的位点、是否换晶胞或转朝向、原点移了多远、结果的晶胞；可撤销的 `structure.symmetrize` 执行同样的对称化，输出 `changed`、`revision` 和同一份预览（`result`）。输入相同：`tolerance`（Å，0 表示用结构自己的容差，因为输入不用可空类型）和 `standardize`。拒绝时返回 `symmetrize_no_higher_symmetry`、`symmetrize_not_found`、`symmetrize_mismatch`、`symmetrize_position_tolerance`、`symmetrize_too_large`、`symmetrize_no_atoms`，容差为负时 `invalid_arguments`。只读的那个的说明不提 `structure.symmetrize`：MCP Server 不提供编辑工具，提了只会让客户端去找不存在的工具；
-  - `history.undo`、`history.redo`。
+  - `history.undo`、`history.redo`；
+  - M18（5.3 节）：可撤销的 `structure.convert_to_p1`（已经是 P1 时返回 `already_p1`）、`structure.make_supercell`（`matrix` 是 M 的三行整数，`name` 为空时用默认名；行列式不为正时 `invalid_arguments`，超过 10 万个原子时 `too_large`）、`file.import`（`project` 给项目 ID，CIF 或 POSCAR），外部副作用的 `structure.export_file`（`overwrite` 为假而文件已存在时 `file_exists`，路径不在允许范围内时 `not_allowed`）。`file.open` 也能读 POSCAR 了：读文件、给结构命名都经 `parse_import`，规则与界面打开文件相同；
+  - M18 的视图工具（5.3 节"阶段 5 的实现"），副作用等级为视图、只在有窗口时可用：`view.select`（`sites`、`atoms`，都空时清除选区；不存在的位点和原子返回 `unknown_site`、`unknown_atom`）、`view.set_display_model`（`ball_and_stick`、`space_filling`、`polyhedra`）、`view.reset`、`view.snapshot`（宽、高 64–2048 像素，或都为 0 表示视口的大小，否则 `invalid_arguments`；渲染失败时 `render_failed`），结果里带 PNG 图像。
 
   MCP Server 按 5.2 节的版本逐步暴露它们。
-- `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。
+- `Capability` 的字段就是上面的声明。副作用等级是 `Effect`（只读、视图、可撤销写入、外部副作用、仪器，对应 7.1 节），可用性是 `Availability`（只在有窗口时、只在无界面时、两者）。`Spec::new(name, description, effect)` 默认两种模式都可用；`additive()`、`idempotent()` 给出 MCP 注解要的两个标记（5.3 节），外部副作用的能力必须用 `register_confirmed` 注册，带一个说明"要确认的是什么"的检查函数，否则注册时就 panic。
 - **Schema 由 Rust 类型生成**：输入输出都是用 `schema_struct!` 声明的结构体，同一份字段列表同时生成 serde 类型和 Schema，字段的文档注释就是给模型看的说明，两者不会不一致。没有用 schemars：它生成的 Schema 带有严格子集之外的关键字（`format`、`minimum`、`$schema` 等），还得再改写一遍。
 - **输入不用可空类型**：每个可空字段都算一个联合类型参数，一个请求最多 16 个（6.2.6 节）。"不指定"用空数组表示（例如 `atoms: []` 表示整个位点），必须给出的列表用 `minItems: 1`。测试确认每个输入 Schema 都在严格子集内且没有联合类型，全部只读能力（MCP Server 暴露的那些）放进一个严格请求也合规；能力总数已超过一个严格请求的 20 个工具，所以测试按每 20 个一组检查其余的。输出 Schema 同样在子集内，可以有可空字段。
-- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11）。`Documents` 是放在内存里、没有项目的实现，供测试使用，命令行和 Python 也用它（`mw-scripting`，[命令行与 Python 设计稿](scripting.md)第 2 节）；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），它只读：`document_mut` 返回 `None`，注册表的编辑能力在这样的宿主上返回 `read_only`。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **处理函数通过 `Host` 拿到文档**：`Host` 按 `StructureEntryId` 给出 `CrystalDocument`，编辑经 `Host::execute(id, command, agent)`、`undo`、`redo` 交给宿主执行（M18，5.3 节）；有项目的 `Host` 再经 `Host::projects` 给出 `Projects`（项目的列出与打开，M11；导入和加入派生结构，M18）；有窗口的 `Host` 经 `change_view`、`snapshot` 改变窗口显示的内容、给出视口的图像（M18，没有窗口的宿主默认返回 `unavailable`）。`Documents` 是放在内存里、没有项目的实现，供测试使用，命令行和 Python 也用它（`mw-scripting`，[命令行与 Python 设计稿](scripting.md)第 2 节），它留下客户端调用的审计记录（`audit_log`）；无界面模式的实现是 `mw_mcp::Headless`，连接运行中的应用时是外壳的 `AppHost`（M12，5.1 节），M18 起它把编辑交给工作区（5.3 节"阶段 4 的实现"）。处理函数用 `structure::run` 执行编辑：它取 `Host::agent()`（注册表在调用期间包一层宿主，告诉它是哪个客户端），所以客户端的编辑在撤销栈里记在它名下。`StructureEntryId` 定义在 `mw-automation`，`mw-project` 重新导出，界面和能力用的是同一个类型。
+- **调用的上下文**（M18，7.2 节）：`Registry::call` 是用户自己的调用（脚本、命令行），什么都能做；`Registry::call_as(host, context, name, input)` 带着 `Context`（`Caller` 是用户或 `Client`，`Permissions`，是否已确认），先查可用性、再查权限，然后才运行处理函数。客户端的每次调用（包括被拒绝的）由 `policy::record` 生成 `AuditRecord`，按调用涉及的结构或项目交给 `Host::audit`。`Registry::confirmation` 给出外部副作用的能力要用户确认的那句话。
 - **参数先按类型反序列化**（拒绝多余字段），类型不对时返回 `invalid_arguments`；范围和单位由处理函数检查。元素符号不区分大小写（`zr` 即 Zr）。
 - **编辑的结果**：`EditOutput` 有 `changed`、`revision`、作用到的 `sites`、`warnings`，以及 `info`（M7）：编辑在要求之外做了什么，`snapped`（吸附到特殊位置）或 `multiplicity`（等效原子数变了）。摘要里写成 `Note: …`；移动位点的摘要写明它最后的位置、等效原子数和 Wyckoff 位置。
 - **错误可恢复**：`CallError` 有稳定的 `code`、英文的 `message` 和引导 `guidance`。例如对称模式下只给 Ti1 的一个等效原子换元素，返回 `breaks_symmetry`，引导为"改整个位点"或"转为 P1"（晶体学设计稿 7.1 节）。
-- **结果双份**：`CallResult` 是符合输出 Schema 的 JSON 加一句英文摘要。
+- **结果双份**：`CallResult` 是符合输出 Schema 的 JSON 加一句英文摘要；视口的截图另带一张 PNG（`CallResult::image`，M18）。
 - 界面不经过注册表：GPUI 动作直接调用同一批领域命令（`CrystalDocument::execute`），注册表包装的也是它们，所以两边的行为一致。
 - **v0.2 原型补充的内容（随 `mw-mcp`，2026-10-22，`src/files.rs`）**：
   - `structure.diagnostics`：结构导入时的诊断，分页；每条有严重程度、稳定代码（如 `atom.snapped`）、源文件行号和英文说明。英文说明由 `diagnostic_message` 生成，写在 `mw-automation` 里，因为它是给模型看的；界面仍用 `mw-structure/src/diagnostics.rs` 的本地化文案。不是从文件来的结构（例如示例）没有诊断。
@@ -156,11 +159,11 @@ Capability
   - `project.open` 像"打开项目…"一样把项目加进边栏、记进最近项目，但不切换显示的结构；已打开的路径返回原来的 ID，复制的项目（ID 相同、路径不同）拒绝。错误的措辞与无界面时相同：`read_error`、`duplicate_project`、`unknown_structure` 从 `Headless` 移到 `mw_automation`，两个宿主共用；
   - `structure.open` 在窗口里显示这个结构，与点击边栏相同；没打开过的在主线程上同步读取（用户自己打开时在后台读），调用返回时结构已经可用。用户正在后台打开的同一个结构由这次读取代替；
   - 查询读的是工作区里的 `CrystalDocument`（`StructureWorkspace::crystal`），用户还没保存的编辑立刻可见。`Host::source` 给出导入时的数据块（`StructureWorkspace::source`）；外壳读结构时按清单里的哈希标明结构是否还是导入的那个，与 `Headless` 相同，所以 CIF 导出写回源文件字段的判断在两种模式下一致；
-  - 只读：`document_mut` 返回 `None`，因为编辑必须经工作区（`StructureWorkspace::execute`）才能同时更新字段、场景和选区。写操作、撤销栈和确认弹窗留给 v0.3。
+  - M12 时只读：编辑必须经工作区（`StructureWorkspace::execute`）才能同时更新字段、场景和选区。M18 起写操作经工作区执行、进同一个撤销栈，写文件前在窗口里确认（5.3 节"阶段 4 的实现"）。
 - **资源列表变化**：每次调用后与客户端上次知道的列表比较（`resources/list` 或上一次调用之后），不只比较这次调用前后，所以用户在界面里打开的结构会在下一次调用后通知。界面里打开、关闭结构时还不会立即通知。
 - **默认关**：监听是对本机同一用户的其他进程开放的入口，所以设置默认关。开关立即生效，保存在 `settings.json` 的 `mcp` 字段（没有这个字段的旧设置读作关）。启动时或打开开关时监听失败（另一个实例在监听、路径太长），用通知说明，应用照常使用。
 - **测试**：令牌、令牌文件和目录的权限、目录别人能进入时转发进程不信任它、令牌不对时拒绝、第二个实例不接管、停止后文件清掉、路径太长时什么都不留；用一个只回显的假应用确认转发进程把任意字节（含非 JSON、非 UTF-8、20 万字节）原样转发；经通道用 rmcp 的客户端调用宿主线程上的 `Headless`（`crates/mw-mcp/src/relay.rs`）；`Server::dispatching` 的调用在宿主线程上执行、线程不在时返回 `unavailable`（`src/server.rs`）。外壳的界面集成测试在无头窗口里打开示例项目，经 `Server::dispatching` 调用：只有只读工具、没有 `file_open`；列出打开的项目和结构；没打开的结构先报 `structure_not_open`，打开后窗口显示它；用户的编辑立刻读到；`project_open` 加进边栏而不切换显示、记进最近项目，允许范围外的拒绝；设置开关开始和停止监听；启动时监听失败不会让应用崩溃（`apps/workbench/src/ui_tests.rs`）。`apps/workbench/tests/mcp.rs` 在测试里启动监听端，用 rmcp 的客户端驱动 `materials-workbench mcp`：转接到监听端（相对路径从它的工作目录算）、读资源，监听停止后同一条命令无界面运行；遗留的套接字和令牌文件不算应用。另在真实的应用里手动走过一遍（打开设置的临时配置目录，按行发 JSON-RPC）。
-- **还没做**：Windows 的命名管道在 M13 改为通道测试在 Windows 上也运行（CI，开发指南 2.1 节），还没在 Windows 实机上和真实的客户端一起用过；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用。
+- **还没做**：Windows 的命名管道在 M13 改为通道测试在 Windows 上也运行（CI，开发指南 2.1 节），还没在 Windows 实机上和真实的客户端一起用过；管道名被别的程序抢先占用时应用不监听，但转发进程还不核对管道服务端的进程属于同一用户（`GetNamedPipeServerProcessId`）。MCP Inspector、Claude Code 和 Claude Desktop 都还没连过运行中的应用（M18 的手动检查步骤见开发指南第 2 节）。
 
 ### 5.2 暴露的内容
 
@@ -194,9 +197,9 @@ Capability
 
 **M11 暴露的工具**（`mw-mcp`）：
 
-- 无界面时共 14 个，连接应用时没有 `file_open`，是 13 个（M12；M9 加了 `structure_detect_symmetry`）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_detect_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。
+- 无界面时共 14 个，连接应用时没有 `file_open`，是 13 个（M12；M9 加了 `structure_detect_symmetry`）；`tools/list` 的顺序固定（规范建议如此，便于客户端缓存），就是注册表里副作用等级为只读、当前模式下可用的能力：`project_list`、`project_open`、`structure_list`、`structure_open`、`file_open`、`structure_summary`、`structure_sites`、`structure_site_symmetry`、`structure_detect_symmetry`、`structure_measure_distance`、`structure_measure_angle`、`structure_neighbors`、`structure_diagnostics`、`structure_export`。编辑能力和撤销、重做属于可撤销写入，不注册。服务器自己不再定义工具。M18 起注册表里当前模式下可用的能力全部是工具（5.3 节）：无界面 33 个；连接应用时没有 `file_open`、有四个视图工具，是 36 个。
 - **工具名**把注册表名称里的 `.` 换成 `_`（`structure.summary` → `structure_summary`）。MCP 允许点号，但不少客户端把工具名原样交给模型 API，而两家都不允许点号（6.2.6 节）。测试确认换名后互不重复。说明、Schema 描述、摘要和错误消息里提到的注册表名称（如"structure.list gives the ids"）一并换成工具名。
-- **注解**：`readOnlyHint: true`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`。`outputSchema` 就是注册表的输出 Schema，输入、输出都在 6.2.6 节的严格子集内（集成测试再查一遍）。
+- **注解**：`readOnlyHint: true`、`destructiveHint: false`、`idempotentHint: true`、`openWorldHint: false`（M18 起按副作用等级给出，5.3 节的表）。`outputSchema` 就是注册表的输出 Schema，输入、输出都在 6.2.6 节的严格子集内（集成测试再查一遍）。
 - **结果**：第一块文本是英文摘要，第二块是输出的 JSON 文本，`structuredContent` 是同一份 JSON（规范要求带结构化内容的工具同时给出序列化的 JSON 文本）。失败时返回 `isError: true` 的工具结果，文本是 `{"code", "message", "guidance"}`，模型可以据此修正调用；只有调用不存在的工具才是协议错误。处理函数 panic 时返回 `internal_error`，不让请求悬空。
 - **访问范围**（`mw_mcp::Access`，第 7.2 节）：
   - 只能打开启动时 `--allow` 给出的目录（可以给多个）里的项目目录和 `.cif` 文件，CIF 不超过 64 MiB。没给 `--allow` 时用工作目录；但工作目录是 `/` 时不允许任何目录，因为有的客户端在 `/` 启动服务器。
@@ -232,6 +235,114 @@ Capability
 
 - elicitation：需要用户确认或选择时（例如对称模式下删除单个原子的三个选项），无界面模式通过它询问用户；
 - roots：限定可以读写的目录。
+
+### 5.3 完整 MCP（v0.3 M18）
+
+> 状态：阶段 1–5 已实现（2026-10-24），每个阶段单独提交；权限设置的默认值已由用户决定（7.2 节）。阶段 6 的文档已更新，Inspector、Claude Code 和 Claude Desktop 的手动检查要你配合（开发指南第 2 节）。
+
+| 阶段 | 内容 | 主要涉及 |
+|---|---|---|
+| 1 设计 | 本节；7.1–7.3 节；项目文件设计稿第 1、2、3、9、15 节 | 文档 |
+| 2 注册表 | 写操作经宿主执行（`Host::execute`），撤销步骤记下是哪个客户端；权限与确认在注册表里强制；每次调用生成审计记录；补上 `structure.convert_to_p1`、`structure.make_supercell`、`file.import`、`structure.export_file`；项目文件的锁、会话备份和审计日志文件 | `mw-crystal`、`mw-automation`、`mw-project-file` |
+| 3 无界面写入 | `Headless` 执行写操作并立刻写回项目文件（加锁、核对没被别人改过、先备份）；服务器提供全部写入工具和对应的注解；不可逆操作经 elicitation 确认；权限读配置目录里的设置 | `mw-mcp`、外壳的 `mcp.rs` |
+| 4 连接应用时写入 | `AppHost` 把编辑交给工作区；撤销提示和通知带"AI"标记和客户端名称；超胞和导入的文件加进项目；应用里的确认弹窗；审计日志随项目保存、可以导出；应用打开项目时持锁；设置里的权限，可以按客户端设置 | 外壳、`mw-structure`、`mw-project` |
+| 5 视图工具 | `view.select`、`view.set_display_model`、`view.reset`、`view.snapshot` | `mw-automation`、`mw-viewport`、`mw-structure`、外壳 |
+| 6 文档与验收 | 开发指南的 MCP 用法、`CLAUDE.md`、架构第 10 节；交给用户的手动检查步骤（Inspector、Claude Code、Claude Desktop） | 文档 |
+
+**写操作经宿主执行**：
+
+- `Host` 去掉 `document_mut`，换成 `execute(id, command)`、`undo(id)`、`redo(id)`，由宿主决定编辑怎样落到文档上。处理函数先用 `document` 读、检查参数，再交给 `execute`，之后重新读文档组织结果。三种宿主：
+  - `Documents`（测试）直接在 `CrystalDocument` 上执行；
+  - `Headless` 先确认项目可写（加锁、核对文件，项目文件设计稿第 15 节），在内存里执行，再写回项目文件；写不进去时撤销这一步、返回 `save_failed`，内存和磁盘保持一致；
+  - `AppHost` 调用 `StructureWorkspace::execute_by`，与界面自己的编辑走同一条路：更新字段、场景和选区，进同一个撤销栈。
+- 撤销步骤记下是谁做的：`CrystalDocument::execute_by(command, agent)` 里的 `Agent` 是客户端的显示名称（MCP `clientInfo` 的 `title`，没有时用 `name`），用户自己的编辑没有。撤销、重做时跟着这一步走。这个标记只在内存里：撤销栈本来就不存（项目文件设计稿第 2 节）；落盘的记录是审计日志（7.3 节）。结构文件的编辑记录（项目文件设计稿 7.3 节）不改，所以不用升项目格式版本。
+- 应用里的标记：AI 的每次编辑弹一条通知"Claude Code：更改晶胞参数"（带"AI"标记，可以撤销）；顶栏撤销、重做按钮的提示写成"撤销 AI（Claude Code）的操作：更改晶胞参数"。历史面板还不存在，以后由它读撤销步骤的 `Agent` 和审计日志。"一次 AI 会话的修改整体撤销"（7.2 节）属于 v0.4 内置助手的会话撤销，不在本里程碑。
+- `history.undo` 撤销最后一步，不论是谁做的（第 4 节）。
+
+**补上的能力**：
+
+| 能力 | 副作用 | 说明 |
+|---|---|---|
+| `structure.convert_to_p1` | 可撤销写入 | 执行 `ExpandToP1`（晶体学设计稿 7.1 节），与界面的"转为 P1"相同 |
+| `structure.make_supercell` | 可撤销写入 | 整数矩阵 M（det > 0，每个元素绝对值不超过 20，原子数不超过 10 万）；结果是来源结构所在项目里的新派生结构（项目文件设计稿 13.2 节），返回它的结构 ID，已经打开。宿主经 `Projects::add_derived` 加入 |
+| `file.import` | 可撤销写入 | 把 CIF 或 POSCAR 文件导入一个打开着的项目（`project` 给项目 ID），源文件副本随项目保存（项目文件设计稿 7.1 节），返回新结构的 ID，已经打开。宿主经 `Projects::import_file` 加入。两种模式都可用；`file.open` 仍只在无界面时可用 |
+| `structure.export_file` | 外部副作用 | 把结构写成 CIF、POSCAR 或扩展 XYZ 文件。路径必须在允许的目录或打开着的项目目录里；文件已存在时要 `overwrite: true`。每次都要用户确认。`structure.export` 照旧返回文本，是只读的；两者分开，因为副作用等级是能力的属性，客户端据它决定是否确认（5.2 节"`file.import` 的评估"） |
+
+- 新增的结构撤销不了：撤销栈是结构自己的，项目层面没有撤销。所以 `file.import` 和 `structure.make_supercell` 只增加结构、不改已有的内容，仍算可撤销写入（7.1 节的表就是这样列的）。连接应用时，新结构在保存前只在内存里，关闭项目时选"不保存"就丢掉；无界面时它们立刻写进项目文件，本次会话之前的文件在备份里。从项目里删除结构（项目文件设计稿 13.4 节）以后做时，再加对应的能力。
+
+**权限与确认在注册表里强制**（7.2 节）：
+
+- `Registry::call` 多一个参数 `Context`：调用者（客户端的名称和显示名称）、它的权限（`Permissions { modify_data, write_files }`）、这次调用是否已经过用户确认。规则只看能力的副作用等级，不看参数和模型说了什么：
+  - 只读、视图：总是执行；
+  - 可撤销写入：要有 `modify_data`，否则返回 `not_permitted`，引导用户在设置里允许；
+  - 外部副作用：要有 `write_files`，并且这次调用已经确认，否则返回 `not_permitted` 或 `not_confirmed`；
+  - 仪器：没有这样的能力，一律拒绝。
+- **确认先于调用**：外部副作用的能力另有一个检查函数，`Registry::confirmation(host, name, input)` 检查参数（路径是否允许、结构是否打开、文件是否已存在）并给出一句英文说明，例如"Write 金红石 as POSCAR to /Users/me/run/POSCAR, replacing the file there."。服务器拿这句话去问用户，用户同意后才带着"已确认"调用。确认的结果不交给模型，模型也没有办法替用户确认。
+  - 连接应用时：确认弹窗出现在应用里（`dispatch.rs` 新增一种请求，由外壳打开对话框，按钮给出答复）；5 分钟没有答复按拒绝处理。客户端支不支持 elicitation 都一样。
+  - 无界面时：用 MCP 的 elicitation。`initialize` 开始的客户端声明了 elicitation 能力时，服务器发 `elicitation/create`（表单模式，空的 `requestedSchema`，只问接受与否）；2026-07-28 的客户端，工具调用先返回 `InputRequiredResult`（多轮请求），里面是同样的 elicitation 请求，`requestState` 是服务器保存的一次性随机句柄（10 分钟有效，绑定工具名、参数和客户端），客户端带着答复重试时才执行。客户端不支持 elicitation 时返回 `confirmation_unavailable`，引导用户改为连接应用（设置里允许 MCP 客户端连接），在应用里确认。
+- **工具列表固定**：没有权限的工具照样列出，调用时被拒绝并说明原因。这样设置改变时工具列表不变（不用发列表变化通知，客户端可以缓存），模型也能把"用户没允许"告诉用户，而不是以为没有这个功能。
+- **客户端的身份是它自己报的**（`clientInfo`），本机同一用户的任何进程都能连上来、报任何名字，所以按客户端的权限是方便用户区分常用工具的设置，不是安全边界；安全边界仍是"默认不监听"（5.1 节）、令牌文件只有用户能读、外部副作用每次确认。
+
+**工具注解**（5.2 节）：
+
+| 副作用 | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
+|---|---|---|---|---|
+| 只读 | true | false | true | false |
+| 视图 | false | false | true | false |
+| 可撤销写入 | false | 按能力：只增加内容的（`add_occupant`、`add_site`、`file.import`、`make_supercell`）为 false，其余为 true | 按能力：把某个量设成给定值的（`set_cell`、`set_element`、`set_occupancy`、`set_position`、`set_coordinate`、`rename_label`）为 true，其余为 false | false |
+| 外部副作用 | false | true（可能覆盖文件） | true | false |
+
+`Spec` 新增 `additive` 和 `idempotent` 两个标记，注解由副作用等级和它们得出；测试逐个核对。
+
+**审计日志**（7.3 节）：每次调用（包括被拒绝的）由注册表生成一条记录交给宿主（`Host::audit`），宿主按记录里的项目存放：
+
+- 无界面时，记录先放在内存里，下一次写这个项目时一起追加进它的 `audit.jsonl`（那时已经持锁）。只读的会话因此不写项目目录（与 M11 的承诺一致），这些调用的记录只在服务器的日志里（info 级别）。
+- 连接应用时，记录挂在应用里打开着的项目上，保存、关闭项目和退出时追加进 `audit.jsonl`（与 `view.json` 一样，不算"有未保存的更改"）；未命名项目第一次保存时写入。命令面板的"导出 AI 操作记录…"把当前项目的记录（文件里的加上还没写的）写成一个 JSON Lines 文件。
+- 不属于任何项目的调用（`project.list`、`structure.list`、`file.open` 打开的未命名项目里的结构）不进项目的日志，只记在服务器或应用的日志里。
+
+**阶段 3 的实现（无界面写入，2026-10-24，`crates/mw-mcp`）**：
+
+- `Headless` 的每个项目记下打开时清单的摘要，每个结构记下读取时结构文件的摘要和文件里已有的编辑记录。写操作（`execute`、`undo`、`redo`、`import_file`、`add_derived`）先 `writable`：取锁（持有者 `materials-workbench mcp`），核对摘要，建会话备份；然后在内存里改，再 `save`：改过的和新加的结构、新的源文件副本、清单，`SessionBackup::protect` 先备份要覆盖的文件。写失败时撤销内存里的改动（`undo` / `redo`、删掉新条目），返回 `save_failed`。拒绝时的代码：`project_locked`（说明谁在写，引导在应用里允许 MCP 客户端连接或关闭项目）、`project_changed`。未命名项目只在内存里改。
+- 审计记录：持锁之前放在项目的待写列表里，持锁之后（以及第一次保存时）追加进 `audit.jsonl`；每条同时以 info 级别写进服务器日志。
+- 新导入和派生的结构排在 `project.json` 里的位置与界面相同（派生的排在同一来源已有的派生结构之后，重名时加编号）。
+- `Server` 把当前模式下可用的能力全部列为工具（仪器除外），注解按副作用等级和 `Spec` 的两个标记得出；每次调用从请求取客户端（rmcp 的 `RequestContext::client_info`：`initialize` 的 `clientInfo`，或 2026-07-28 每个请求的元数据），权限经 `Host::permissions` 取当前的设置。外部副作用的工具：先在宿主上运行 `Registry::confirmation`（参数不对时直接拒绝并记录），客户端不许写文件时直接调用、由注册表拒绝；否则问用户：连接应用时 `Host::ask`（阶段 4），无界面时客户端声明了 elicitation 就问——`initialize` 客户端用 `create_elicitation`，2026-07-28 客户端返回 `InputRequiredResult`，`requestState` 是服务器保存的一次性 UUID（10 分钟，绑定工具名、参数和客户端名，重试时三者都要相同）；问不了时返回 `confirmation_unavailable` 并记录。问题的开头是客户端的显示名称（"Claude Code asks: Write …"）。rmcp 为此多开 `elicitation` 特性（只多了已在依赖树里的 `url`）。
+- 权限来源：`mw_mcp::main` 多一个参数 `PermissionSource`；`materials-workbench mcp` 每次调用读配置目录的 `settings.json`（`ai` 字段，7.2 节），只读不写；独立的 `mw-mcp` 用默认值。`file.open` 和 `file.import` 都读 CIF 和 POSCAR（`Access::read` 按 `SourceFormat::of_path` 认格式）；读写路径限制在 `--allow` 的目录和打开着的项目目录内（`Access::read_in`、`Access::writable`，后者在路径处有链接时替换链接而不是跟着它写）。
+- 服务器说明（`instructions`）改为可以编辑的版本：无界面时说明改动立刻存进项目文件、写文件要用户确认；连接应用时说明改动在窗口里实时可见、进同一个撤销栈、由用户保存。
+- 测试：`mw-mcp/src/headless.rs` 的单元测试（只读的会话不留锁、日志和备份；编辑立刻存进项目、编辑记录变长、备份只有被覆盖的文件且保持会话开始时的内容、撤销也存、审计日志从持锁前的调用开始；别的进程持锁时 `project_locked` 且内存不变；文件在读取之后被改过时 `project_changed` 且锁随之放开；导入和超胞写进清单、源文件副本在；写文件只在允许的范围内），`tests/stdio.rs`（全部工具和注解；编辑存进项目再撤销；超胞进项目、资源列表更新、审计日志写客户端名；两种生命周期下用户接受时写文件、拒绝时 `not_confirmed` 且没有文件；不支持 elicitation 的客户端 `confirmation_unavailable` 并记录；带恶意指令的 CIF：照着它写文件被用户拒绝、写到 `~/.ssh/config` 在问之前就被拒绝、删除位点只改内存里的未命名项目，允许目录下的文件一个字节都没变），`apps/workbench/tests/mcp.rs`（`materials-workbench mcp` 按 `settings.json` 拒绝没有权限的客户端，改设置后下一次调用就允许，改动存进项目，两次调用都在审计日志里，配置目录不变）。
+
+**阶段 4 的实现（连接应用时写入，2026-10-24，外壳、`mw-structure`）**：
+
+- `AppHost::execute` 调用 `StructureWorkspace::execute_by(command, agent, …)`：与 `execute` 一样更新字段、场景和选区，撤销步骤记在客户端名下；被拒绝的编辑只回给客户端，不弹错误通知。`undo_by` / `redo_by` 同理（`Host::undo`、`redo` 为此多了 `agent` 参数）。客户端每改一步弹一条通知，标题"AI（Claude Code）"，内容是这一步的名称；同一个结构的通知互相替换，不堆叠。顶栏撤销、重做按钮的提示写成"撤销 AI（Claude Code）的「修改晶胞参数」"（`undo_tooltip` / `redo_tooltip`）。
+- `structure.make_supercell` 和 `file.import` 加进项目的方式与界面相同：超胞经 `Workbench::add_derived_structure`（与超胞对话框共用，默认名用界面语言的 `mw_structure::supercell_name`），导入经 `ProjectCatalog::add_imported`；新结构都还没保存，立即打开（导入的第一个显示在窗口里），由用户保存。
+- 确认弹窗（`mcp::ask`）：标题"允许 Claude Code 写入文件？"，正文说明把哪个结构以什么格式写到哪里、会不会替换已有文件、写入后无法撤销；按钮"取消"和"写入"（替换时为"替换"）。Esc、"取消"、关掉对话框都算拒绝；5 分钟没有答复也算拒绝，之后再点"写入"只提示请求已超时。服务器那边不另计时：窗口关闭、答复丢失也算拒绝。
+- 权限：设置里的 `AiSetting` 全局量（`config.rs` 的 `AiSettings`），`AppHost::permissions` 每次调用读它；第一次调用的客户端由 `AppHost::audit` 记进设置，设置对话框在"允许 AI 修改数据""允许 AI 写文件"下面列出连接过的客户端，每个两列开关，改动立即生效、立即保存。
+- 审计记录挂在 `Workbench::audit` 的项目下，保存、关闭项目和退出时追加进 `audit.jsonl`（`ai_log.rs`）；命令面板的"导出 AI 操作记录…"把当前项目文件里的和还没写的记录写成一个 JSON Lines 文件。
+- 项目锁（项目文件设计稿第 15 节）：`add_project` 取锁，取不到时记下清单的摘要并用通知说明是谁在写；保存前 `ensure_writable` 补取锁并核对摘要，"另存为"之后锁跟着项目到新位置；关闭项目时放开。
+- 测试：外壳的界面集成测试 `mcp_clients_edit_in_the_window`（另一个进程拿不到应用打开着的项目的锁；客户端的编辑进工作区、撤销步骤记客户端名、项目变成未保存，客户端撤销；客户端被记进设置，单独关掉它的修改权限后被拒绝，别的客户端照旧；超胞排在来源的派生结构之后并显示；导入进客户端指定的项目；写文件时弹窗，Esc 拒绝、回车写入；保存后审计日志里有超胞、写文件和被拒绝的调用，写文件那条标为已确认），`mw-structure` 的 `ai_edits_say_whose_they_are`（撤销、重做提示的文字；被拒绝的编辑不留步骤）；截图巡览 57–59。
+
+**视图工具**（阶段 5，仅连接应用时）：新增副作用等级"视图"（7.1 节）：只改窗口里显示的内容，不改数据，不进撤销栈。
+
+- `view.select`：选中位点或原子（`sites`、`atoms`，都空时清除选区），与在视口里点选相同；
+- `view.set_display_model`：`ball_and_stick`、`space_filling`、`polyhedra`；
+- `view.reset`：相机回到默认视角；
+- `view.snapshot`：用当前相机和显示模型离屏渲染一帧（宽、高 64–2048 像素，0 表示视口当前的大小），结果里是 PNG 图像（MCP 的 `image` 内容块），结构化输出只有宽高。`CallResult` 为此新增可选的图像。渲染用视口自己的渲染线程，不另建 GPU 设备。
+
+视图工具都要先 `structure_open`：结构在窗口里显示时它们才有意义。
+
+**阶段 5 的实现（视图工具，2026-10-24，`mw-automation/src/view.rs`、`mw-viewport`、`mw-structure`、外壳）**：
+
+- 四个能力的副作用等级是 `Effect::View`、可用性 `Availability::Gui`，所以无界面的服务器不列出它们，连接应用时是工具；注解是 `readOnlyHint: false`、`destructiveHint: false`、`idempotentHint: true`。它们不需要权限（7.2 节），照样留审计记录（`effect` 为 `view`）。
+- 处理函数先读文档、检查参数（位点和原子存在，截图的尺寸），再交给宿主：`Host::change_view(id, ViewChange)`（`Select(Vec<Target>)`、`DisplayModel`、`ResetCamera`）和 `Host::snapshot(id, width, height)`。`AppHost` 先在窗口里显示这个结构（与点击边栏相同，所以用户看到 AI 在看哪个结构），再调用工作区：`StructureWorkspace::select`（与点选相同的选区，属性面板随之显示最后一个位点）、`set_display_model`（视图状态，随 `view.json` 保存，不算未保存的更改）、`reset_camera`（与"重置视角"相同）、`snapshot`。
+- 截图：`mw_viewport::Viewport::snapshot` 用视口自己的渲染器、当前的相机、选区圆圈和主题的背景色离屏渲染一帧，在主线程上等 GPU 完成（一帧的时间），编码成 PNG（`image` 的 `png` 特性），之后视口重画自己的一帧（排队中的帧被这一帧顶替，否则屏幕停在旧画面上）。线宽和圆圈按图像高度与视口高度之比缩放，看起来与屏幕上相同。宽、高都为 0 时用视口的物理像素大小，按比例缩到每边不超过 2048；视口还没有布局过时用 1024 × 768。
+- `CallResult` 新增 `image: Option<Image>`（PNG 字节和宽高），`Output::with_image` 交给它；服务器把它作为 MCP 的 `image` 内容块（base64，`image/png`）放在摘要和 JSON 之后。命令行 `mw capabilities` 和 Python 的 `capabilities()` 把这一等级写作 `view`。
+- 测试：`mw-automation/tests/view.rs`（假的有窗口宿主：四个工具交给宿主的改变、没有权限的客户端也能用、文档的修订号不变、每次调用都有审计记录；不存在的位点和原子、错误的显示模型、超出范围的尺寸都被拒绝而宿主什么都没收到；没有窗口时 `unavailable`），`mw-mcp/src/server.rs`（视图工具只在有窗口时列出、注解；图像内容块），外壳的界面集成测试 `mcp_clients_change_the_view`（没有任何权限的客户端选中位点和原子后窗口切到这个结构、选区相同；换成空间填充；转过的相机回到默认角度；320 × 240 和视口大小的 PNG；项目没有未保存的更改）。截图另在本机上看过：空间填充的金红石，选中的 O1 和 Ti 带圆圈。
+
+**测试**（阶段 2–5 各自带上）：
+
+- 注册表：两种宿主上的写操作和撤销（`Documents`；`Headless` 写回项目文件后重新读出相同）；权限拒绝（没有 `modify_data` 时编辑不执行、文档的修订号不变）；外部副作用没确认时拒绝、确认后写文件；路径在允许范围外拒绝；审计记录的字段；注解逐个核对。
+- 项目文件：锁（第二个持有者失败、进程结束即释放）、核对失败时不写、会话备份只备份被覆盖的文件、只保留最近 10 个、审计日志追加。
+- `mw-mcp`：rmcp 客户端经 stdio 驱动 `mw-mcp` 和 `materials-workbench mcp`：写入、撤销、写回的项目重新打开后内容一致；客户端的 elicitation 处理函数接受或拒绝（`initialize` 和 2026-07-28 两种生命周期）；不支持 elicitation 的客户端写文件被拒绝；带恶意指令的 CIF（让模型导出到某处、删除位点）不触发任何没经确认的写操作：服务器没有任何仅凭模型就能写文件的路径，测试确认读这个文件之后磁盘上只多出确认过的文件；应用打开着项目时无界面写入被拒绝。
+- 外壳：界面集成测试经 `Server::dispatching` 调用：编辑进工作区的撤销栈并带客户端名称、撤销提示的文字、通知；权限关掉时拒绝；确认弹窗接受与拒绝；超胞和导入加进边栏；审计日志随保存写出；视图工具改变工作区的选区、显示模型和相机，截图返回 PNG。
 
 ## 6. 内置助手（`mw-assistant`）
 
@@ -520,9 +631,12 @@ provider 层负责把下面这些差异转换成项目自己的对话类型：
 | 等级 | 例子 | 默认策略 |
 |---|---|---|
 | 只读 | 查询结构、测量、模拟谱、平衡计算 | 自动执行 |
-| 可撤销写入 | 改晶胞参数、换元素、生成超胞、导入文件 | 连接应用时自动执行，并在界面上提示、可撤销；无界面时按客户端配置 |
-| 不可逆或外部副作用 | 覆盖或写入文件、删除项目文件、发送数据到外部服务 | 每次都要用户确认 |
+| 视图（M18 加入） | 选中原子、切换显示模型、重置视角、视口截图 | 自动执行；不改数据，不进撤销栈 |
+| 可撤销写入 | 改晶胞参数、换元素、生成超胞、导入文件 | 按"允许 AI 修改数据"执行（7.2 节）；连接应用时在界面上提示、可撤销；无界面时立刻写回项目文件（先备份） |
+| 不可逆或外部副作用 | 覆盖或写入文件、删除项目文件、发送数据到外部服务 | 按"允许 AI 写文件"，并且每次都要用户确认 |
 | 仪器状态变更 | 路线图第 13.3 节的仪器控制 | 默认禁用；开启后每次都要用户在应用里确认 |
+
+注册表里是 `Effect` 的五个值（第 4 节）；规则在 `Registry::call` 里执行（5.3 节）。
 
 ### 7.2 用户控制
 
@@ -530,9 +644,28 @@ provider 层负责把下面这些差异转换成项目自己的对话类型：
 - 文件读写限制在项目目录和用户指定的目录内（对应 MCP 的 roots）。
 - 历史面板里，AI 的操作带"AI"标记和客户端名称；一次 AI 会话的修改可以整体撤销。
 
+**M18 的做法**（5.3 节）：
+
+- 设置保存在 `settings.json` 的 `ai` 字段：全局的 `modify_data`、`write_files`，以及 `clients`：连接过应用的客户端（按 `clientInfo.name` 区分，记下显示名称），每个可以单独打开或关掉两项，没设置的项跟随全局。设置对话框的"MCP 客户端"一节列出它们。开关立即生效，下一次调用就按新的权限。
+- 两种模式用同一份设置：无界面的 `materials-workbench mcp` 每次调用时从配置目录读（与最近项目一样，只读不写，所以它见到的新客户端不会记进设置）；开发用的独立 `mw-mcp` 不读配置目录，用默认值。
+- **默认值**（用户 2026-10-24 决定）："允许 AI 修改数据"开（编辑都能撤销，连接应用时用户看着它发生；连接本身默认关，5.1 节）、"允许 AI 写文件"开（每次写文件都要确认，确认才是保护）。没有 `ai` 字段的旧设置读作这两个默认值。
+- 读写的范围：读文件（`file.open`、`file.import`）和写文件（`structure.export_file`）都限制在 `--allow` 给出的目录（没给时是工作目录）和打开着的项目目录内（`Access::readable` / `Access::writable`），规则与 5.2 节的访问范围相同：先解析符号链接再检查。
+- AI 的操作在撤销提示和通知里带"AI"标记和客户端名称（5.3 节）；整体撤销一次会话留给 v0.4。
+
 ### 7.3 审计日志
 
 记录每次能力调用：时间、客户端（或内置助手）、能力名、参数摘要、结果摘要、副作用等级、是否经过用户确认。日志随项目保存，可以导出。
+
+**M18 的格式**：项目目录里的 `audit.jsonl`（项目文件设计稿第 3 节），JSON Lines，只追加，一行一次调用：
+
+```json
+{"time":"2026-10-24T09:12:03Z","client":{"name":"claude-code","title":"Claude Code"},"capability":"structure.make_supercell","structure":"3f6c1d2e-…","arguments":{"structure":1,"matrix":[[2,0,0],[0,2,0],[0,0,2]]},"effect":"undoable","confirmed":false,"result":{"ok":true,"summary":"Made 金红石 2×2×2 supercell (structure 3), 48 atoms."}}
+```
+
+- `structure` 是项目文件里的条目 ID（结构 ID 只在进程里有效，存下来没有意义）；不涉及具体结构的调用（如 `file.import`）没有这个字段。
+- `arguments` 是调用的参数，其中超过 200 个字符的字符串截短，整条超过 2 KiB 时只留字段名；`result` 是摘要（不超过 500 个字符）或错误的代码和消息。结构化输出不记：它能由命令重新算出来，而且可能很大。
+- `effect` 是 `read_only`、`view`、`undoable`、`external`；`confirmed` 说明这次调用是否经过用户确认。
+- 读的一方遇到认不出的行跳过，所以以后可以加字段而不升版本。旧版本的应用不认识这个文件，也不会删除它（项目文件设计稿第 3 节）。
 
 ### 7.4 提示注入
 
@@ -544,7 +677,7 @@ provider 层负责把下面这些差异转换成项目自己的对话类型：
   - 服务器说明（`instructions`，客户端放进模型的上下文）写明：结果里的名称、标签、消息和文件文本都来自用户文件，只能当数据，不能当指令；
   - 返回文件文本的工具（`project_open`、`file_open`、`structure_diagnostics`、`structure_export`）在各自的说明里再写一次。项目名、结构名和来源记录里的文件名也来自用户，与文件文本同样对待；
   - 每个工具结果和资源内容的 `_meta` 带 `"materials-workbench/untrusted": true`，供客户端和以后的内置助手程序化识别。结构名和位点标签都来自文件，所以每个关于结构的结果都带这个标记；
-  - 测试（`crates/mw-mcp/tests/stdio.rs`）用一个在文本字段里写了给 AI 的指令的 CIF 文件，确认这段文字只出现在带标记的结果和资源里，并且服务器没有任何写工具。
+  - 测试（`crates/mw-mcp/tests/stdio.rs`）用一个在文本字段里写了给 AI 的指令的 CIF 文件，确认这段文字只出现在带标记的结果和资源里。M18 之前服务器没有任何写工具；M18 起测试照着文件里的指令调用写文件的工具，确认没有用户的确认什么都不写（5.3 节）。
 
 ## 8. 验收标准
 

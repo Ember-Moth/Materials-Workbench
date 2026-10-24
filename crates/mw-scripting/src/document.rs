@@ -26,10 +26,11 @@ pub fn registry() -> &'static Registry {
     REGISTRY.get_or_init(Registry::standard)
 }
 
-/// `read_only`, `undoable`, `external` or `instrument`.
+/// `read_only`, `view`, `undoable`, `external` or `instrument`.
 pub fn effect_name(effect: Effect) -> &'static str {
     match effect {
         Effect::ReadOnly => "read_only",
+        Effect::View => "view",
         Effect::Undoable => "undoable",
         Effect::External => "external",
         Effect::Instrument => "instrument",

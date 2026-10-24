@@ -1,5 +1,6 @@
-//! Which files clients may open (ai-integration design §7.2): projects and
-//! CIF files inside the directories the server was started with. MCP roots
+//! Which files clients may open and write (ai-integration design §7.2):
+//! projects and structure files inside the directories the server was
+//! started with, and files inside the open projects' directories. MCP roots
 //! are deprecated as of protocol 2026-07-28, which suggests server
 //! configuration instead, so the directories come from the command line.
 
@@ -82,6 +83,10 @@ impl Access {
         self.allowed.iter().any(|dir| path.starts_with(dir))
     }
 
+    fn contains_in(&self, path: &Path, projects: &[PathBuf]) -> bool {
+        self.contains(path) || projects.iter().any(|dir| path.starts_with(dir))
+    }
+
     /// Whether clients may open `path`, a project the application
     /// remembers. One that is gone counts by its name.
     pub fn permits(&self, path: &Path) -> bool {
@@ -96,12 +101,14 @@ impl Access {
     fn refusal(&self, path: &str) -> CallError {
         let message = if self.allowed.is_empty() {
             format!(
-                "{path} cannot be opened: the server was started without directories to open \
-                 files from; the user can add them with --allow"
+                "{path} is not allowed: the server was started without directories to open \
+                 files from, so only open projects' directories are; the user can add \
+                 directories with --allow"
             )
         } else {
             format!(
-                "{path} is outside the directories files can be opened from: {}",
+                "{path} is outside the directories files can be opened from and written to, \
+                 apart from open projects' directories: {}",
                 self.allowed
                     .iter()
                     .map(|dir| dir.display().to_string())
@@ -117,18 +124,56 @@ impl Access {
     /// Paths are resolved, symbolic links included, before they are
     /// checked, so a link cannot lead outside the allowed directories.
     fn resolve(&self, path: &str) -> Result<PathBuf, CallError> {
+        self.resolve_in(path, &[])
+    }
+
+    fn resolve_in(&self, path: &str, projects: &[PathBuf]) -> Result<PathBuf, CallError> {
         let absolute = self
             .absolute(Path::new(path))
             .map_err(|e| CallError::new("invalid_arguments", format!("{path}: {e}")))?;
         let resolved = match absolute.canonicalize() {
             Ok(resolved) => resolved,
             // Only say a file is missing where the client may look.
-            Err(_) if !self.contains(&as_far_as_exists(&absolute)) => {
+            Err(_) if !self.contains_in(&as_far_as_exists(&absolute), projects) => {
                 return Err(self.refusal(path));
             }
             Err(e) => return Err(CallError::new("not_found", format!("{path}: {e}"))),
         };
-        if !self.contains(&resolved) {
+        if !self.contains_in(&resolved, projects) {
+            return Err(self.refusal(path));
+        }
+        Ok(resolved)
+    }
+
+    /// The canonical path of a file a client asked to write: inside the
+    /// allowed directories or `projects`, the open projects' canonical
+    /// directories. The file need not exist, its directory must. A link at
+    /// the path is replaced, not followed, so it cannot lead outside.
+    pub fn writable(&self, path: &str, projects: &[PathBuf]) -> Result<PathBuf, CallError> {
+        let absolute = self
+            .absolute(Path::new(path))
+            .map(|p| lexical(&p))
+            .map_err(|e| CallError::new("invalid_arguments", format!("{path}: {e}")))?;
+        let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) else {
+            return Err(CallError::new(
+                "invalid_arguments",
+                format!("{path} names no file"),
+            ));
+        };
+        let dir = match parent.canonicalize() {
+            Ok(dir) => dir,
+            Err(_) if !self.contains_in(&as_far_as_exists(parent), projects) => {
+                return Err(self.refusal(path));
+            }
+            Err(e) => {
+                return Err(CallError::new(
+                    "not_found",
+                    format!("the directory of {path} does not exist: {e}"),
+                ));
+            }
+        };
+        let resolved = dir.join(name);
+        if !self.contains_in(&resolved, projects) {
             return Err(self.refusal(path));
         }
         Ok(resolved)
@@ -149,14 +194,24 @@ impl Access {
 
     /// Checks a path a client gave and reads the file.
     pub fn read(&self, path: &str) -> Result<(PathBuf, Vec<u8>), CallError> {
-        let resolved = self.resolve(path)?;
-        let is_cif = resolved
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("cif"));
-        if !is_cif {
+        self.read_in(path, &[])
+    }
+
+    /// Reads a file as [`Self::read`] does, also from `projects`, the open
+    /// projects' canonical directories.
+    pub fn read_in(
+        &self,
+        path: &str,
+        projects: &[PathBuf],
+    ) -> Result<(PathBuf, Vec<u8>), CallError> {
+        let resolved = self.resolve_in(path, projects)?;
+        if mw_project_file::SourceFormat::of_path(&resolved).is_none() {
             return Err(CallError::new(
                 "unsupported_format",
-                format!("{path} is not a .cif file; only CIF files can be opened so far"),
+                format!(
+                    "{path} is neither CIF (.cif) nor POSCAR (.vasp, .poscar, POSCAR*, \
+                     CONTCAR*)"
+                ),
             ));
         }
         let metadata = std::fs::metadata(&resolved)
@@ -270,6 +325,42 @@ mod tests {
         assert!(access.permits(&allowed.join("gone.mwproj")));
         assert!(!access.permits(&temp.path().join("other.mwproj")));
         assert!(!access.permits(&allowed.join("../other.mwproj")));
+    }
+
+    #[test]
+    fn files_are_written_inside_allowed_directories_and_projects() {
+        let temp = tempfile::tempdir().unwrap();
+        let allowed = temp.path().join("allowed");
+        let project = temp.path().join("elsewhere/p.mwproj");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let access = Access::new(std::slice::from_ref(&allowed)).unwrap();
+        let projects = [project.canonicalize().unwrap()];
+        let write = |path: PathBuf| access.writable(path.to_str().unwrap(), &projects);
+        let target = write(allowed.join("POSCAR")).unwrap();
+        assert_eq!(target, allowed.canonicalize().unwrap().join("POSCAR"));
+        assert!(write(project.join("out.cif")).is_ok());
+        let code = |path: PathBuf| write(path).unwrap_err().code;
+        assert_eq!(code(temp.path().join("POSCAR")), "not_allowed");
+        assert_eq!(code(allowed.join("../POSCAR")), "not_allowed");
+        assert_eq!(code(allowed.join("missing/POSCAR")), "not_found");
+        assert_eq!(code(temp.path().join("missing/POSCAR")), "not_allowed");
+        // Without the project, its directory is out of bounds.
+        assert_eq!(
+            access
+                .writable(project.join("out.cif").to_str().unwrap(), &[])
+                .unwrap_err()
+                .code,
+            "not_allowed"
+        );
+        // Reading follows the same bounds.
+        std::fs::write(project.join("x.cif"), "data_x").unwrap();
+        let path = project.join("x.cif");
+        assert!(access.read_in(path.to_str().unwrap(), &projects).is_ok());
+        assert_eq!(
+            access.read(path.to_str().unwrap()).unwrap_err().code,
+            "not_allowed"
+        );
     }
 
     #[test]

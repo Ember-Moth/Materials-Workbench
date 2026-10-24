@@ -7,7 +7,7 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use mw_crystal::{
-    AtomFate, Axis, CellParam, CellValues, Command, Edit, EditError, EditInfo, EditWarning,
+    Agent, AtomFate, Axis, CellParam, CellValues, Command, Edit, EditError, EditInfo, EditWarning,
     MAX_VOLUME_FACTOR, Measured, Outcome, SiteId, Species, Structure, SymmetrizeError, Target,
     TransformError, expand_and_remove,
 };
@@ -285,6 +285,79 @@ impl StructureWorkspace {
         self.execute(Command::Edit(edit), window, cx)
     }
 
+    /// Runs a command for an AI client (`docs/design/ai-integration.md`
+    /// §5.3): the same undo step as the user's own edit, marked as the
+    /// client's, with the view updated and a notification that says who
+    /// changed what. A refusal goes back to the client, not to the screen.
+    pub fn execute_by(
+        &mut self,
+        command: Command,
+        agent: Agent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Outcome, EditError> {
+        let name = command_name(&command);
+        let center = self.display_center();
+        let outcome = self
+            .document
+            .crystal
+            .execute_by(command, Some(agent.clone()))?;
+        if outcome.changed {
+            self.notify_agent(&agent, name, window, cx);
+        }
+        self.after_change(&outcome, center, window, cx);
+        Ok(outcome)
+    }
+
+    /// Undoes the last step for an AI client, or for the user when `agent`
+    /// is `None`; `None` when there was nothing to undo.
+    pub fn undo_by(
+        &mut self,
+        agent: Option<Agent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Outcome> {
+        let name = self.document.crystal.undo_command().map(command_name)?;
+        let outcome = self.undo_step(window, cx)?;
+        if let Some(agent) = agent {
+            self.notify_agent(&agent, tr!("edit.agent.undid", command = name), window, cx);
+        }
+        Some(outcome)
+    }
+
+    /// Redoes the last undone step for an AI client, or for the user when
+    /// `agent` is `None`; `None` when there was nothing to redo.
+    pub fn redo_by(
+        &mut self,
+        agent: Option<Agent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Outcome> {
+        let name = self.document.crystal.redo_command().map(command_name)?;
+        let outcome = self.redo_step(window, cx)?;
+        if let Some(agent) = agent {
+            self.notify_agent(&agent, tr!("edit.agent.redid", command = name), window, cx);
+        }
+        Some(outcome)
+    }
+
+    /// Tells the user what an AI client did. One notification per
+    /// structure: a client's run of edits replaces it instead of stacking.
+    fn notify_agent(
+        &self,
+        agent: &Agent,
+        what: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        struct AgentEdit;
+        let key = SharedString::from(format!("{:?}", cx.entity_id()));
+        let notification = Notification::info(what)
+            .title(tr!("edit.agent.title", agent = agent.name()))
+            .id1::<AgentEdit>(key);
+        window.push_notification(notification, cx);
+    }
+
     /// Follows the selection, the atoms picked for a measurement and the
     /// atom the display range is centered on through the change (design
     /// §7.11), shows its warnings, and redraws. `center` is where the range
@@ -333,22 +406,62 @@ impl StructureWorkspace {
     }
 
     pub(crate) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
-        let center = self.display_center();
-        if let Some(mut outcome) = self.document.crystal.undo() {
-            // What the edit warned about was shown when it was made.
-            outcome.warnings.clear();
-            outcome.info.clear();
-            self.after_change(&outcome, center, window, cx);
-        }
+        self.undo_step(window, cx);
     }
 
     pub(crate) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        self.redo_step(window, cx);
+    }
+
+    fn undo_step(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Outcome> {
         let center = self.display_center();
-        if let Some(mut outcome) = self.document.crystal.redo() {
-            // What the edit warned about was shown when it was made.
-            outcome.warnings.clear();
-            outcome.info.clear();
-            self.after_change(&outcome, center, window, cx);
+        let mut outcome = self.document.crystal.undo()?;
+        // What the edit warned about was shown when it was made.
+        outcome.warnings.clear();
+        outcome.info.clear();
+        self.after_change(&outcome, center, window, cx);
+        Some(outcome)
+    }
+
+    fn redo_step(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Outcome> {
+        let center = self.display_center();
+        let mut outcome = self.document.crystal.redo()?;
+        // What the edit warned about was shown when it was made.
+        outcome.warnings.clear();
+        outcome.info.clear();
+        self.after_change(&outcome, center, window, cx);
+        Some(outcome)
+    }
+
+    /// The undo button's tooltip: the step, and the AI client that made it.
+    pub(crate) fn undo_tooltip(&self) -> SharedString {
+        let crystal = &self.document.crystal;
+        match (crystal.undo_command(), crystal.undo_agent()) {
+            (None, _) => tr!("header.undo"),
+            (Some(command), None) => {
+                tr!("header.undo_command", command = command_name(command))
+            }
+            (Some(command), Some(agent)) => tr!(
+                "header.undo_agent_command",
+                command = command_name(command),
+                agent = agent.name()
+            ),
+        }
+    }
+
+    /// The redo button's tooltip, as [`Self::undo_tooltip`].
+    pub(crate) fn redo_tooltip(&self) -> SharedString {
+        let crystal = &self.document.crystal;
+        match (crystal.redo_command(), crystal.redo_agent()) {
+            (None, _) => tr!("header.redo"),
+            (Some(command), None) => {
+                tr!("header.redo_command", command = command_name(command))
+            }
+            (Some(command), Some(agent)) => tr!(
+                "header.redo_agent_command",
+                command = command_name(command),
+                agent = agent.name()
+            ),
         }
     }
 

@@ -123,6 +123,12 @@ fn shell_entries() -> Vec<Entry> {
             Lucide::Settings,
             Box::new(OpenSettings),
         ),
+        entry(
+            tr!("command.export_ai_log"),
+            &["ai log", "audit", "mcp", "export", "caozuo jilu", "daochu"],
+            Lucide::FileClock,
+            Box::new(ExportAiLog),
+        ),
     ]
 }
 

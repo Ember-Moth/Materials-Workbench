@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::Global;
+use mw_automation::{Client, Permissions};
 use mw_project_file::{ProjectId, Timestamp};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -127,6 +128,9 @@ pub struct Settings {
     /// by default: listening lets the user's other processes in.
     #[serde(default)]
     pub mcp: bool,
+    /// What AI clients may do; settings from before M18 have the defaults.
+    #[serde(default)]
+    pub ai: AiSettings,
 }
 
 impl Default for Settings {
@@ -136,6 +140,54 @@ impl Default for Settings {
             dark: false,
             language: "zh-CN".into(),
             mcp: false,
+            ai: AiSettings::default(),
+        }
+    }
+}
+
+/// What AI clients may do (`docs/design/ai-integration.md` §7.2): for all
+/// of them, and for each client that connected to the application, which
+/// the settings dialog lists.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AiSettings {
+    pub modify_data: bool,
+    pub write_files: bool,
+    #[serde(default)]
+    pub clients: Vec<ClientSetting>,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        let permissions = Permissions::default();
+        Self {
+            modify_data: permissions.modify_data,
+            write_files: permissions.write_files,
+            clients: Vec::new(),
+        }
+    }
+}
+
+/// A client's own permissions; unset ones follow [`AiSettings`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClientSetting {
+    /// As the client names itself (MCP `clientInfo.name`).
+    pub name: String,
+    /// The name it shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modify_data: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_files: Option<bool>,
+}
+
+impl AiSettings {
+    /// What `client` may do.
+    pub fn permissions(&self, client: &Client) -> Permissions {
+        let own = self.clients.iter().find(|c| c.name == client.name);
+        Permissions {
+            modify_data: own.and_then(|c| c.modify_data).unwrap_or(self.modify_data),
+            write_files: own.and_then(|c| c.write_files).unwrap_or(self.write_files),
         }
     }
 }

@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use rmcp::ServiceExt;
 
-use crate::{Access, Endpoint, Headless, RecentSource, Server, relay};
+use crate::{Access, Endpoint, Headless, PermissionSource, RecentSource, Server, relay};
 
 fn usage(program: &str) -> String {
     format!(
@@ -16,15 +16,17 @@ fn usage(program: &str) -> String {
 Usage: {program} [--allow DIR]...
 
 Serves Materials Workbench to an MCP client over stdio: open projects and
-CIF files, query structures, export them as text. Experimental and
-read-only: nothing is written to disk. When the application runs and lets
-MCP clients connect (Settings), the client works with the projects open in
-it instead.
+CIF or POSCAR files, query and edit structures, export them. Experimental.
+Changes are saved to the project's files at once, after the files they
+replace are backed up in the project's backup folder; writing other files
+needs the user's confirmation every time. When the application runs and
+lets MCP clients connect (Settings), the client works with the projects
+open in it instead.
 
 Options:
-  --allow DIR    Let clients open projects and CIF files inside DIR and its
-                 subdirectories. Repeatable. Default: the working directory,
-                 unless it is /.
+  --allow DIR    Let clients open projects and structure files inside DIR
+                 and its subdirectories, and write files there. Repeatable.
+                 Default: the working directory, unless it is /.
   -h, --help     Print this help.
   -V, --version  Print the version.
 "
@@ -60,14 +62,16 @@ fn parse(
 
 /// Runs the server for a command line and returns the process's exit
 /// code. `program` is how messages name the command; `args` are the
-/// arguments after it; recent projects come from `recent`. When the
-/// application listens at `application`, the client is connected to it
-/// instead. Blocks until the client disconnects. Logs go to stderr
-/// (`RUST_LOG`), since stdout carries the protocol.
+/// arguments after it; recent projects come from `recent`, and what clients
+/// may do from `permissions`. When the application listens at
+/// `application`, the client is connected to it instead. Blocks until the
+/// client disconnects. Logs go to stderr (`RUST_LOG`), since stdout carries
+/// the protocol.
 pub fn main(
     program: &str,
     args: impl IntoIterator<Item = String>,
     recent: RecentSource,
+    permissions: PermissionSource,
     application: Option<Endpoint>,
 ) -> ExitCode {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
@@ -129,7 +133,10 @@ pub fn main(
                 ),
             }
         }
-        serve(Headless::new(access).with_recent(recent)).await
+        let host = Headless::new(access)
+            .with_recent(recent)
+            .with_permissions(permissions);
+        serve(host).await
     });
     // A read of stdin may still be waiting when the application closes the
     // connection; it cannot be cancelled, and nothing needs it.

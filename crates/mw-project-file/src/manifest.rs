@@ -33,6 +33,11 @@ macro_rules! uuid_id {
             pub const fn from_u128(value: u128) -> Self {
                 Self(Uuid::from_u128(value))
             }
+
+            /// The id written as text, e.g. in a file name or a resource URI.
+            pub fn parse(text: &str) -> Option<Self> {
+                Uuid::try_parse(text).ok().map(Self)
+            }
         }
 
         impl Default for $name {
@@ -51,13 +56,6 @@ macro_rules! uuid_id {
 
 uuid_id!(ProjectId);
 uuid_id!(EntryId);
-
-impl EntryId {
-    /// The id a file is named after.
-    pub(crate) fn parse(text: &str) -> Option<Self> {
-        Uuid::try_parse(text).ok().map(Self)
-    }
-}
 
 /// What a project holds: its identity, name and entries, in the order the
 /// sidebar lists them.
@@ -208,6 +206,22 @@ pub enum SourceFormat {
 }
 
 impl SourceFormat {
+    /// The format a file is imported as, by its name: `.cif` is CIF;
+    /// `.vasp`, `.poscar` and names that begin with POSCAR or CONTCAR are
+    /// POSCAR. `None` for a file no importer reads.
+    pub fn of_path(path: &std::path::Path) -> Option<Self> {
+        let extension = path.extension().and_then(|e| e.to_str());
+        let is = |names: &[&str]| {
+            extension.is_some_and(|e| names.iter().any(|n| e.eq_ignore_ascii_case(n)))
+        };
+        if is(&["cif"]) {
+            return Some(Self::Cif);
+        }
+        let name = path.file_name()?.to_str()?.to_ascii_uppercase();
+        (is(&["vasp", "poscar"]) || name.starts_with("POSCAR") || name.starts_with("CONTCAR"))
+            .then_some(Self::Poscar)
+    }
+
     /// The extension of the file's copy in the project: `vasp` for POSCAR,
     /// whose files are often named without one, as VESTA, ASE and pymatgen
     /// recognize it.

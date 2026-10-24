@@ -16,14 +16,14 @@ use gpui_kit::component::notification::Notification;
 use mw_crystal::{
     AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
     CrystalDocument, DisplayRange, Edit, EditMode, PolyhedronCenters, SiteId, SphereCenter,
-    Structure, element,
+    Structure, Target, element,
 };
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
     Camera, DisplayModel as SavedDisplayModel, DisplayRange as SavedDisplayRange, EntryView,
     PanelTab as SavedPanelTab, SphereCenter as SavedSphereCenter, StructureFile,
 };
-use mw_viewport::{CameraPose, Viewport};
+use mw_viewport::{CameraPose, Snapshot, Viewport};
 
 use crate::actions::*;
 use crate::cell_dialog::{self, CellDialog};
@@ -34,7 +34,7 @@ use crate::polyhedra::PolyhedraPanel;
 use crate::scene::{self, Atoms, DisplayModel, LineColors};
 use crate::selection::Selection;
 use crate::symmetrize_dialog::{self, SymmetrizeDialog};
-use crate::{dialogs, editing, format};
+use crate::{dialogs, format};
 
 /// Element symbols, the items of every element picker.
 pub(crate) type ElementList = SearchableVec<&'static str>;
@@ -98,6 +98,24 @@ pub struct Supercell {
     pub source: Arc<Structure>,
     /// Rows of the matrix M of the new lattice `A·M`.
     pub matrix: [[i32; 3]; 3],
+}
+
+/// The default name of a supercell of the structure `name` by `matrix`, in
+/// the interface language: `金红石 2×2×2 超胞`, or `金红石 超胞` when the
+/// matrix is not diagonal.
+pub fn supercell_name(name: &str, matrix: [[i32; 3]; 3]) -> SharedString {
+    let diagonal = (0..3).all(|i| (0..3).all(|j| i == j || matrix[i][j] == 0));
+    if diagonal {
+        tr!(
+            "supercell.name",
+            name = name,
+            a = matrix[0][0],
+            b = matrix[1][1],
+            c = matrix[2][2]
+        )
+    } else {
+        tr!("supercell.name_general", name = name)
+    }
 }
 
 /// What the workspace asks of the window that hosts it.
@@ -280,6 +298,42 @@ impl StructureWorkspace {
         self.document.source.as_deref()
     }
 
+    /// Selects sites and atoms as clicking them would; none clears the
+    /// selection. For MCP clients' `view.select`
+    /// (`docs/design/ai-integration.md` §5.3).
+    pub fn select(&mut self, targets: &[Target], window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selection(Selection::of(targets), window, cx);
+    }
+
+    /// What is selected: whole sites and single atoms, in the order chosen.
+    pub fn selected(&self) -> Vec<Target> {
+        self.selection.targets()
+    }
+
+    /// Turns the camera back to its default angle and zoom, as "Reset
+    /// view" does.
+    pub fn reset_camera(&mut self, cx: &mut Context<Self>) {
+        self.viewport
+            .update(cx, |viewport, cx| viewport.reset_camera(cx));
+    }
+
+    /// The viewport's size in physical pixels, once it was laid out.
+    pub fn viewport_size(&self, cx: &App) -> Option<(u32, u32)> {
+        self.viewport.read(cx).physical_size()
+    }
+
+    /// A PNG of the structure as the viewport shows it, `width` × `height`
+    /// pixels; blocks for the time of a frame (`mw_viewport::Viewport::snapshot`).
+    pub fn snapshot(
+        &mut self,
+        width: u32,
+        height: u32,
+        cx: &mut Context<Self>,
+    ) -> Result<Snapshot, SharedString> {
+        self.viewport
+            .update(cx, |viewport, cx| viewport.snapshot(width, height, cx))
+    }
+
     // MARK: Saving
 
     /// Whether the structure has edits since it was opened or saved.
@@ -422,7 +476,14 @@ impl StructureWorkspace {
         cx.notify();
     }
 
-    fn set_display_model(&mut self, model: DisplayModel, _: &mut Window, cx: &mut Context<Self>) {
+    /// How the viewport draws atoms. View state: saved with the project,
+    /// no undo step.
+    pub fn set_display_model(
+        &mut self,
+        model: DisplayModel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.display_model != model {
             self.display_model = model;
             // The centers' popover belongs to the polyhedra.
@@ -715,13 +776,7 @@ impl StructureWorkspace {
     ) {
         let [a, b, c] = repeats;
         let matrix = [[a, 0, 0], [0, b, 0], [0, 0, c]];
-        let name = tr!(
-            "supercell.name",
-            name = self.document.name.to_string(),
-            a = a,
-            b = b,
-            c = c
-        );
+        let name = supercell_name(&self.document.name, matrix);
         let source = self.document.crystal.snapshot();
         let make = cx.background_spawn(async move {
             mw_crystal::make_supercell(&source, matrix).map(|structure| (structure, source))
@@ -857,19 +912,7 @@ impl StructureWorkspace {
                     .small()
                     .icon(Icon::new(Lucide::Undo2))
                     .disabled(crystal.undo_command().is_none())
-                    .tooltip_with_action(
-                        crystal.undo_command().map_or_else(
-                            || tr!("header.undo"),
-                            |command| {
-                                tr!(
-                                    "header.undo_command",
-                                    command = editing::command_name(command)
-                                )
-                            },
-                        ),
-                        &Undo,
-                        Some(KEY_CONTEXT),
-                    )
+                    .tooltip_with_action(self.undo_tooltip(), &Undo, Some(KEY_CONTEXT))
                     .on_click(
                         cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(Undo), cx)),
                     ),
@@ -880,19 +923,7 @@ impl StructureWorkspace {
                     .small()
                     .icon(Icon::new(Lucide::Redo2))
                     .disabled(crystal.redo_command().is_none())
-                    .tooltip_with_action(
-                        crystal.redo_command().map_or_else(
-                            || tr!("header.redo"),
-                            |command| {
-                                tr!(
-                                    "header.redo_command",
-                                    command = editing::command_name(command)
-                                )
-                            },
-                        ),
-                        &Redo,
-                        Some(KEY_CONTEXT),
-                    )
+                    .tooltip_with_action(self.redo_tooltip(), &Redo, Some(KEY_CONTEXT))
                     .on_click(
                         cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(Redo), cx)),
                     ),

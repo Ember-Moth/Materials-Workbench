@@ -357,6 +357,7 @@ pub fn capabilities(report: &mut Report) {
     for capability in registry().capabilities() {
         let effect = match capability.effect {
             Effect::ReadOnly => "read-only",
+            Effect::View => "view",
             Effect::Undoable => "edit",
             Effect::External => "external",
             Effect::Instrument => "instrument",

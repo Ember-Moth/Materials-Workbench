@@ -27,6 +27,7 @@ macro_rules! scalar {
 scalar!(
     f64 => "number",
     u16 => "integer",
+    i32 => "integer",
     u32 => "integer",
     u64 => "integer",
     usize => "integer",

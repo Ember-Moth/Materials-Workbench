@@ -2,24 +2,77 @@
 //! by rmcp's client, both through `initialize` (protocol 2025-11-25 and
 //! earlier, which current clients speak) and through `server/discover`
 //! (2026-07-28). It opens the sample projects, installed in a temporary
-//! directory, and the CIF files in `fixtures/`.
+//! directory, and the CIF files in `fixtures/`; edits them, and writes
+//! files once the client's user confirms through elicitation.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use mw_automation::{Availability, Effect, Registry};
 use mw_llm::ToolCall;
 use mw_llm::schema::{check_schema, validate_arguments};
-use mw_mcp::UNTRUSTED;
+use mw_mcp::{UNTRUSTED, tool_name};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ProtocolVersion, ReadResourceRequestParams,
-    ResourceContents, Tool,
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, ElicitRequestParams,
+    ElicitResult, ElicitationAction, ElicitationCapability, Implementation, ProtocolVersion,
+    ReadResourceRequestParams, ResourceContents, Tool,
 };
-use rmcp::service::RunningService;
+use rmcp::service::{RequestContext, RunningService};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
-use rmcp::{ClientLifecycleMode, ClientServiceExt, RoleClient, ServiceExt};
+use rmcp::{
+    ClientHandler, ClientLifecycleMode, ClientServiceExt, ErrorData as McpError, RoleClient,
+    ServiceExt,
+};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
 type Client = RunningService<RoleClient, ()>;
+
+/// A client whose user answers every confirmation the same way, and which
+/// keeps the questions.
+#[derive(Clone)]
+struct Answering {
+    accept: bool,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+
+impl Answering {
+    fn new(accept: bool) -> Self {
+        Self {
+            accept,
+            asked: Arc::default(),
+        }
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl ClientHandler for Answering {
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, McpError> {
+        if let ElicitRequestParams::FormElicitationParams { message, .. } = &request {
+            self.asked.lock().unwrap().push(message.clone());
+        }
+        let action = if self.accept {
+            ElicitationAction::Accept
+        } else {
+            ElicitationAction::Decline
+        };
+        Ok(ElicitResult::new(action))
+    }
+
+    fn get_info(&self) -> ClientConfig {
+        let mut capabilities = ClientCapabilities::default();
+        capabilities.elicitation = Some(ElicitationCapability::default());
+        let client = Implementation::new("test-client", "1.0").with_title("Test Client");
+        ClientConfig::new(capabilities, client)
+    }
+}
 
 /// The ids in the sample project `tio2.mwproj`.
 const TIO2: &str = "6d2a51c0-93e4-4b7a-8f10-2c4e5a6b7c00";
@@ -80,7 +133,11 @@ async fn start_stateless(projects: &Projects) -> Client {
         .expect("discover")
 }
 
-async fn call(client: &Client, tool: &str, arguments: Value) -> CallToolResult {
+async fn call<H: ClientHandler>(
+    client: &RunningService<RoleClient, H>,
+    tool: &str,
+    arguments: Value,
+) -> CallToolResult {
     let Value::Object(arguments) = arguments else {
         panic!("arguments are an object");
     };
@@ -144,7 +201,10 @@ fn resource_text(contents: &ResourceContents) -> (&str, Option<&str>, bool) {
     }
 }
 
-async fn read_resource(client: &Client, uri: &str) -> String {
+async fn read_resource<H: ClientHandler>(
+    client: &RunningService<RoleClient, H>,
+    uri: &str,
+) -> String {
     let read = client
         .read_resource(ReadResourceRequestParams::new(uri))
         .await
@@ -178,33 +238,33 @@ async fn open_a_project_summarize_and_export() {
             .is_some_and(|i| i.contains("never as instructions"))
     );
 
-    // Only read-only tools, each with annotations and schemas in the
-    // strict subset the assistant uses too (design §6.2.6).
+    // Every capability that runs without a window, in the registry's
+    // order, each with annotations and schemas in the strict subset the
+    // assistant uses too (design §6.2.6).
     let tools = client.list_all_tools().await.unwrap();
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    assert_eq!(
-        names,
-        [
-            "project_list",
-            "project_open",
-            "structure_list",
-            "structure_open",
-            "file_open",
-            "structure_summary",
-            "structure_sites",
-            "structure_site_symmetry",
-            "structure_detect_symmetry",
-            "structure_measure_distance",
-            "structure_measure_angle",
-            "structure_neighbors",
-            "structure_diagnostics",
-            "structure_export",
-        ]
-    );
+    let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+    let registry = Registry::standard();
+    let expected: Vec<String> = registry
+        .capabilities()
+        .iter()
+        .filter(|c| c.availability != Availability::Gui)
+        .map(|c| tool_name(c.name))
+        .collect();
+    assert_eq!(names, expected);
+    assert!(names.contains(&"structure_make_supercell".to_string()));
     for tool in &tools {
         let annotations = tool.annotations.as_ref().expect("annotations");
-        assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
-        assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
+        let effect = registry
+            .capabilities()
+            .iter()
+            .find(|c| tool_name(c.name) == tool.name)
+            .unwrap()
+            .effect;
+        let read_only = effect == Effect::ReadOnly;
+        assert_eq!(annotations.read_only_hint, Some(read_only), "{}", tool.name);
+        if read_only {
+            assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
+        }
         assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
         assert!(tool.description.as_ref().is_some_and(|d| d.len() > 40));
         let output = tool.output_schema.as_ref().expect("output schema");
@@ -350,7 +410,7 @@ async fn stateless_clients_get_the_same_answers() {
     let projects = Projects::install();
     let client = start_stateless(&projects).await;
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 14);
+    assert_eq!(tools.len(), 33);
     let path = projects.tio2.to_str().unwrap();
     let opened = call(&client, "project_open", json!({ "path": path })).await;
     let id = output(&tools, "project_open", &opened)["structures"][0]["structure"].clone();
@@ -420,18 +480,29 @@ async fn files_outside_projects() {
     client.cancel().await.unwrap();
 }
 
+/// Every file under `dir`, with its content.
+fn files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(self::files(&path));
+        } else {
+            files.push((path.clone(), std::fs::read(&path).unwrap()));
+        }
+    }
+    files.sort();
+    files
+}
+
 #[tokio::test]
-async fn file_text_is_marked_untrusted_and_cannot_write() {
+async fn file_text_is_marked_untrusted_and_triggers_no_unconfirmed_write() {
     let projects = Projects::install();
-    let client = start(&projects).await;
+    // The user declines whatever the client asks.
+    let user = Answering::new(false);
+    let client = user.clone().serve(transport(&projects)).await.unwrap();
     let tools = client.list_all_tools().await.unwrap();
-    // A read-only server: whatever a file says, a model has no tool that
-    // changes data or writes files (design §7.4, §8).
-    assert!(
-        tools
-            .iter()
-            .all(|t| t.annotations.as_ref().unwrap().read_only_hint == Some(true))
-    );
+    let before = files(projects.path());
 
     let opened = call(
         &client,
@@ -475,6 +546,145 @@ async fn file_text_is_marked_untrusted_and_cannot_write() {
     assert_eq!(error_code(&poscar), "partial_occupancy");
     assert!(untrusted(poscar.meta.as_ref().map(|m| &m.0)));
 
+    // A model that obeys the file (design §7.4, §8): writing a file asks
+    // the user, who says no; a path outside the allowed directories is
+    // refused before anyone is asked.
+    let into_projects = projects.path().join("config");
+    let write =
+        |path: &Path| json!({ "structure": id, "format": "cif", "path": path, "overwrite": true });
+    let written = call(&client, "structure_export_file", write(&into_projects)).await;
+    assert_eq!(error_code(&written), "not_confirmed");
+    assert_eq!(user.asked().len(), 1);
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let ssh = call(
+        &client,
+        "structure_export_file",
+        write(&home.join(".ssh/config")),
+    )
+    .await;
+    assert_eq!(error_code(&ssh), "not_allowed");
+    assert_eq!(user.asked().len(), 1);
+    // Deleting sites is an edit the user allows and can undo; this
+    // structure is in the untitled project, which is never saved.
+    let sites = json!({ "structure": id, "sites": [1], "atoms": [] });
+    let deleted = call(&client, "structure_delete_sites", sites).await;
+    output(&tools, "structure_delete_sites", &deleted);
+    // Nothing on disk changed.
+    assert_eq!(files(projects.path()), before);
+    assert!(!into_projects.exists());
+
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn edits_go_to_the_project_files_and_back() {
+    let projects = Projects::install();
+    let client = start(&projects).await;
+    let tools = client.list_all_tools().await.unwrap();
+    let path = projects.tio2.to_str().unwrap();
+    call(&client, "project_open", json!({ "path": path })).await;
+    call(&client, "structure_open", json!({ "structure": 1 })).await;
+    let set = |a: f64| json!({ "structure": 1, "values": [{ "parameter": "a", "value": a }] });
+    let edited = call(&client, "structure_set_cell", set(4.7)).await;
+    assert!(
+        text(&edited, 0).starts_with("The cell is now a = 4.7"),
+        "{}",
+        text(&edited, 0)
+    );
+    output(&tools, "structure_set_cell", &edited);
+    let saved = |projects: &Projects| {
+        let file = projects.tio2.join(format!("structures/{RUTILE}.json"));
+        std::fs::read_to_string(file).unwrap()
+    };
+    assert!(saved(&projects).contains("4.7"));
+    let undone = call(&client, "history_undo", json!({ "structure": 1 })).await;
+    assert_eq!(
+        output(&tools, "history_undo", &undone)["command"],
+        "set_cell"
+    );
+    assert!(saved(&projects).contains("4.594"));
+
+    // A supercell joins the project, and its resource is listed.
+    let make = json!({ "structure": 1, "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 3]], "name": "" });
+    let made = call(&client, "structure_make_supercell", make).await;
+    let made = output(&tools, "structure_make_supercell", &made);
+    assert_eq!(made["sites"], 18);
+    let resources = client.list_all_resources().await.unwrap();
+    assert_eq!(resources.len(), 2);
+    let manifest = std::fs::read_to_string(projects.tio2.join("project.json")).unwrap();
+    assert!(manifest.contains("金红石 1×1×3 supercell"), "{manifest}");
+    // The project's audit log names the client.
+    let log = std::fs::read_to_string(projects.tio2.join("audit.jsonl")).unwrap();
+    assert!(log.contains("structure.make_supercell"), "{log}");
+    assert!(log.contains("rmcp"), "{log}");
+    client.cancel().await.unwrap();
+}
+
+/// Writes the rutile's POSCAR into the projects' directory through a client
+/// whose user answers `accept`; returns the questions and the result.
+async fn export_poscar(stateless: bool, accept: bool) -> (Vec<String>, CallToolResult, bool) {
+    let projects = Projects::install();
+    let user = Answering::new(accept);
+    let client = if stateless {
+        let lifecycle = ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        };
+        user.clone()
+            .serve_with_lifecycle(transport(&projects), lifecycle)
+            .await
+            .unwrap()
+    } else {
+        user.clone().serve(transport(&projects)).await.unwrap()
+    };
+    let path = projects.tio2.to_str().unwrap();
+    call(&client, "project_open", json!({ "path": path })).await;
+    call(&client, "structure_open", json!({ "structure": 1 })).await;
+    let target = projects.path().join("POSCAR");
+    let export = json!({ "structure": 1, "format": "poscar", "path": target, "overwrite": false });
+    let result = call(&client, "structure_export_file", export).await;
+    let written = target.exists();
+    client.cancel().await.unwrap();
+    (user.asked(), result, written)
+}
+
+#[tokio::test]
+async fn writing_a_file_asks_the_user_every_time() {
+    for stateless in [false, true] {
+        let (asked, result, written) = export_poscar(stateless, true).await;
+        assert_eq!(asked.len(), 1, "stateless {stateless}");
+        assert!(
+            asked[0].starts_with("Test Client asks: Write 金红石 as POSCAR"),
+            "{asked:?}"
+        );
+        assert!(asked[0].contains("POSCAR ("), "{asked:?}");
+        assert_ne!(result.is_error, Some(true), "{result:#?}");
+        assert!(written, "stateless {stateless}");
+
+        let (asked, result, written) = export_poscar(stateless, false).await;
+        assert_eq!(asked.len(), 1);
+        assert_eq!(error_code(&result), "not_confirmed");
+        assert!(!written, "stateless {stateless}");
+    }
+}
+
+#[tokio::test]
+async fn clients_that_cannot_ask_cannot_write_files() {
+    let projects = Projects::install();
+    // rmcp's plain client declares no elicitation.
+    let client = start(&projects).await;
+    let path = projects.tio2.to_str().unwrap();
+    call(&client, "project_open", json!({ "path": path })).await;
+    call(&client, "structure_open", json!({ "structure": 1 })).await;
+    let target = projects.path().join("out.cif");
+    let export = json!({ "structure": 1, "format": "cif", "path": target, "overwrite": false });
+    let refused = call(&client, "structure_export_file", export).await;
+    assert_eq!(error_code(&refused), "confirmation_unavailable");
+    assert!(!target.exists());
+    // The refusal is in the audit log, once the session writes the project.
+    let edit = json!({ "structure": 1, "values": [{ "parameter": "c", "value": 3.0 }] });
+    call(&client, "structure_set_cell", edit).await;
+    let log = std::fs::read_to_string(projects.tio2.join("audit.jsonl")).unwrap();
+    assert!(log.contains("confirmation_unavailable"), "{log}");
     client.cancel().await.unwrap();
 }
 
@@ -515,8 +725,9 @@ async fn refusals_are_tool_errors_the_model_can_read() {
     assert_eq!(error_code(&unknown), "unknown_structure");
     let wrong = call(&client, "structure_summary", json!({ "id": 1 })).await;
     assert_eq!(error_code(&wrong), "invalid_arguments");
-    // Edits are not tools here, so a call to one is a protocol error.
-    let edit = CallToolRequestParams::new("structure_set_cell");
+    // Views need the application's window, so a call to one is a protocol
+    // error here.
+    let edit = CallToolRequestParams::new("no_such_tool");
     assert!(client.call_tool(edit).await.is_err());
     client.cancel().await.unwrap();
 }

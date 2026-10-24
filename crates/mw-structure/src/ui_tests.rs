@@ -1375,6 +1375,57 @@ fn nothing_to_symmetrize_says_why(cx: &mut TestAppContext) {
     assert_eq!(steps(&rutile, &mut cx), 0);
 }
 
+/// Edits for an AI client (ai-integration design §5.3) are undo steps like
+/// the user's, and the undo and redo buttons say whose they are.
+#[gpui_kit::test]
+fn ai_edits_say_whose_they_are(cx: &mut TestAppContext) {
+    use mw_crystal::{Agent, CellValues, Edit};
+
+    let (workspace, mut cx) = open(cx, SampleKey::Rutile);
+    let tooltips = |workspace: &Entity<StructureWorkspace>, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |w, _| {
+            (w.undo_tooltip().to_string(), w.redo_tooltip().to_string())
+        })
+    };
+    let set_a = |a: f64| {
+        Command::Edit(Edit::SetCell {
+            values: CellValues::default().with(CellParam::A, a),
+        })
+    };
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.execute(set_a(4.6), window, cx).unwrap();
+            let claude = Agent::new("Claude Code");
+            workspace
+                .execute_by(set_a(4.7), claude, window, cx)
+                .unwrap();
+        })
+    });
+    draw(&mut cx);
+    assert_eq!(steps(&workspace, &mut cx), 2);
+    let (undo, _) = tooltips(&workspace, &mut cx);
+    assert_eq!(undo, "Undo Change cell parameters by AI (Claude Code)");
+    let undone = cx.update(|window, cx| {
+        workspace.update(cx, |w, cx| {
+            w.undo_by(Some(Agent::new("Claude Code")), window, cx)
+        })
+    });
+    assert!(undone.is_some());
+    draw(&mut cx);
+    let (undo, redo) = tooltips(&workspace, &mut cx);
+    assert_eq!(undo, "Undo Change cell parameters");
+    assert_eq!(redo, "Redo Change cell parameters by AI (Claude Code)");
+    // A refused edit changes nothing and goes back to the caller.
+    let refused = cx.update(|window, cx| {
+        workspace.update(cx, |w, cx| {
+            let edit = Command::Edit(Edit::RemoveSite { site: SiteId(99) });
+            w.execute_by(edit, Agent::new("Claude Code"), window, cx)
+        })
+    });
+    assert!(refused.is_err());
+    assert_eq!(steps(&workspace, &mut cx), 1);
+}
+
 fn range_panel(
     workspace: &Entity<StructureWorkspace>,
     cx: &mut VisualTestContext,

@@ -12,20 +12,31 @@
 //!
 //! The schemas come from the Rust types ([`schema`]) and stay within the
 //! strict subset both model vendors accept (design §6.2.6).
+//!
+//! AI clients call in a [`Context`]: what the user allowed them, and
+//! whether the user confirmed an irreversible call. The registry enforces
+//! it (design §7.2) and hands every client call's record to the host for
+//! the audit log (design §7.3).
 
 mod files;
 mod history;
+mod policy;
 mod project;
 mod registry;
 pub mod schema;
 mod structure;
+mod view;
 
 pub use files::{MAX_EXPORT_BYTES, diagnostic_message};
+pub use policy::{Caller, Client, Confirmation, Context, Permissions};
 pub use project::{
-    EntryInfo, OpenedFile, Opening, ProjectInfo, Projects, RecentProject, RecentProjects,
-    SkippedBlock, duplicate_project, read_error, resource_uri, unknown_structure,
+    EntryInfo, ImportedFile, OpenedFile, Opening, ProjectInfo, Projects, RecentProject,
+    RecentProjects, SkippedBlock, duplicate_project, parse_import, read_error, resource_uri,
+    unknown_structure,
 };
 pub use registry::{
-    Availability, CallError, CallResult, Capability, Documents, Effect, Host, Output, Registry,
-    Spec, StructureEntryId, StructureInfo,
+    Answer, Availability, CallError, CallResult, Capability, Documents, Effect, Host, Image,
+    Output, Registry, Spec, StructureEntryId, StructureInfo, ViewChange,
 };
+pub use structure::{MAX_SUPERCELL_ATOMS, supercell_name};
+pub use view::{DisplayModel, MAX_SNAPSHOT_SIZE, MIN_SNAPSHOT_SIZE};

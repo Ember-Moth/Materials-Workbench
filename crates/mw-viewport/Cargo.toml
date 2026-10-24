@@ -13,4 +13,4 @@ log.workspace = true
 glam.workspace = true
 # Same major version as GPUI's own image dependency; only used to wrap the
 # read-back pixels in the frame type `RenderImage` expects.
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }

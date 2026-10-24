@@ -1,22 +1,24 @@
 //! The project capabilities on a host with projects: listing and opening
-//! projects, listing and opening their structures, and what the other
-//! structure capabilities say about a structure that is not open yet. The
-//! host here is a stand-in held in memory; the MCP server's, which reads
-//! project files, is tested in `mw-mcp`.
+//! projects, listing and opening their structures, what the other
+//! structure capabilities say about a structure that is not open yet, and
+//! making supercells into the project. The host here is a stand-in held in
+//! memory; the MCP server's, which reads project files, is tested in
+//! `mw-mcp`.
 
 use std::path::PathBuf;
 
 use mw_automation::{
-    CallError, CallResult, Documents, EntryInfo, Host, Opening, ProjectInfo, Projects,
-    RecentProject, RecentProjects, Registry, StructureEntryId, StructureInfo, resource_uri,
+    CallError, CallResult, Client, Context, Documents, EntryInfo, Host, Opening, Permissions,
+    ProjectInfo, Projects, RecentProject, RecentProjects, Registry, StructureEntryId,
+    StructureInfo, resource_uri, supercell_name,
 };
 use mw_crystal::sample::{self, SampleKey};
-use mw_crystal::{CrystalDocument, Structure};
+use mw_crystal::{Agent, Command, CrystalDocument, Outcome, Structure};
 use mw_llm::ToolCall;
 use mw_llm::schema::validate_arguments;
 use mw_project_file::{
-    Derived, EntryId, Import, Operation, ProjectId, Provenance, Sha256, SourceFormat, Timestamp,
-    structure_sha256,
+    AuditRecord, Derived, EntryId, Import, Operation, ProjectId, Provenance, Sha256, SourceFormat,
+    Timestamp, structure_sha256,
 };
 use serde_json::{Value, json};
 
@@ -35,6 +37,7 @@ struct Entry {
 struct TestHost {
     open: bool,
     entries: Vec<Entry>,
+    audit: Vec<(Option<ProjectId>, AuditRecord)>,
 }
 
 impl TestHost {
@@ -73,6 +76,7 @@ impl TestHost {
         };
         Self {
             open: false,
+            audit: Vec::new(),
             entries: vec![
                 entry(1, RUTILE, "Rutile", Provenance::Import(import), rutile),
                 entry(
@@ -91,6 +95,14 @@ impl TestHost {
             .iter()
             .find(|e| self.open && e.info.structure == id)
     }
+
+    fn document_mut(&mut self, id: StructureEntryId) -> Result<&mut CrystalDocument, CallError> {
+        self.entries
+            .iter_mut()
+            .find(|e| e.info.structure == id)
+            .and_then(|e| e.document.as_mut())
+            .ok_or_else(|| CallError::new("unknown_structure", "no such structure"))
+    }
 }
 
 impl Host for TestHost {
@@ -106,12 +118,29 @@ impl Host for TestHost {
         self.entry(id)?.document.as_ref()
     }
 
-    fn document_mut(&mut self, id: StructureEntryId) -> Option<&mut CrystalDocument> {
-        self.entries
-            .iter_mut()
-            .find(|e| e.info.structure == id)?
-            .document
-            .as_mut()
+    fn execute(
+        &mut self,
+        id: StructureEntryId,
+        command: Command,
+        agent: Option<Agent>,
+    ) -> Result<Outcome, CallError> {
+        Ok(self.document_mut(id)?.execute_by(command, agent)?)
+    }
+
+    fn undo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        Ok(self.document_mut(id)?.undo())
+    }
+
+    fn redo(
+        &mut self,
+        id: StructureEntryId,
+        _: Option<Agent>,
+    ) -> Result<Option<Outcome>, CallError> {
+        Ok(self.document_mut(id)?.redo())
     }
 
     fn projects(&self) -> Option<&dyn Projects> {
@@ -120,6 +149,10 @@ impl Host for TestHost {
 
     fn projects_mut(&mut self) -> Option<&mut dyn Projects> {
         Some(self)
+    }
+
+    fn audit(&mut self, project: Option<ProjectId>, record: AuditRecord) {
+        self.audit.push((project, record));
     }
 }
 
@@ -183,6 +216,55 @@ impl Projects for TestHost {
         }
         entry.document = Some(CrystalDocument::new(entry.structure.clone()));
         Ok(Opening::Opened)
+    }
+
+    fn add_derived(
+        &mut self,
+        from: StructureEntryId,
+        name: Option<&str>,
+        structure: Structure,
+        matrix: [[i32; 3]; 3],
+    ) -> Result<StructureEntryId, CallError> {
+        let source = self
+            .entries
+            .iter()
+            .position(|e| e.info.structure == from)
+            .ok_or_else(|| CallError::new("unknown_structure", "no such structure"))?;
+        let from_name = self.entries[source].info.name.clone();
+        let name = name.map_or_else(|| supercell_name(&from_name, matrix), str::to_owned);
+        let derived = Derived::new(
+            self.entries[source].info.entry,
+            from_name,
+            structure_sha256(&self.entries[source].structure),
+            Operation::MakeSupercell { matrix },
+            Timestamp::from_unix(0),
+        );
+        let next = self
+            .entries
+            .iter()
+            .map(|e| e.info.structure.0)
+            .max()
+            .unwrap()
+            + 1;
+        let id = StructureEntryId(next);
+        let info = EntryInfo::new(
+            id,
+            PROJECT,
+            EntryId::new(),
+            name,
+            Provenance::Derived(derived),
+            true,
+        );
+        let document = Some(CrystalDocument::new(structure.clone()));
+        self.entries.insert(
+            source + 1,
+            Entry {
+                info,
+                structure,
+                document,
+            },
+        );
+        Ok(id)
     }
 }
 
@@ -350,4 +432,96 @@ fn hosts_without_projects() {
             "resource": null,
         }])
     );
+}
+
+#[test]
+fn supercells_join_the_project() {
+    let mut host = TestHost::new();
+    call(&mut host, "project.open", json!({ "path": PATH })).unwrap();
+    call(&mut host, "structure.open", json!({ "structure": 1 })).unwrap();
+    let doubled = json!({
+        "structure": 1,
+        "matrix": [[2, 0, 0], [0, 2, 0], [0, 0, 2]],
+        "name": "",
+    });
+    let made = call(&mut host, "structure.make_supercell", doubled).unwrap();
+    assert_eq!(made.output["name"], "Rutile 2×2×2 supercell");
+    assert_eq!(made.output["cells"], 8);
+    assert_eq!(made.output["sites"], 48);
+    let id = made.output["structure"].as_u64().unwrap();
+    assert_eq!(id, 3);
+    assert!(
+        made.summary
+            .starts_with("Made Rutile 2×2×2 supercell (id 3)"),
+        "{}",
+        made.summary
+    );
+    // After its source, open; the source is as it was.
+    let list = call(&mut host, "structure.list", json!({})).unwrap();
+    let names: Vec<&str> = list.output["structures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Rutile", "Rutile 2×2×2 supercell", "Rutile 2×2×2"]);
+    let summary = call(&mut host, "structure.summary", json!({ "structure": id })).unwrap();
+    assert_eq!(summary.output["atoms_in_cell"], 48);
+    assert_eq!(summary.output["edit_mode"], "p1");
+    assert_eq!(host.document(StructureEntryId(1)).unwrap().revision(), 0);
+
+    let named =
+        json!({ "structure": 1, "matrix": [[1, 1, 0], [-1, 1, 0], [0, 0, 1]], "name": "√2" });
+    let made = call(&mut host, "structure.make_supercell", named).unwrap();
+    assert_eq!(made.output["name"], "√2");
+    assert_eq!(made.output["cells"], 2);
+
+    let flat = json!({ "structure": 1, "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 0]], "name": "" });
+    let refused = call(&mut host, "structure.make_supercell", flat).unwrap_err();
+    assert_eq!(refused.code, "invalid_arguments");
+    let huge =
+        json!({ "structure": 1, "matrix": [[40, 0, 0], [0, 40, 0], [0, 0, 40]], "name": "" });
+    let refused = call(&mut host, "structure.make_supercell", huge).unwrap_err();
+    assert_eq!(refused.code, "too_large");
+}
+
+#[test]
+fn client_calls_are_recorded_for_their_project() {
+    let mut host = TestHost::new();
+    let registry = Registry::standard();
+    let claude = Client::new("claude-code", Some("Claude Code".into()));
+    let context = Context::client(claude, Permissions::default());
+    let run = |host: &mut TestHost, name: &str, input: Value| {
+        registry.call_as(host, &context, name, input)
+    };
+    run(&mut host, "project.list", json!({})).unwrap();
+    run(&mut host, "project.open", json!({ "path": PATH })).unwrap();
+    run(&mut host, "structure.open", json!({ "structure": 1 })).unwrap();
+    let edit = json!({ "structure": 1, "values": [{ "parameter": "a", "value": 4.7 }] });
+    run(&mut host, "structure.set_cell", edit).unwrap();
+    let refused = run(&mut host, "structure.summary", json!({ "structure": 2 }));
+    assert_eq!(refused.unwrap_err().code, "structure_not_open");
+
+    let records: Vec<(Option<ProjectId>, &str, Option<EntryId>, bool)> = host
+        .audit
+        .iter()
+        .map(|(project, r)| (*project, r.capability.as_str(), r.structure, r.result.ok))
+        .collect();
+    assert_eq!(
+        records,
+        [
+            (None, "project.list", None, true),
+            (Some(PROJECT), "project.open", None, true),
+            (Some(PROJECT), "structure.open", Some(RUTILE), true),
+            (Some(PROJECT), "structure.set_cell", Some(RUTILE), true),
+            (Some(PROJECT), "structure.summary", Some(SUPERCELL), false),
+        ]
+    );
+    let (_, edit) = &host.audit[3];
+    assert_eq!(edit.client.title.as_deref(), Some("Claude Code"));
+    assert_eq!(edit.arguments["values"][0]["value"], 4.7);
+    assert!(!edit.confirmed);
+    // The edit is the client's step in the undo stack.
+    let document = host.document(StructureEntryId(1)).unwrap();
+    assert_eq!(document.undo_agent().map(Agent::name), Some("Claude Code"));
 }

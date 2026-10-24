@@ -690,6 +690,44 @@ const TOUR: &[(&str, Step)] = &[
     ("_light-again", |_, window, cx| {
         settings::set_dark_mode(false, window, cx);
     }),
+    // MCP clients editing in the window (M18), on rutile.
+    ("_show-rutile-ai", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        workbench.open_structure(StructureEntryId(1), window, cx);
+    }),
+    // An MCP client's edit (M18): the same undo step, and a notification
+    // that names the client.
+    ("69-ai-edit", |workbench, window, cx| {
+        if let Some(workspace) = workbench.workspace().cloned() {
+            let values = mw_crystal::CellValues::default().with(mw_crystal::CellParam::C, 3.0);
+            let edit = Command::Edit(Edit::SetCell { values });
+            let claude = mw_crystal::Agent::new("Claude Code");
+            workspace.update(cx, |workspace, cx| {
+                workspace.execute_by(edit, claude, window, cx).ok();
+            });
+        }
+    }),
+    // Writing a file waits for the user in the window.
+    ("70-ai-confirm", |_, window, cx| {
+        window.clear_notifications(cx);
+        let client = mw_automation::Client::new("claude-code", Some("Claude Code".into()));
+        let question = mw_automation::Confirmation::WriteFile {
+            structure: "金红石".into(),
+            format: "POSCAR".into(),
+            path: PathBuf::from("/Users/me/dft/rutile/POSCAR"),
+            bytes: 342,
+            replaces: false,
+        };
+        crate::mcp::ask(&client, &question, Box::new(|_| {}), window, cx);
+    }),
+    // The client is remembered: the settings list it with its own
+    // permissions.
+    ("71-settings-ai-clients", |_, window, cx| {
+        window.close_dialog(cx);
+        let client = mw_automation::Client::new("claude-code", Some("Claude Code".into()));
+        settings::AiSetting::remember(&client, cx);
+        settings::open(window, cx)
+    }),
 ];
 
 /// Opens or closes the popover choosing the polyhedra's centers.

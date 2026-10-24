@@ -71,9 +71,10 @@ fn schemas_are_in_the_strict_subset() {
         let name = capability.name;
         assert!(
             name.split('.').count() == 2
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_'),
+                && name.bytes().all(|b| b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || b == b'.'
+                    || b == b'_'),
             "{name}"
         );
         assert!(capability.description.len() > 40, "{name}");
@@ -98,7 +99,7 @@ fn schemas_are_in_the_strict_subset() {
     }
     // A strict request holds at most 20 tools, fewer than there are
     // capabilities, so the assistant picks them by task (design §4). The
-    // read-only ones, which the MCP server offers, fit in one request.
+    // read-only ones fit in one request.
     let read_only: Vec<ToolDefinition> = tools
         .iter()
         .filter(|(effect, _)| *effect == Effect::ReadOnly)
@@ -121,17 +122,37 @@ fn effects() {
     // Returns text; writing files would be External.
     assert_eq!(effect("structure.export"), Effect::ReadOnly);
     assert_eq!(effect("structure.delete_sites"), Effect::Undoable);
-    // Write tools for MCP come with v0.3; the server offers none yet.
     for name in [
         "structure.move_site",
         "structure.set_coordinate",
         "structure.add_site",
         "structure.transform_cell",
         "structure.symmetrize",
+        "structure.convert_to_p1",
+        // New structures in a project count as undoable writes
+        // (ai-integration design §7.1): nothing there changes.
+        "structure.make_supercell",
+        "file.import",
     ] {
         assert_eq!(effect(name), Effect::Undoable, "{name}");
     }
     assert_eq!(effect("history.undo"), Effect::Undoable);
+    // Writing files cannot be undone; every call is confirmed.
+    assert_eq!(effect("structure.export_file"), Effect::External);
+
+    // MCP's hints follow from them (design §5.3).
+    let hints = |name| {
+        let capability = registry.get(name).unwrap();
+        (capability.additive, capability.idempotent)
+    };
+    assert_eq!(hints("structure.summary"), (false, true));
+    assert_eq!(hints("structure.set_cell"), (false, true));
+    assert_eq!(hints("structure.add_site"), (true, false));
+    assert_eq!(hints("structure.make_supercell"), (true, false));
+    assert_eq!(hints("file.import"), (true, false));
+    assert_eq!(hints("structure.delete_sites"), (false, false));
+    assert_eq!(hints("history.undo"), (false, false));
+    assert_eq!(hints("structure.export_file"), (false, true));
 }
 
 #[test]
@@ -1010,4 +1031,37 @@ fn export_as_text() {
         "{}",
         refused.message
     );
+}
+
+#[test]
+fn converting_to_p1() {
+    let (registry, mut documents, [rutile, _, _]) = session();
+    let input = json!({ "structure": rutile });
+    let converted = call(
+        &registry,
+        &mut documents,
+        "structure.convert_to_p1",
+        input.clone(),
+    )
+    .unwrap();
+    assert_eq!(converted.output["changed"], true);
+    assert_eq!(converted.summary, "Converted to P1: 6 sites, one per atom.");
+    let summary = |documents: &mut Documents| {
+        let input = json!({ "structure": rutile });
+        call(&registry, documents, "structure.summary", input)
+            .unwrap()
+            .output
+    };
+    let p1 = summary(&mut documents);
+    assert_eq!(p1["edit_mode"], "p1");
+    assert_eq!(p1["sites"], 6);
+    let again = call(
+        &registry,
+        &mut documents,
+        "structure.convert_to_p1",
+        input.clone(),
+    );
+    assert_eq!(again.unwrap_err().code, "already_p1");
+    call(&registry, &mut documents, "history.undo", input).unwrap();
+    assert_eq!(summary(&mut documents)["edit_mode"], "symmetry");
 }

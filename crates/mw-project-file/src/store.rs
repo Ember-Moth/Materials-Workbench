@@ -12,8 +12,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    EntryId, Import, MANIFEST, Manifest, Sha256, SourceFormat, StructureFile, VERSION, ViewState,
-    to_json,
+    AUDIT, EntryId, Import, MANIFEST, Manifest, Sha256, SourceFormat, StructureFile, VERSION,
+    ViewState, to_json,
 };
 
 /// Identifies project manifests.
@@ -106,6 +106,19 @@ impl ProjectDir {
             return Err(ReadError::SourceChanged(path));
         }
         Ok(bytes)
+    }
+
+    /// The SHA-256 of the manifest as it is on disk now, `None` if it is
+    /// gone: to tell whether another process saved the project since it was
+    /// read (design §15).
+    pub fn manifest_digest(&self) -> Option<Sha256> {
+        digest(&self.path.join(MANIFEST))
+    }
+
+    /// The SHA-256 of an entry's structure file as it is on disk now, `None`
+    /// if there is none.
+    pub fn structure_digest(&self, id: EntryId) -> Option<Sha256> {
+        digest(&self.structure_path(id))
     }
 
     /// The view state, or `None` if there is none or it cannot be read:
@@ -285,6 +298,14 @@ pub fn save(path: &Path, save: &Save) -> Result<ProjectDir, SaveError> {
     .expect("manifests serialize");
     write_atomic(&manifest, &bytes).map_err(io(&manifest))?;
 
+    // The audit log goes along to a new place (design §15).
+    if let Some(from) = from.filter(|_| !same_dir) {
+        let log = from.path.join(AUDIT);
+        if log.exists() {
+            let target = path.join(AUDIT);
+            fs::copy(&log, &target).map_err(io(&target))?;
+        }
+    }
     remove_unreferenced(path, &save.manifest);
     if let Some(view) = &save.view {
         write_view(path, view).map_err(io(&path.join(VIEW)))?;
@@ -295,8 +316,12 @@ pub fn save(path: &Path, save: &Save) -> Result<ProjectDir, SaveError> {
     })
 }
 
-fn structure_path(dir: &Path, id: EntryId) -> PathBuf {
+pub(crate) fn structure_path(dir: &Path, id: EntryId) -> PathBuf {
     dir.join(STRUCTURES).join(format!("{id}.json"))
+}
+
+fn digest(path: &Path) -> Option<Sha256> {
+    fs::read(path).ok().map(|bytes| Sha256::of(&bytes))
 }
 
 fn read_json(path: &Path) -> Result<Value, ReadError> {

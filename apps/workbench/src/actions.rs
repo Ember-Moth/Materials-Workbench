@@ -14,6 +14,7 @@ gpui_kit::actions!(
         CloseProject,
         OpenSampleProjects,
         OpenSettings,
+        ExportAiLog,
         ToggleDarkMode,
         SwitchLanguage,
     ]

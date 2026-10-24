@@ -8,6 +8,7 @@ use glam::Vec3;
 use gpui_kit::component::{ActiveTheme, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use image::ImageEncoder as _;
 use mw_crystal_render::{
     CameraMatrices, CameraPose, FrameImage, HighlightRing, OrbitCamera, Pick, PickRequest,
     RenderError, RenderRequest, Renderer, Scene, linear_to_srgb, srgb_to_linear,
@@ -28,6 +29,14 @@ const CLICK_SLOP: Pixels = px(4.);
 /// Ring widths in logical pixels; the selection ring is the stronger mark.
 const SELECTION_RING_WIDTH: f32 = 2.5;
 const HOVER_RING_WIDTH: f32 = 2.0;
+
+/// A picture of the viewport ([`Viewport::snapshot`]).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
 
 /// The viewport's resolved bounds, captured during prepaint.
 #[derive(Clone, Copy, PartialEq)]
@@ -415,6 +424,65 @@ impl Viewport {
             framed.target,
         ));
         self.request_frame(cx);
+    }
+
+    /// The viewport's size in physical pixels, as of the last layout.
+    pub fn physical_size(&self) -> Option<(u32, u32)> {
+        self.geometry.map(|g| g.physical(1.0))
+    }
+
+    /// Renders the scene as the viewport shows it, with its camera,
+    /// selection rings and theme, `width` × `height` pixels, as a PNG: a
+    /// picture someone asked for, such as an MCP client's `view.snapshot`.
+    /// Uses the viewport's renderer and waits for the GPU, so it blocks for
+    /// the time of one frame; the viewport then renders its own frame again.
+    pub fn snapshot(
+        &mut self,
+        width: u32,
+        height: u32,
+        cx: &mut Context<Self>,
+    ) -> Result<Snapshot, SharedString> {
+        let colors = Colors::new(cx.theme());
+        if self.colors != Some(colors) {
+            self.colors = Some(colors);
+            self.upload_rings();
+        }
+        // Lines and rings keep their size relative to the picture, as on
+        // screen: the camera frames the same height.
+        let scale_factor = self.geometry.map_or(1.0, |geometry| {
+            let (_, shown) = geometry.physical(1.0);
+            geometry.scale_factor * height as f32 / shown.max(1) as f32
+        });
+        let [r, g, b] = linear(colors.clear).map(f64::from);
+        let request = RenderRequest {
+            width,
+            height,
+            camera: self.camera.matrices(width as f32 / height.max(1) as f32),
+            clear_color: [r, g, b, 1.0],
+            scale_factor,
+        };
+        let renderer = self.renderer.as_mut().map_err(|error| error.clone())?;
+        let frame = renderer
+            .render(&request)
+            .and_then(|pending| pending.wait())
+            .map_err(|error| SharedString::from(error.to_string()));
+        // A frame in flight now counts as superseded and is dropped unseen.
+        self.request_frame(cx);
+        let FrameImage {
+            width,
+            height,
+            bgra,
+            ..
+        } = frame?;
+        let mut rgba = bgra;
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+            .map_err(|error| SharedString::from(error.to_string()))?;
+        Ok(Snapshot { png, width, height })
     }
 
     /// Why the viewport cannot draw, if it cannot.
