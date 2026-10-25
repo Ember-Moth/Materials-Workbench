@@ -64,6 +64,9 @@ pub struct Workbench {
     pub(crate) last_shown: HashMap<ProjectId, StructureEntryId>,
     /// The structure being read from its project, to show when it arrives.
     opening: Option<StructureEntryId>,
+    /// While the projects the last session left open are being opened: the
+    /// files and folders asked for meanwhile, to open after them.
+    starting: Option<Vec<PathBuf>>,
     pub(crate) session: Session,
     pub(crate) palette: Entity<CommandState>,
     /// Listening for MCP clients, while the setting is on (`mcp.rs`).
@@ -104,6 +107,7 @@ impl Workbench {
             active_project: None,
             last_shown: HashMap::new(),
             opening: None,
+            starting: Some(Vec::new()),
             session: session.unwrap_or_default(),
             palette: cx.new(|cx| CommandState::new(window, cx)),
             mcp: None,
@@ -115,14 +119,39 @@ impl Workbench {
         this.focus_handle.focus(window, cx);
         // Once the window is there: a failure is shown as a notification.
         cx.defer_in(window, Self::sync_mcp);
-        if first_start {
-            this.open_samples(window, cx);
+        let restoring = if first_start {
+            this.installing_samples(window, cx)
         } else {
             let open = this.session.open.clone();
             let active = this.session.active.clone();
-            this.open_projects(open, active, window, cx);
-        }
+            this.opening_projects(open, active, window, cx)
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            restoring.await;
+            this.update_in(cx, |this, window, cx| {
+                let requested = this.starting.take().unwrap_or_default();
+                this.import_paths(requested, window, cx);
+            })
+            .ok();
+        })
+        .detach();
         this
+    }
+
+    /// Opens files and folders the system asks to open (`main.rs`): the
+    /// application's arguments, and on macOS what is double-clicked in the
+    /// Finder or dropped on the Dock icon. While starting, after the projects
+    /// of the last session, so that what was asked for is what is shown.
+    pub(crate) fn open_paths(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match &mut self.starting {
+            Some(requested) => requested.extend(paths),
+            None => self.import_paths(paths, window, cx),
+        }
     }
 
     pub(crate) fn catalog<'a>(&self, cx: &'a App) -> &'a ProjectCatalog {
@@ -244,6 +273,8 @@ impl Workbench {
             return None;
         }
         if let Some(pending) = pending {
+            // A structure still being read is not to replace this one.
+            self.opening = None;
             let file = StructureFile::clone(&pending.file);
             let document =
                 StructureDocument::new(project_name, name, file, provenance, pending.block);
@@ -412,7 +443,8 @@ impl Workbench {
     }
 
     /// Opens what the paths name: project directories as projects, other
-    /// files imported into the active project. Reads in the background.
+    /// files imported into the active project, which is the first of the
+    /// projects among the paths if there are any. Reads in the background.
     pub(crate) fn import_paths(
         &mut self,
         paths: Vec<PathBuf>,
@@ -421,11 +453,10 @@ impl Workbench {
     ) {
         let (projects, files): (Vec<PathBuf>, Vec<PathBuf>) =
             paths.into_iter().partition(|path| is_project(path));
-        if !projects.is_empty() {
-            let activate = projects.first().cloned();
-            self.open_projects(projects, activate, window, cx);
-        }
+        let activate = projects.first().cloned();
+        let opening = self.opening_projects(projects, activate, window, cx);
         if files.is_empty() {
+            opening.detach();
             return;
         }
         let read = cx.background_spawn(async move {
@@ -433,6 +464,8 @@ impl Workbench {
         });
         cx.spawn_in(window, async move |this, cx| {
             let files = read.await;
+            // Into the project opened with them, if any.
+            opening.await;
             this.update_in(cx, |this, window, cx| {
                 this.add_opened_files(files, window, cx)
             })
@@ -775,12 +808,12 @@ impl Render for Workbench {
 }
 
 /// Whether a path names a project directory rather than a file to import.
+/// A missing `.mwproj` counts as a project, so that what is said about it is
+/// that the project is not there.
 pub(crate) fn is_project(path: &std::path::Path) -> bool {
-    path.is_dir()
-        && (path
-            .extension()
-            .is_some_and(|e| e == mw_project_file::EXTENSION)
-            || path.join(mw_project_file::MANIFEST).exists())
+    path.extension()
+        .is_some_and(|e| e == mw_project_file::EXTENSION)
+        || (path.is_dir() && path.join(mw_project_file::MANIFEST).exists())
 }
 
 /// Reads a structure of a project and, for an imported one, the data block

@@ -53,6 +53,8 @@ cargo fmt --all
 
 另有 `release-checks` 任务，只在 Ubuntu 24.04 上跑一次（与平台无关）：`EmbarkStudios/cargo-deny-action` 按根目录的 `deny.toml` 检查全部依赖的许可（`cargo deny check licenses`），`cargo package -p mw-crystal -p mw-crystal-io --locked` 把两个要发布到 crates.io 的 crate 打包并从包里编译，`cargo doc --no-deps -p mw-crystal -p mw-crystal-io` 在 `RUSTDOCFLAGS=-D warnings` 下生成文档（第 2.2 节，[发布与打包设计稿](design/release.md)第 6、7 节）。
 
+发布用的工作流是另外的 `release.yml` 和 `crates.yml`（第 2.3 节）。
+
 另有 `wheels` 任务，三个平台各一个：`PyO3/maturin-action` 在 `crates/mw-python` 里构建 release wheel（macOS universal2、Linux 在 manylinux 容器里、Windows x64），装进新的虚拟环境（`pip install --no-index --no-deps`，只装这个文件）后运行 `smoke.py --installed`，wheel 作为产物保存（`wheel-<平台>`），不发布（[命令行与 Python 设计稿](design/scripting.md)第 6 节）。
 
 GitHub 的运行器没有显卡，出帧的测试用软件适配器：Linux 装 Mesa 的 lavapipe（Vulkan，适配器名 `llvmpipe (…)`），Windows 用系统自带的 WARP（Direct3D 12，`Microsoft Basic Render Driver`），macOS 运行器有虚拟的 Metal 设备。渲染器读 wgpu 的环境变量（`mw-crystal-render` 的 `Renderer::new`）：`WGPU_BACKEND` 限定后端（`vulkan`、`dx12`、`metal`），`WGPU_ADAPTER_NAME` 只取名字里含这段文字的适配器（不分大小写），CI 用两者把测试固定在软件适配器上；`MW_REQUIRE_GPU=1` 让找不到适配器的测试失败而不是跳过（第 4 节）。其他环境变量：`CARGO_PROFILE_DEV_DEBUG=line-tables-only` 缩小目标目录和缓存；`AWS_LC_SYS_PREBUILT_NASM=1` 见第 1 节。依赖的编译结果由 `Swatinem/rust-cache` 缓存，只有 `main` 上的运行写缓存。
@@ -379,7 +381,7 @@ debug 构建里，GPUI 和 wgpu 已按 GPUI Kit 的建议以 `opt-level = 3` 编
 
 ### 2.2 发布前的检查
 
-设计见[发布与打包设计稿](design/release.md)。安装包、Release 工作流和许可清单的生成还没做（设计稿第 11 节），下面是现在就能在本机跑的检查，CI 的 `release-checks` 任务做同样的事（第 2.1 节）。
+设计见[发布与打包设计稿](design/release.md)。下面是本机就能跑的检查，CI 的 `release-checks` 任务做同样的事（第 2.1 节）；打包见第 2.3 节。
 
 依赖的许可（`deny.toml`，设计稿 7.1 节）。cargo-deny 要另外安装（`cargo install cargo-deny --locked`，从 crates.io 下载，先问用户）；`--offline` 只用本机已有的依赖信息：
 
@@ -404,6 +406,52 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p mw-crystal -p mw-crystal-io
 ```
 
 工作目录有未提交的改动时，前两条要加 `--allow-dirty`。两个 crate 的 README 里的例子是文档测试，`cargo test --workspace` 会运行；改了公开接口要同步 README。这两个 crate 只能依赖 crates.io 上的 crate 和彼此，给它们加工作区里其他 crate 的依赖会让打包失败。
+
+### 2.3 打包
+
+各平台的安装包由 `packaging/` 里的脚本在那个平台上打出（[发布与打包设计稿](design/release.md)第 2.1、3–5 节），产物写进 `target/packages`（或第一个参数给的目录），中间文件在 `target/packaging/`。版本取 `workbench` crate 的（发布前统一版本号之前是 `0.0.0`）。都不签名：macOS 做 ad-hoc 签名，Developer ID 签名和公证、Windows 的签名等你决定（设计稿第 10 节），位置在脚本里用注释标出。
+
+每个包都带第三方许可清单 `THIRD-PARTY-LICENSES.html`，由 cargo-about 按根目录的 `about.toml` 和 `about.hbs` 生成（设计稿 7.2 节），一个平台约 2.5 分钟。cargo-about 要另外安装，从 crates.io 下载，先问用户；0.9 起命令行在 `cli` 特性后面：
+
+```bash
+cargo install cargo-about --locked --features cli --version 0.9.2
+```
+
+只试打包脚本时可以设 `MW_NO_LICENSES=1`，清单换成一个占位页，这样的包不能发布。
+
+macOS（要 Xcode 的命令行工具，和 Rust 的 `aarch64-apple-darwin`、`x86_64-apple-darwin` 两个目标；两种架构的 release 构建第一次约 7 分钟）：
+
+```bash
+packaging/macos/package.sh
+```
+
+得到 `Materials-Workbench-<版本>-macos-universal.dmg` 和 `mw-<版本>-macos-universal.tar.gz`。
+
+Linux（Debian 或 Ubuntu，x86_64；第 1 节的构建依赖加 `dpkg-dev`；发布用的包在最旧的支持版本 Ubuntu 22.04 上构建）：
+
+```bash
+packaging/linux/package.sh
+```
+
+得到 `.deb`、便携版 `.tar.gz`（里面的 `install.sh` 装进当前用户的 `~/.local`，`--uninstall` 删掉）和 `mw` 的 `.tar.gz`。`.deb` 的 `Maintainer` 还是占位的，`MW_DEB_MAINTAINER` 可以换掉。
+
+Windows（第 1 节的工具链，加 Inno Setup 6：`choco install innosetup`）：
+
+```powershell
+pwsh packaging/windows/package.ps1
+```
+
+得到安装程序 `…-windows-x64-setup.exe`、便携版 ZIP 和 `mw` 的 ZIP。
+
+打出的包用 `packaging/smoke-test.sh <应用> <mw>` 跑一次：应用打印版本，`mw info` 读一个测试文件，`materials-workbench mcp` 经管道回答一个 `initialize`（Windows 的 release 构建是 GUI 子系统，要确认管道照样能用）。在 macOS 上看示例项目和双击 `.mwproj`，可以把 `.dmg` 里的应用复制到别处，用单独的配置目录打开：`open --env MW_CONFIG_DIR=<目录> <应用>`，`open -a <应用> <项目>.mwproj`；配置目录的路径要短（MCP 的套接字路径最多 103 字节），设置里打开"允许 MCP 客户端连接"后，可以用 `MW_CONFIG_DIR=<目录> <应用>/Contents/MacOS/materials-workbench mcp` 问它开着什么。试完用 `lsregister -u <应用>` 撤销 LaunchServices 里的登记（`lsregister` 在 `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/`）。
+
+**应用图标**：源文件是 `packaging/icons/materials-workbench.svg`（现在是占位的），`.icns`、`.ico` 和 Linux 的 PNG 由它生成；改了 SVG 后重新生成，否则 `the_icons_are_up_to_date` 失败：
+
+```bash
+cargo test -p workbench --test icons -- --ignored
+```
+
+**Release 工作流**（`.github/workflows/release.yml`，设计稿第 8 节）：推送 `v<版本>` 标签时在三个平台上运行打包脚本和冒烟测试（装上 `.dmg`、`.deb`、安装程序再卸载），再建草稿 Release（附 `SHA256SUMS`，说明取自 `CHANGELOG.md` 的那一节，`packaging/release-notes.sh`）；在 Actions 页手动运行时只打包，产物留在运行的 artifacts 里。发布到 crates.io 是另一个手动运行的工作流 `crates.yml`，只在标签上、要先在仓库里配好 `release` 环境和 crates.io 的可信发布者。推送、打标签和运行工作流都先问用户。
 
 ## 3. 代码约定
 

@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Materials Workbench.app/Contents/Info.plist (docs/design/release.md §3.2).
+  package.sh fills in @VERSION@ and @BUILD@. The identifiers never change once
+  released: macOS tells an upgrade from a second application by them.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.ember-moth.MaterialsWorkbench</string>
+  <key>CFBundleName</key>
+  <string>Materials Workbench</string>
+  <key>CFBundleDisplayName</key>
+  <string>Materials Workbench</string>
+  <key>CFBundleExecutable</key>
+  <string>materials-workbench</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@BUILD@</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <!-- The system's own panels (open, save) speak the user's language if it
+       is one of the application's. -->
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>zh_CN</string>
+    <string>en</string>
+  </array>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>MIT OR Apache-2.0</string>
+
+  <!-- Projects are folders macOS shows and opens as one document. -->
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>io.github.ember-moth.MaterialsWorkbench.project</string>
+      <key>UTTypeDescription</key>
+      <string>Materials Workbench Project</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>com.apple.package</string>
+        <string>public.composite-content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>mwproj</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+
+  <!-- Structure files are other programs' formats: imported, not exported. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.iucr.cif</string>
+      <key>UTTypeDescription</key>
+      <string>Crystallographic Information File</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.plain-text</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>cif</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>chemical/x-cif</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.vasp.poscar</string>
+      <key>UTTypeDescription</key>
+      <string>VASP POSCAR</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.plain-text</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>vasp</string>
+          <string>poscar</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+
+  <!-- Projects are the application's own; for CIF and POSCAR files it is
+       one of the applications in "Open With", not the default. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Materials Workbench Project</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSTypeIsPackage</key>
+      <true/>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>io.github.ember-moth.MaterialsWorkbench.project</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Crystallographic Information File</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.iucr.cif</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>VASP POSCAR</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.vasp.poscar</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

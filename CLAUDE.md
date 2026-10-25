@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M16（晶面与热振动椭球）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）已实现、只差 Inspector 和 Claude Code / Claude Desktop 的手动检查，三个平台的 CI 都通过；M17（编辑补充）只做了 `SetDisorder` 的领域命令和能力（界面待做），M20（发布）做了准备（打包设计稿 `docs/design/release.md`、`mw-crystal` 和 `mw-crystal-io` 的 crates.io 元数据与 dry run、依赖许可检查），签名和自动更新等用户决定；下一步是 M17；第 9 节的模拟已全部替换。
+Materials Workbench：用 Rust 编写的开源、跨平台材料科学桌面工作台。第一阶段做晶体学（类似 VESTA），之后是 XRD、CALPHAD 相图、显微组织和实验室数据；所有能力都要能被 AI 调用（MCP Server 和内置助手）。v0.1 的里程碑 M1–M6 都已实现，验收标准逐条通过（POSCAR 用 pymatgen 和 ASE 验证，没有在 VASP 本身上跑过）。现在做 v0.2，拆成 M7–M12，都已实现：M7（对称模式下的几何编辑）、M8（晶胞变换）、M9（对称性检测与对称化）、M10（POSCAR 导入与晶格朝向）、M11（MCP 读项目文件，并入 `materials-workbench mcp`）和 M12（MCP 连接运行中的应用），并已验收。现在做 v0.3（首个公开发布），拆成 M13–M20：M14（显示范围）、M15（配位多面体）、M16（晶面与热振动椭球）、M19（命令行与 Python）已实现，M13（跨平台 CI）只差 Linux 和 Windows 实机验证，M18（完整 MCP）已实现、只差 Inspector 和 Claude Code / Claude Desktop 的手动检查，三个平台的 CI 都通过；M17（编辑补充）只做了 `SetDisorder` 的领域命令和能力（界面待做），M20（发布）做了两个阶段（打包设计稿 `docs/design/release.md`、`mw-crystal` 和 `mw-crystal-io` 的 crates.io 元数据与 dry run、依赖许可检查；应用侧的打开文件与平台身份、占位图标、三个平台的打包脚本 `packaging/`、第三方许可清单、Release 工作流，macOS 的 `.dmg` 本机验证过，Windows、Linux 和工作流要推送后在 CI 上验证），签名和自动更新等用户决定；下一步是 M17；第 9 节的模拟已全部替换。
 
 ## 文档是设计的依据
 
@@ -36,6 +36,8 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo deny --offline check licenses                       # 依赖的许可（deny.toml）
 cargo publish --dry-run -p mw-crystal -p mw-crystal-io    # 发布到 crates.io 前的检查，只做 dry run
+packaging/macos/package.sh                                # macOS 的 .dmg 和 mw 压缩包，写进 target/packages
+cargo test -p workbench --test icons -- --ignored         # 改了 packaging/icons/materials-workbench.svg 后重新生成图标
 ```
 
 - **CI**：`.github/workflows/ci.yml` 在 macOS、Linux、Windows 上跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告算失败）、渲染一帧、`cargo test --workspace --locked` 和构建应用；另在 Linux 上检查依赖的许可、打包 `mw-crystal` 和 `mw-crystal-io`、在 `-D warnings` 下生成它们的文档（`release-checks` 任务）。运行器没有显卡，出帧的测试用软件适配器（Linux 的 lavapipe、Windows 的 WARP），由 `WGPU_BACKEND` 和 `WGPU_ADAPTER_NAME` 固定；`MW_REQUIRE_GPU=1` 让找不到适配器的渲染器测试失败而不是跳过。CI 只在推送后运行，推送前先问用户。本地复现和各平台依赖见 `docs/development.md` 第 1 节和 2.1 节。
@@ -61,6 +63,7 @@ cargo publish --dry-run -p mw-crystal -p mw-crystal-io    # 发布到 crates.io 
   脚本把动态库复制成临时目录里的 `materials_workbench.so` 再导入；`-I` 忽略 `PYTHONPATH`，所以目录由脚本加进 `sys.path`。改了绑定还要跑 `cargo clippy -p mw-python --features extension-module --all-targets`。wheel 由 CI 的 maturin 构建，不发布。
 - **模型服务示例**：`cargo run -p mw-llm --example chat -- "问题"` 发一轮对话并打印流式事件，配置全部来自 `MW_LLM_*` 环境变量（见 `docs/development.md` 第 2 节）。它会发真实请求并计费，运行前先问用户；本机的 Ollama 不花钱（`MW_LLM_PROVIDER=ollama`）。
 - **POSCAR 外部核对**：`cargo run -p mw-crystal-io --example export_atoms -- /tmp/mw-poscar` 把全部测试文件和内置示例写成 POSCAR 和清单，再用 pymatgen 和 ASE 读回核对，命令和脚本见 `docs/development.md` 第 2 节。两者要从 PyPI 下载，装进仓库外的临时虚拟环境，不加进仓库，运行前先问用户。
+- **打包**（`docs/design/release.md`，`docs/development.md` 2.3 节）：`packaging/macos/package.sh`、`packaging/linux/package.sh`（两者共用 `packaging/common.sh`）和 `packaging/windows/package.ps1` 各在自己的平台上 release 构建并打出设计稿第 2.1 节的产物，都不签名（macOS 做 ad-hoc 签名，签名的位置在脚本里用注释标出）；版本取 `workbench` crate 的。每个包带第三方许可清单，由 cargo-about 按 `about.toml` 和 `about.hbs` 生成（约 2.5 分钟），要先装好（`cargo install cargo-about --locked --features cli --version 0.9.2`，从 crates.io 下载，先问用户）；只试脚本时设 `MW_NO_LICENSES=1` 写个占位，这样的包不能发布。`.github/workflows/release.yml` 由 `v*` 标签触发（手动触发只打包不建 Release），打包后用 `packaging/smoke-test.sh` 冒烟测试，标签上再建草稿 Release；`crates.yml` 手动发布两个 crate。打标签、推送和运行工作流都先问用户。应用标识在 `apps/workbench/src/launch.rs`，打包文件里各写一份，发布后不改。
 - **示例项目**：随应用附带的项目在 `crates/mw-project-file/samples/`，由测试生成。改了项目格式（包括 `mw-crystal` 类型的 serde 形式）或 `mw-crystal-io` 的 fixture 后重新生成，`the_samples_are_up_to_date` 会提醒：
 
   ```bash
@@ -81,7 +84,7 @@ cargo publish --dry-run -p mw-crystal -p mw-crystal-io    # 发布到 crates.io 
 
 工作区用 `members = ["crates/*", "apps/*"]`：在 `crates/` 下新建目录，它就自动成为工作区成员。新 crate 的 `[package]` 要写 `edition.workspace = true`、`publish.workspace = true`、`license.workspace = true`。项目按 MIT OR Apache-2.0 双许可发布，不引入 GPL 类许可的依赖，也不复制 GPL 代码；根目录的 `deny.toml` 列出允许的许可，引入依赖后跑 `cargo deny --offline check licenses`。只有 `mw-crystal` 和 `mw-crystal-io` 发布到 crates.io（`publish = true`，版本 0.3.0，工作区依赖里带 `version`）：它们只能依赖 crates.io 上的 crate 和彼此；各有英文 README，其中的例子和 crate 文档里的例子都是文档测试，改了公开接口要同步（`docs/design/release.md` 第 6 节）。依赖只能从上往下：
 
-- **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源；第一个参数是 `mcp` 时在初始化 GPUI 之前转给 `mw_mcp::main`（`src/mcp.rs`），不开窗口。设置里允许 MCP 客户端连接时，`Workbench` 监听并在主线程上逐个运行它们的调用，宿主是借用工作台的 `AppHost`（`src/host.rs`）：列出和打开窗口里的项目与结构，读工作区里的 `CrystalDocument`，编辑经 `StructureWorkspace::execute_by` 进同一个撤销栈并记下客户端，写文件前弹确认（`mcp::ask`），视图工具先显示结构再调用工作区的 `select`、`set_display_model`、`reset_camera`、`snapshot`；权限是设置里的 `AiSetting`，审计记录在保存、关闭、退出时追加进项目（`src/ai_log.rs`），打开的项目由应用持锁（`projects.rs`）。
+- **`apps/workbench`**：只做组装，包括窗口外壳、全局命令、命令面板、设置和图标资源；参数在 `src/launch.rs` 里解析（应用标识也在这里）：第一个参数是 `mcp` 时在初始化 GPUI 之前转给 `mw_mcp::main`（`src/mcp.rs`），不开窗口，`--version`、`--help` 打印后退出，其余是要打开的文件和项目。`build.rs` 给 Windows 的可执行文件编图标和版本信息，release 构建在 Windows 上是 GUI 子系统。设置里允许 MCP 客户端连接时，`Workbench` 监听并在主线程上逐个运行它们的调用，宿主是借用工作台的 `AppHost`（`src/host.rs`）：列出和打开窗口里的项目与结构，读工作区里的 `CrystalDocument`，编辑经 `StructureWorkspace::execute_by` 进同一个撤销栈并记下客户端，写文件前弹确认（`mcp::ask`），视图工具先显示结构再调用工作区的 `select`、`set_display_model`、`reset_camera`、`snapshot`；权限是设置里的 `AiSetting`，审计记录在保存、关闭、退出时追加进项目（`src/ai_log.rs`），打开的项目由应用持锁（`projects.rs`）。
 - **能力 crate（依赖 GPUI）**：
   - `mw-project`：打开着的项目（`ProjectCatalog`：清单、目录、导入或派生后还没保存的结构）和左侧边栏；
   - `mw-structure`：打开的结构，包括文档（包着 `mw_crystal::CrystalDocument`）、视口浮层、右侧面板、对话框和命令；编辑在 `src/editing.rs`，所有修改都经 `StructureWorkspace::execute` 执行领域命令，再更新字段、场景和选区（AI 客户端的经 `execute_by`、`undo_by`、`redo_by`：同一个撤销栈，步骤记下客户端，弹通知，撤销提示写明"AI（客户端名）"）；移动模式（在视口里拖动原子）在 `src/moving.rs`，拖动中只画预览（`scene::Preview`，不做对称性分析），松手才执行一条 `MoveSite`；"对称化…"对话框在 `src/symmetrize_dialog.rs`，在后台运行 `DetectSymmetry` 预览，确认后执行一条 `Symmetrize`。多面体模型下选中心元素的浮层在 `src/polyhedra.rs`，椭球模型下设概率的浮层在 `src/ellipsoids.rs`，晶面的浮层（列表、位置、添加）在 `src/planes.rs`，三者都是视图状态，随 `view.json` 保存。
@@ -133,7 +136,7 @@ cargo publish --dry-run -p mw-crystal -p mw-crystal-io    # 发布到 crates.io 
 
 ### 打开文件
 
-- 对话框、⌘O 和拖放都走 `OpenFile`。
+- 对话框、⌘O 和拖放都走 `OpenFile`。系统送来的文件（命令行参数；macOS 上双击、拖到程序坞图标，经 `App::on_open_urls` 和 `main.rs` 里的通道）交给 `Workbench::open_paths`：上次会话的项目打开完之前先记下，之后和拖放一样走 `import_paths`（同时有项目和文件时，文件导入那个项目）。
 - 在后台任务里用 `mw_structure::import::OpenedFile::read` 读取文件：按文件名认格式（`import::format_of`：`.cif` 是 CIF；`.vasp`、`.poscar` 和以 POSCAR、CONTCAR 开头的是 POSCAR），交给 `mw_crystal_io::cif::read` 或 `poscar::read` 解析。只叫 POSCAR 或 CONTCAR 的文件，结构名前加文件夹名。
 - 成功的数据块连同文件字节加入当前项目（`ProjectCatalog::add_imported`），没有当前项目时新建未命名项目；保存时文件原样复制进项目。拖进窗口的 `.mwproj` 文件夹按项目打开。
 - 诊断在 `mw-crystal-io` 里是数据（`DiagnosticKind`），文字由 `mw-structure/src/diagnostics.rs` 按当前语言翻译，给模型的英文说明在 `mw-automation/src/files.rs`。两处都有兜底分支，新增种类时漏写不会编译出错，要自己补上（POSCAR 的诊断各有一个测试检查）。

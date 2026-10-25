@@ -1,0 +1,48 @@
+# The third-party licenses every package carries as THIRD-PARTY-LICENSES.html
+# (docs/design/release.md §7.2): `cargo about generate` collects the license
+# texts of the crates the workspace compiles into executables, with
+# about.hbs. The packaging scripts run it for their targets
+# (packaging/common.sh). The licenses are those deny.toml allows, in the
+# order a choice prefers them: where a crate offers MIT or Apache-2.0, the
+# list gives MIT.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "MIT-0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+# The release's targets; each package's list has only the crates of its own
+# (the scripts pass --target).
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+# Build scripts, procedural macros' builds and tests are not shipped.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# The workspace's own crates are under the project's license.
+private = { ignore = true }
+
+# GPUI Kit's icons are Lucide's, under Lucide's ISC license, in a file
+# cargo-about does not find by itself. The checksum makes sure the text is
+# still the one checked.
+[gpui-kit-assets.clarify]
+license = "Apache-2.0 AND ISC"
+
+[[gpui-kit-assets.clarify.files]]
+path = "LICENSE-LUCIDE"
+license = "ISC"
+checksum = "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"

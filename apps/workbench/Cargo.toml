@@ -31,17 +31,25 @@ env_logger.workspace = true
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+futures.workspace = true
+url.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 gpui-pre = { version = "=0.3.9", optional = true, features = ["test-support"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui-pre-macos = { version = "=0.3.9", optional = true, features = ["test-support"] }
 
+# Compiles the Windows resources (`build.rs`); GPUI uses it for its manifest.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
 [dev-dependencies]
 tempfile.workspace = true
 # `tests/mcp.rs` drives `materials-workbench mcp` as an MCP client would.
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 tokio.workspace = true
+# Renders the application icons (`tests/icons.rs`); GPUI's SVG renderer.
+resvg = { version = "0.46", default-features = false }
 # UI integration tests (`src/ui_tests.rs`), as in mw-structure: GPUI's test
 # support directly, not Kit's.
 gpui-pre = { version = "=0.3.9", features = ["test-support"] }

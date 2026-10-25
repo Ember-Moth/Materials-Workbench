@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  THIRD-PARTY-LICENSES.html of the Materials Workbench packages, written by
+  `cargo about generate` from this template and about.toml
+  (docs/design/release.md §7.2).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Materials Workbench: third-party licenses</title>
+<style>
+  :root { color-scheme: light dark; --text: #1f2328; --muted: #59636e; --line: #d1d9e0; --code: #f6f8fa; --link: #0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --text: #e6edf3; --muted: #9198a1; --line: #3d444d; --code: #151b23; --link: #4493f8; }
+  }
+  body { margin: 0; background: Canvas; color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif; }
+  main { max-width: 52rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+  a { color: var(--link); }
+  h1 { font-size: 1.75rem; margin: 0 0 1rem; }
+  h2 { font-size: 1.25rem; margin: 2.5rem 0 0.75rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 1.75rem 0 0.25rem; }
+  .muted { color: var(--muted); }
+  .overview { columns: 2 14rem; padding-left: 1.2rem; }
+  .used-by { margin: 0.25rem 0 0.5rem; padding: 0; list-style: none; font-size: 0.9rem; }
+  .used-by li { display: inline; }
+  .used-by li:not(:last-child)::after { content: " · "; color: var(--muted); }
+  pre { margin: 0; padding: 0.75rem; max-height: 16rem; overflow: auto; white-space: pre-wrap; background: var(--code); border: 1px solid var(--line); border-radius: 6px; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Third-party licenses</h1>
+<p>Materials Workbench is released under the MIT License or the Apache License, Version 2.0, at your option (LICENSE-MIT and LICENSE-APACHE beside this file). It is built with the open-source software listed here, whose licenses follow in full. The list covers every Rust crate the project builds for this platform, which is a little more than the executables contain.</p>
+<p lang="zh-CN">Materials Workbench 以 MIT 许可或 Apache 许可 2.0 版发布，由你任选其一（同目录的 LICENSE-MIT 和 LICENSE-APACHE）。它用到下列开源软件，各自的许可全文附后。清单包括本项目为这个平台构建的全部 Rust crate，比可执行文件实际包含的略多。</p>
+
+<h2>Licenses</h2>
+<ul class="overview">
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> <span class="muted">({{count}})</span></li>
+{{/each}}
+</ul>
+
+<h2>Data</h2>
+<ul>
+  <li>Standard atomic weights: IUPAC Commission on Isotopic Abundances and Atomic Weights.</li>
+  <li>Covalent radii: B. Cordero et al., <i>Dalton Trans.</i> 2008, 2832–2838.</li>
+  <li>Electronegativities: Pauling scale, after A. L. Allred, <i>J. Inorg. Nucl. Chem.</i> 1961, 17, 215.</li>
+  <li>Element colors: the color scheme of <a href="https://jmol.sourceforge.net/jscolors/">Jmol</a>.</li>
+  <li>Space groups, Wyckoff positions and symmetry search: <a href="https://github.com/spglib/moyo">moyo</a> (below).</li>
+  <li>Icons: <a href="https://lucide.dev">Lucide</a>, through GPUI Kit (ISC License, with gpui-kit-assets below).</li>
+</ul>
+
+<h2>License texts</h2>
+{{#each licenses}}
+<section>
+  <h3{{#if first_of_kind}} id="{{id}}"{{/if}}>{{name}}</h3>
+  <ul class="used-by">
+  {{#each used_by}}
+    <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+  {{/each}}
+  </ul>
+  <pre>{{text}}</pre>
+</section>
+{{/each}}
+</main>
+</body>
+</html>

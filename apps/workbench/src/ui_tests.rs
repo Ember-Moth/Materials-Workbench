@@ -32,6 +32,14 @@ fn install_samples(dir: &Path) -> Vec<PathBuf> {
 /// Starts the workbench with `dir/config` as its configuration directory,
 /// as the application starts, and lets it read what it opens.
 fn start(cx: &mut TestAppContext, dir: &Path) -> (Entity<Workbench>, VisualTestContext) {
+    let (workbench, mut cx) = open_window(cx, dir);
+    draw(&mut cx);
+    (workbench, cx)
+}
+
+/// Opens the window as [`start`] does, but returns before the workbench
+/// reads what it opens.
+fn open_window(cx: &mut TestAppContext, dir: &Path) -> (Entity<Workbench>, VisualTestContext) {
     let paths = AppPaths::in_dir(dir.join("config"));
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -52,8 +60,7 @@ fn start(cx: &mut TestAppContext, dir: &Path) -> (Entity<Workbench>, VisualTestC
         })
         .expect("open a test window")
     });
-    let mut cx = VisualTestContext::from_window(window, cx);
-    draw(&mut cx);
+    let cx = VisualTestContext::from_window(window, cx);
     (workbench, cx)
 }
 
@@ -63,13 +70,34 @@ fn start_with(
     dir: &Path,
     open: &[PathBuf],
 ) -> (Entity<Workbench>, VisualTestContext) {
+    save_session(dir, open);
+    start(cx, dir)
+}
+
+fn save_session(dir: &Path, open: &[PathBuf]) {
     let session = Session {
         open: open.to_vec(),
         active: open.first().cloned(),
         ..Session::default()
     };
     session.save(&AppPaths::in_dir(dir.join("config")));
-    start(cx, dir)
+}
+
+/// A test file of mw-crystal-io.
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/mw-crystal-io/tests/fixtures")
+        .join(name)
+}
+
+fn open_paths(workbench: &Entity<Workbench>, paths: Vec<PathBuf>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        workbench.update(cx, |workbench, cx| workbench.open_paths(paths, window, cx))
+    });
+}
+
+fn notification_count(cx: &mut VisualTestContext) -> usize {
+    cx.update(|window, cx| window.notifications(cx).len())
 }
 
 fn draw(cx: &mut VisualTestContext) {
@@ -142,6 +170,59 @@ fn the_first_start_opens_the_sample_projects(cx: &mut TestAppContext) {
             .exists()
     );
     assert!(!unsaved(&workbench, &mut cx));
+}
+
+/// Release design §3.3: what the application is started with (arguments,
+/// files macOS sends) opens after the last session's projects and is what
+/// is shown: a project, and a file imported into that project.
+#[gpui_kit::test]
+fn files_asked_for_at_start_open_after_the_last_session(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let projects = install_samples(temp.path());
+    save_session(temp.path(), &projects[..1]);
+    let (workbench, mut cx) = open_window(cx, temp.path());
+    let file = fixture("zincite_legacy.cif");
+    open_paths(&workbench, vec![projects[1].clone(), file], &mut cx);
+    draw(&mut cx);
+    assert_eq!(project_count(&workbench, &mut cx), 2);
+    assert_eq!(
+        shown(&workbench, &mut cx),
+        Some(("钙钛矿氧化物".into(), "zincite_legacy".into()))
+    );
+
+    // Later, a file goes into the project shown; what is not there, or not
+    // a structure, is said so.
+    let before = notification_count(&mut cx);
+    open_paths(
+        &workbench,
+        vec![
+            fixture("rutile.cif"),
+            temp.path().join("missing.cif"),
+            temp.path().join("missing.mwproj"),
+        ],
+        &mut cx,
+    );
+    draw(&mut cx);
+    assert_eq!(project_count(&workbench, &mut cx), 2);
+    assert_eq!(
+        shown(&workbench, &mut cx),
+        Some(("钙钛矿氧化物".into(), "rutile".into()))
+    );
+    assert_eq!(notification_count(&mut cx), before + 2);
+}
+
+/// On the first start the sample projects open first, the file after them.
+#[gpui_kit::test]
+fn a_file_asked_for_at_the_first_start_opens_after_the_samples(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (workbench, mut cx) = open_window(cx, temp.path());
+    open_paths(&workbench, vec![fixture("rutile.cif")], &mut cx);
+    draw(&mut cx);
+    assert_eq!(project_count(&workbench, &mut cx), 2);
+    assert_eq!(
+        shown(&workbench, &mut cx),
+        Some(("TiO₂ 相研究".into(), "rutile".into()))
+    );
 }
 
 /// Roadmap M6: closing and reopening a project restores it completely.
