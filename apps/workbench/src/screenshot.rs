@@ -36,10 +36,15 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// A pointer action on the atom displayed at a fractional position.
+/// A pointer action on the atom displayed at a fractional position, or on
+/// a point of a lattice plane.
 #[derive(Clone, Copy)]
 enum Pointer {
     Click([f64; 3]),
+    /// Over the point of a plane at these fractional coordinates.
+    HoverPoint([f64; 3]),
+    /// A click on the point of a plane, as in add mode.
+    ClickPoint([f64; 3]),
     ShiftClick([f64; 3]),
     Hover([f64; 3]),
     /// Press on the atom and drag by this many logical pixels.
@@ -62,13 +67,22 @@ fn point_at(workbench: &Workbench, actions: &'static [Pointer], window: &Window,
     window.defer(cx, move |window, cx| {
         for action in actions {
             let (Pointer::Click(at)
+            | Pointer::HoverPoint(at)
+            | Pointer::ClickPoint(at)
             | Pointer::ShiftClick(at)
             | Pointer::Hover(at)
             | Pointer::Drag(at, _, _)
             | Pointer::Hold(at, ..)
             | Pointer::Release(at, ..)) = *action;
-            let Some(position) = workspace.read(cx).displayed_atom_position(at, cx) else {
-                log::warn!("screenshot tour: no atom displayed at {at:?}");
+            let shown = workspace.read(cx);
+            let position = match action {
+                Pointer::HoverPoint(_) | Pointer::ClickPoint(_) => {
+                    shown.fractional_point_position(at, cx)
+                }
+                _ => shown.displayed_atom_position(at, cx),
+            };
+            let Some(position) = position else {
+                log::warn!("screenshot tour: nothing displayed at {at:?}");
                 continue;
             };
             let modifiers = Modifiers {
@@ -113,7 +127,7 @@ fn point_at(workbench: &Workbench, actions: &'static [Pointer], window: &Window,
                     );
                     continue;
                 }
-                Pointer::Hover(_) => {
+                Pointer::Hover(_) | Pointer::HoverPoint(_) => {
                     window.dispatch_event(
                         PlatformInput::MouseMove(MouseMoveEvent {
                             position,
@@ -125,7 +139,7 @@ fn point_at(workbench: &Workbench, actions: &'static [Pointer], window: &Window,
                     continue;
                 }
                 Pointer::Drag(_, dx, dy) => release_at = position + point(px(dx), px(dy)),
-                Pointer::Click(_) | Pointer::ShiftClick(_) => {}
+                Pointer::Click(_) | Pointer::ShiftClick(_) | Pointer::ClickPoint(_) => {}
             }
             window.dispatch_event(
                 PlatformInput::MouseDown(MouseDownEvent {
@@ -807,7 +821,90 @@ const TOUR: &[(&str, Step)] = &[
         };
         set_display_range(workbench, range, window, cx);
     }),
+    // Add mode (M17): rutile's cell with the mirror plane z = c/2 only.
+    ("_m17-rutile-plane", |workbench, window, cx| {
+        let range = DisplayRange::default();
+        set_display_range(workbench, range, window, cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_view(&mw_project_file::EntryView::default(), cx);
+                workspace.reset_camera(cx);
+            });
+        }
+        add_plane(workbench, [0, 0, 1], 0.5, window, cx);
+        set_planes_open(workbench, false, window, cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+    }),
+    // The prompt bar with its element picker, and over the plane where an
+    // O would go: on the mirror, x, y, 1/2, eight atoms.
+    ("78-add-mode", |workbench, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::ToggleAddOnPlanes), cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_add_element("O", window, cx)
+            });
+        }
+        point_at(workbench, &[Pointer::HoverPoint(PLANE_POINT)], window, cx);
+    }),
+    // A click adds it there, selected: the panel shows O2 on the mirror.
+    ("79-added-on-plane", |workbench, window, cx| {
+        point_at(workbench, &[Pointer::ClickPoint(PLANE_POINT)], window, cx);
+    }),
+    // The disorder fields (M17) for O1 and O2 selected together: O2 is in
+    // group 1 of assembly A and O1 is not, so the fields show no value.
+    ("80-disorder-fields", |workbench, window, cx| {
+        window.dispatch_action(Box::new(mw_structure::ToggleAddOnPlanes), cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                let disorder = mw_crystal::Disorder::new(Some("A".into()), "1".into());
+                workspace.set_disorder(&[SiteId(3)], Some(disorder), window, cx);
+                let sites = [Target::Site(SiteId(2)), Target::Site(SiteId(3))];
+                workspace.select(&sites, window, cx);
+            });
+        }
+        window.dispatch_action(Box::new(mw_structure::ShowPropertiesPanel), cx);
+    }),
+    // O1 in group 2: the list marks both and has both selected.
+    ("81-disorder-sites", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                let disorder = mw_crystal::Disorder::new(Some("A".into()), "2".into());
+                workspace.set_disorder(&[SiteId(2)], Some(disorder), window, cx);
+            });
+        }
+        window.dispatch_action(Box::new(mw_structure::ShowSitesPanel), cx);
+    }),
+    // Back as rutile was; then a file with a disordered ethyl group.
+    ("_m17-undo-and-import", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        for _ in 0..3 {
+            window.dispatch_action(Box::new(mw_structure::Undo), cx);
+        }
+        workbench.import_paths(vec![fixture("zero_occupancy.cif")], window, cx);
+    }),
+    // Both components of the ethyl group overlap; the popover offers
+    // either.
+    ("82-disorder-all", |workbench, window, cx| {
+        window.clear_notifications(cx);
+        focus_workspace(workbench, window, cx);
+        window.dispatch_action(Box::new(mw_structure::ClearSelection), cx);
+        window.dispatch_action(Box::new(mw_structure::EditDisorderGroups), cx);
+    }),
+    // Group 1 only: C5 and C6.
+    ("83-disorder-group", |workbench, _, cx| {
+        if let Some(workspace) = workbench.workspace().cloned() {
+            workspace.update(cx, |workspace, cx| {
+                workspace.show_disorder_group(Some("A"), Some("1"), cx)
+            });
+        }
+    }),
 ];
+
+/// A point of rutile's mirror plane z = c/2 away from the atoms on it.
+const PLANE_POINT: [f64; 3] = [0.3, 0.1, 0.5];
 
 /// Draws a lattice plane on the open structure, as the planes popover does.
 fn add_plane(

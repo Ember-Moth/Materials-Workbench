@@ -10,7 +10,10 @@
 //! Converting to P1 and changing the cell are commands on the document; a
 //! supercell is a new structure the host adds to the project. The display
 //! models draw ball and stick, space filling, coordination polyhedra, or
-//! displacement ellipsoids; lattice planes can be drawn in any of them.
+//! displacement ellipsoids; lattice planes can be drawn in any of them, and
+//! in add mode a click on one adds a site there. The viewport can show one
+//! group of each disorder assembly; the properties panel sets the selected
+//! sites' disorder.
 //! Anything mocked says so where it happens (see `docs/architecture.md`,
 //! "Mocks").
 
@@ -24,9 +27,11 @@ macro_rules! tr {
 }
 
 mod actions;
+mod adding;
 mod cell_dialog;
 mod diagnostics;
 mod dialogs;
+mod disorder;
 mod display_range;
 mod document;
 mod editing;
@@ -49,11 +54,11 @@ mod workspace;
 
 pub use actions::{
     AddMixedOccupant, AddSite, AlignCell, ClearSelection, ConvertToP1, DeleteSelection,
-    EditDisplayRange, EditEllipsoids, EditPlanes, EditPolyhedra, ExportStructure, KEY_CONTEXT,
-    MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick, ShowDiagnosticsPanel,
-    ShowEllipsoids, ShowMeasurementsPanel, ShowPolyhedra, ShowPropertiesPanel, ShowSitesPanel,
-    ShowSpaceFilling, Symmetrize, ToggleMeasure, ToggleMoveAtoms, TogglePanel, TransformCell, Undo,
-    bind_keys, palette_commands,
+    EditDisorderGroups, EditDisplayRange, EditEllipsoids, EditPlanes, EditPolyhedra,
+    ExportStructure, KEY_CONTEXT, MakeSupercell, PaletteCommand, Redo, ResetView, ShowBallAndStick,
+    ShowDiagnosticsPanel, ShowEllipsoids, ShowMeasurementsPanel, ShowPolyhedra,
+    ShowPropertiesPanel, ShowSitesPanel, ShowSpaceFilling, Symmetrize, ToggleAddOnPlanes,
+    ToggleMeasure, ToggleMoveAtoms, TogglePanel, TransformCell, Undo, bind_keys, palette_commands,
 };
 pub use document::StructureDocument;
 pub use scene::DisplayModel;

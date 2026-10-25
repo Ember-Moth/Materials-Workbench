@@ -19,7 +19,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mw_crystal::{
     AtomRef, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS, PolyhedronCenters,
-    SphereCenter, Structure,
+    ShownGroups, SphereCenter, Structure,
 };
 
 use crate::actions::EditDisplayRange;
@@ -34,12 +34,13 @@ pub(crate) const BACKGROUND_ATOMS: usize = 5_000;
 /// Å, the radius a sphere starts with.
 const DEFAULT_RADIUS: f64 = 6.0;
 
-/// What the atoms shown are made for: a structure, a range, and in the
-/// polyhedra model the centers of the polyhedra.
+/// What the atoms shown are made for: a structure, a range, the disorder
+/// groups shown, and in the polyhedra model the centers of the polyhedra.
 #[derive(Clone)]
 pub(crate) struct DisplayKey {
     structure: Arc<Structure>,
     range: DisplayRange,
+    groups: ShownGroups,
     polyhedra: Option<PolyhedronCenters>,
 }
 
@@ -47,17 +48,18 @@ impl DisplayKey {
     fn is(&self, other: &DisplayKey) -> bool {
         Arc::ptr_eq(&self.structure, &other.structure)
             && self.range == other.range
+            && self.groups == other.groups
             && self.polyhedra == other.polyhedra
     }
 
     /// The atoms, bonds and polyhedra shown.
     fn display(&self, orbits: &[mw_crystal::Orbit], bonds: &[mw_crystal::Bond]) -> Displayed {
-        let structure = &self.structure;
+        let (structure, range, groups) = (&self.structure, &self.range, &self.groups);
         match &self.polyhedra {
             Some(centers) => {
-                Displayed::with_polyhedra(structure, orbits, bonds, &self.range, centers)
+                Displayed::with_polyhedra(structure, orbits, bonds, range, centers, groups)
             }
-            None => Displayed::new(structure, orbits, bonds, &self.range),
+            None => Displayed::new(structure, orbits, bonds, range, groups),
         }
     }
 }
@@ -174,6 +176,7 @@ impl StructureWorkspace {
         let key = DisplayKey {
             structure: structure.clone(),
             range,
+            groups: self.shown_groups.clone(),
             polyhedra: self.polyhedra_shown(),
         };
         if self.display.is_for(&key) {

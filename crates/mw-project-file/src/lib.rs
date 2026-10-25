@@ -50,7 +50,8 @@ pub use store::{ProjectDir, ReadError, Save, SaveError, Source, read_manifest, s
 pub use structure_file::StructureFile;
 pub use time::Timestamp;
 pub use view::{
-    Camera, DisplayModel, DisplayRange, EntryView, PanelTab, Plane, SphereCenter, ViewState,
+    Camera, DisorderGroup, DisplayModel, DisplayRange, EntryView, PanelTab, Plane, SphereCenter,
+    ViewState,
 };
 
 /// The format version this code writes and the newest it reads (design

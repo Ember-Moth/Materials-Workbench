@@ -1,8 +1,9 @@
 //! Everything GPUI draws over the 3D image: the info chip, the hovered
-//! atom, the measuring or moving prompt, measurement labels and the
-//! floating view toolbar with its popovers (`docs/design/ui-shell.md`
-//! §4.2). Only the toolbar takes the pointer; the chips and labels let
-//! clicks through to the atoms.
+//! atom or plane point, the measuring, moving or adding prompt, measurement
+//! labels and the floating view toolbar with its popovers
+//! (`docs/design/ui-shell.md` §4.2). Only the toolbar and the adding
+//! prompt's picker take the pointer; the chips and labels let clicks
+//! through to the atoms.
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -12,7 +13,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable, Sizable, Styl
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::actions::{KEY_CONTEXT, ResetView, ToggleMeasure, ToggleMoveAtoms};
+use crate::actions::{KEY_CONTEXT, ResetView, ToggleAddOnPlanes, ToggleMeasure, ToggleMoveAtoms};
 use crate::format;
 use crate::scene::DisplayModel;
 use crate::workspace::StructureWorkspace;
@@ -61,12 +62,15 @@ impl StructureWorkspace {
         };
 
         let prompt = if self.measuring {
-            Some(self.measure_prompt())
+            Some(self.measure_prompt().into_any_element())
         } else if self.moving {
-            Some(self.move_prompt())
+            Some(self.move_prompt().into_any_element())
+        } else if self.adding {
+            Some(self.render_add_prompt(cx).into_any_element())
         } else {
             None
         };
+        let plane_hover = self.render_plane_hover(cx);
 
         div()
             .id("structure-viewport")
@@ -107,6 +111,7 @@ impl StructureWorkspace {
                     })),
             )
             .children(hovered)
+            .children(plane_hover)
             .children(labels.into_iter().map(|(position, text)| {
                 div()
                     .absolute()
@@ -283,6 +288,22 @@ impl StructureWorkspace {
                         window.dispatch_action(Box::new(ToggleMoveAtoms), cx)
                     })),
             )
+            .child(
+                Button::new("toggle-add-on-planes")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(Lucide::MapPinPlus))
+                    .label(tr!("toolbar.add"))
+                    .selected(self.adding)
+                    .tooltip_with_action(
+                        tr!("toolbar.add_tooltip"),
+                        &ToggleAddOnPlanes,
+                        Some(KEY_CONTEXT),
+                    )
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(ToggleAddOnPlanes), cx)
+                    })),
+            )
             .child({
                 let panel = self.planes_panel.clone();
                 Popover::new("lattice-planes")
@@ -314,6 +335,27 @@ impl StructureWorkspace {
                             .label(tr!("toolbar.display_range")),
                     )
                     .content(move |_, _, _| panel.clone())
+            })
+            // Only disordered structures have groups to choose from.
+            .when(self.has_disorder_groups(), |this| {
+                let panel = self.disorder_panel.clone();
+                this.child(
+                    Popover::new("disorder-groups")
+                        .anchor(Anchor::BottomCenter)
+                        .open(self.disorder_open)
+                        .on_open_change(
+                            cx.listener(|this, open: &bool, _, cx| {
+                                this.set_disorder_open(*open, cx)
+                            }),
+                        )
+                        .trigger(
+                            Button::new("disorder-groups-trigger")
+                                .ghost()
+                                .small()
+                                .label(tr!("toolbar.disorder")),
+                        )
+                        .content(move |_, _, _| panel.clone()),
+                )
             })
             .child(div().w_px().h_5().mx_1().bg(theme.border))
             .child(

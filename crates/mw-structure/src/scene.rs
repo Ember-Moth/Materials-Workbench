@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use gpui_kit::{Hsla, Rgba};
 use mw_crystal::{
     Annotation, AtomFate, AtomRef, BondRules, Displacement, Displacements, DisplayRange, Displayed,
-    IdMap, LatticePlane, Orbit, PolyhedronCenters, Structure, covalent_radius,
+    IdMap, LatticePlane, Orbit, PolyhedronCenters, ShownGroups, Structure, covalent_radius,
 };
 use mw_viewport::{
     BondInstance, EllipsoidInstance, LineInstance, Polyhedron, Scene, SphereInstance,
@@ -53,6 +53,9 @@ pub(crate) struct Style {
     pub probability: f64,
     /// The lattice planes drawn, cut to `range` (§5.7).
     pub planes: Vec<ShownPlane>,
+    /// Whether clicks land on the planes, as in add mode (§7.6), rather
+    /// than going through them.
+    pub pickable_planes: bool,
     /// The display range the atoms were chosen by.
     pub range: DisplayRange,
 }
@@ -287,20 +290,23 @@ pub(crate) struct Preview {
 
 impl Preview {
     /// The edited structure as `range` shows it, with the polyhedra of
-    /// `polyhedra`'s centers in that model. A sphere around an atom should
-    /// be [fixed](DisplayRange::fixed) first, so that the region stays put
-    /// while its atom moves.
+    /// `polyhedra`'s centers in that model and the disorder groups `groups`
+    /// shows. A sphere around an atom should be [fixed](DisplayRange::fixed)
+    /// first, so that the region stays put while its atom moves.
     pub fn new(
         structure: Structure,
         ids: IdMap,
         range: &DisplayRange,
         polyhedra: Option<&PolyhedronCenters>,
+        groups: &ShownGroups,
     ) -> Self {
         let orbits = mw_crystal::orbits(&structure);
         let bonds = mw_crystal::bonds(&structure, &orbits, &BondRules::default());
         let displayed = match polyhedra {
-            Some(centers) => Displayed::with_polyhedra(&structure, &orbits, &bonds, range, centers),
-            None => Displayed::new(&structure, &orbits, &bonds, range),
+            Some(centers) => {
+                Displayed::with_polyhedra(&structure, &orbits, &bonds, range, centers, groups)
+            }
+            None => Displayed::new(&structure, &orbits, &bonds, range, groups),
         };
         Self {
             structure,
@@ -459,6 +465,7 @@ pub(crate) fn draw(
                 .collect(),
             triangles: polyhedron.triangles().map(|t| t.map(local)).collect(),
             color: [r, g, b, POLYHEDRON_OPACITY],
+            pickable: false,
         });
         let edge_color = [r, g, b].map(|c| c * POLYHEDRON_EDGE_SHADE);
         let [er, eg, eb] = edge_color;
@@ -487,6 +494,7 @@ pub(crate) fn draw(
                 .map(|i| [0, i, i + 1])
                 .collect(),
             color: [r, g, b, PLANE_OPACITY],
+            pickable: style.pickable_planes,
         });
         let edge = [r, g, b].map(|c| c * PLANE_EDGE_SHADE);
         let n = corners.len();
@@ -557,6 +565,7 @@ mod tests {
             model,
             probability: mw_crystal::DEFAULT_PROBABILITY,
             planes: Vec::new(),
+            pickable_planes: false,
             range: DisplayRange::default(),
         }
     }
@@ -721,6 +730,10 @@ mod tests {
         // x + y = 1 cuts the cell in a rectangle; z = 3c misses it.
         assert_eq!(scene.polyhedra.len(), 1);
         let polygon = &scene.polyhedra[0];
+        // Clicks go through, except in add mode.
+        assert!(!polygon.pickable);
+        style.pickable_planes = true;
+        assert!(draw(&atoms, &[], &style, colors()).polyhedra[0].pickable);
         assert_eq!(polygon.vertices.len(), 4);
         assert_eq!(polygon.triangles, [[0, 1, 2], [0, 2, 3]]);
         let [r, g, b] = srgb(PLANE_COLORS[1]);

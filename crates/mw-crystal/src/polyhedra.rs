@@ -10,8 +10,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::display::{atoms, position};
 use crate::{
-    AtomRef, Bond, Derived, DisplayAtom, DisplayRange, Displayed, Orbit, SiteId, Structure, bonds,
-    element,
+    AtomRef, Bond, Derived, DisplayAtom, DisplayRange, Displayed, Orbit, ShownGroups, SiteId,
+    Structure, bonds, element,
 };
 
 /// Ligands beyond which an atom gets no polyhedron. So many neighbors mean
@@ -216,7 +216,14 @@ impl Derived {
         range: &DisplayRange,
         centers: &PolyhedronCenters,
     ) -> Displayed {
-        Displayed::with_polyhedra(structure, &self.orbits, &self.bonds, range, centers)
+        Displayed::with_polyhedra(
+            structure,
+            &self.orbits,
+            &self.bonds,
+            range,
+            centers,
+            &ShownGroups::default(),
+        )
     }
 }
 
@@ -285,8 +292,10 @@ impl Displayed {
         bonds: &[Bond],
         range: &DisplayRange,
         centers: &PolyhedronCenters,
+        groups: &ShownGroups,
     ) -> Self {
-        let mut atoms = atoms(structure, orbits, range);
+        let hidden = groups.hidden_sites(structure);
+        let mut atoms = atoms(structure, orbits, range, &hidden);
         let coordination = Coordination::new(structure, orbits, bonds);
         let chosen = coordination.centers(centers);
         let mut index: HashMap<AtomRef, usize> = atoms
@@ -303,7 +312,10 @@ impl Displayed {
             let Some(ligands) = coordination.ligands(atom) else {
                 continue;
             };
-            let ligands: Vec<AtomRef> = ligands.collect();
+            // A disorder group left out has no ligands either.
+            let ligands: Vec<AtomRef> = ligands
+                .filter(|ligand| !hidden.contains(&ligand.site))
+                .collect();
             if !can_be_center(ligands.len()) {
                 continue;
             }

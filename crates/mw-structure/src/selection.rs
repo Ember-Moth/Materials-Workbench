@@ -1,7 +1,7 @@
 //! The workspace's one selection, shared by the site list and the viewport
 //! (`docs/design/ui-shell.md` §4.2–§4.3): the list selects whole sites, the
 //! viewport single atoms; ⇧- or ⌘-click (Ctrl-click on Linux and Windows)
-//! adds and removes atoms.
+//! adds and removes them.
 
 use gpui_kit::*;
 use mw_crystal::{AtomFate, AtomRef, IdMap, SiteId, Target};
@@ -117,7 +117,15 @@ impl Selection {
 
     /// Adds the atom, or removes it if it is selected by itself.
     pub fn toggle_atom(&mut self, atom: AtomRef) {
-        let item = Selected::Atom(atom);
+        self.toggle(Selected::Atom(atom));
+    }
+
+    /// Adds the whole site, or removes it if it is selected as a whole.
+    pub fn toggle_site(&mut self, site: SiteId) {
+        self.toggle(Selected::Site(site));
+    }
+
+    fn toggle(&mut self, item: Selected) {
         if let Some(ix) = self.0.iter().position(|selected| *selected == item) {
             self.0.remove(ix);
         } else {
@@ -145,6 +153,9 @@ impl StructureWorkspace {
         self.selection = selection;
         if site_changed {
             self.sync_site_inputs(window, cx);
+        } else {
+            // The disorder fields edit every site selected.
+            self.sync_disorder_fields(window, cx);
         }
         self.sync_viewport_selection(cx);
         cx.notify();
@@ -177,7 +188,7 @@ impl StructureWorkspace {
     pub(crate) fn picked_atom(&self, pick: Option<Pick>) -> Option<AtomRef> {
         match pick? {
             Pick::Sphere(ix) => self.display.shown.atoms.get(ix).map(|atom| atom.atom),
-            Pick::Bond(_) => None,
+            Pick::Bond(_) | Pick::Polygon(_) => None,
         }
     }
 
@@ -205,7 +216,20 @@ impl StructureWorkspace {
         cx: &mut Context<Self>,
     ) {
         let (pick, modifiers) = match *event {
-            ViewportEvent::Clicked { pick, modifiers } => (pick, modifiers),
+            // A click on a plane, which takes clicks in add mode only.
+            ViewportEvent::Clicked {
+                pick: Some(Pick::Polygon(_)),
+                point,
+                ..
+            } => {
+                if let (true, Some(point)) = (self.adding, point) {
+                    self.click_plane(point, window, cx);
+                }
+                return;
+            }
+            ViewportEvent::Clicked {
+                pick, modifiers, ..
+            } => (pick, modifiers),
             ViewportEvent::SphereDragged {
                 sphere,
                 offset,
@@ -216,7 +240,7 @@ impl StructureWorkspace {
                 offset,
                 modifiers,
             } => return self.drop_atom(sphere, offset, modifiers, window, cx),
-            ViewportEvent::Hovered(_) => return,
+            ViewportEvent::Hovered { pick, point } => return self.hover_plane(pick, point, cx),
         };
         let atom = self.picked_atom(pick);
         if self.measuring {
@@ -275,6 +299,22 @@ mod tests {
         assert_eq!(selection.primary_site(), Some(SiteId(1)));
         selection.toggle_atom(atom(1, 0));
         assert_eq!(selection, Selection::default());
+    }
+
+    /// The site list's ⇧- or ⌘-click adds a whole site or takes it out;
+    /// the site clicked last is the panel's.
+    #[test]
+    fn sites_are_toggled_whole() {
+        let mut selection = Selection::site(SiteId(1));
+        selection.toggle_site(SiteId(2));
+        assert_eq!(selection.sites(), [SiteId(1), SiteId(2)]);
+        assert_eq!(selection.primary_site(), Some(SiteId(2)));
+        selection.toggle_site(SiteId(1));
+        assert_eq!(selection.sites(), [SiteId(2)]);
+        // An atom of the site is selected apart from the whole site.
+        selection.toggle_atom(atom(2, 0));
+        selection.toggle_site(SiteId(2));
+        assert_eq!(selection.targets(), [Target::Atom(atom(2, 0))]);
     }
 
     #[test]

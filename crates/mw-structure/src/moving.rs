@@ -91,6 +91,9 @@ impl StructureWorkspace {
             self.measure_picks.clear();
             self.sync_viewport_selection(cx);
         }
+        if on && self.adding {
+            self.set_adding_mode(false, cx);
+        }
         if !on {
             self.cancel_drag(cx);
         }
@@ -176,9 +179,16 @@ impl StructureWorkspace {
         style.range = range;
         let colors = self.line_colors(cx);
         let polyhedra = self.polyhedra_shown();
+        let groups = self.shown_groups.clone();
         let make = move || {
             let applied = edit.apply(&structure).ok()?;
-            let preview = Preview::new(applied.structure, applied.ids, &range, polyhedra.as_ref());
+            let preview = Preview::new(
+                applied.structure,
+                applied.ids,
+                &range,
+                polyhedra.as_ref(),
+                &groups,
+            );
             let scene = scene::draw(&preview.atoms(), &annotations, &style, colors);
             let rings: Vec<usize> = preview
                 .displayed

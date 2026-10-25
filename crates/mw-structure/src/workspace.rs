@@ -16,18 +16,20 @@ use gpui_kit::component::notification::Notification;
 use mw_crystal::{
     AtomRef, CellParam, CellPreset, CellTransform, CellValues, Checkpoint, CoordinateConstraint,
     CrystalDocument, DEFAULT_PROBABILITY, DisplayRange, Edit, EditMode, LatticePlane,
-    PolyhedronCenters, SiteId, SphereCenter, Structure, Target, element,
+    PolyhedronCenters, ShownGroups, SiteId, SphereCenter, Structure, Target, element,
 };
 use mw_crystal_io::ImportedBlock;
 use mw_project_file::{
-    Camera, DisplayModel as SavedDisplayModel, DisplayRange as SavedDisplayRange, EntryView,
-    PanelTab as SavedPanelTab, Plane as SavedPlane, SphereCenter as SavedSphereCenter,
-    StructureFile,
+    Camera, DisorderGroup as SavedDisorderGroup, DisplayModel as SavedDisplayModel,
+    DisplayRange as SavedDisplayRange, EntryView, PanelTab as SavedPanelTab, Plane as SavedPlane,
+    SphereCenter as SavedSphereCenter, StructureFile,
 };
 use mw_viewport::{CameraPose, Snapshot, Viewport};
 
 use crate::actions::*;
+use crate::adding::PlaneHover;
 use crate::cell_dialog::{self, CellDialog};
+use crate::disorder::{DisorderFields, DisorderPanel};
 use crate::display_range::{DisplayRangePanel, DisplayState};
 use crate::document::StructureDocument;
 use crate::ellipsoids::EllipsoidsPanel;
@@ -171,6 +173,21 @@ pub struct StructureWorkspace {
     /// Move mode: dragging an atom moves its site (`moving.rs`).
     pub(crate) moving: bool,
     pub(crate) drag: Option<AtomDrag>,
+    /// Add mode: a click on a lattice plane adds a site there
+    /// (`adding.rs`).
+    pub(crate) adding: bool,
+    /// The element add mode's sites take.
+    pub(crate) add_element: Entity<SelectState<ElementList>>,
+    /// The pointer over a plane in add mode.
+    pub(crate) plane_hover: Option<PlaneHover>,
+    /// Which group of each disorder assembly the viewport shows
+    /// (crystallography design §4.5): view state.
+    pub(crate) shown_groups: ShownGroups,
+    pub(crate) disorder_panel: Entity<DisorderPanel>,
+    /// Whether the popover choosing the groups shown is open.
+    pub(crate) disorder_open: bool,
+    /// The disorder fields of the selected sites (`disorder.rs`).
+    pub(crate) disorder: DisorderFields,
     pub(crate) selection: Selection,
     pub(crate) cell_inputs: Vec<(CellParam, Entity<InputState>)>,
     pub(crate) coordinate_inputs: [Entity<InputState>; 3],
@@ -251,8 +268,26 @@ impl StructureWorkspace {
             .or(document.structure().sites.first())
             .map_or_else(Selection::default, |site| Selection::site(site.id));
 
+        let disorder = DisorderFields::new(window, cx);
+        for state in [&disorder.assembly, &disorder.group] {
+            subscriptions.push(cx.subscribe_in(
+                state,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if commits(event) {
+                        this.commit_disorder(window, cx);
+                    }
+                    // The note under the fields follows what is typed.
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ));
+        }
+
         let workspace = cx.entity().downgrade();
         let range_panel = cx.new(|cx| DisplayRangePanel::new(workspace.clone(), window, cx));
+        let disorder_panel = cx.new(|_| DisorderPanel::new(workspace.clone()));
         let polyhedra_panel = cx.new(|_| PolyhedraPanel::new(workspace.clone()));
         let ellipsoids_panel = cx.new(|cx| EllipsoidsPanel::new(workspace.clone(), window, cx));
         let planes_panel = cx.new(|cx| PlanesPanel::new(workspace, window, cx));
@@ -282,6 +317,13 @@ impl StructureWorkspace {
             measure_picks: Vec::new(),
             moving: false,
             drag: None,
+            adding: false,
+            add_element: element_picker("", window, cx),
+            plane_hover: None,
+            shown_groups: ShownGroups::default(),
+            disorder_panel,
+            disorder_open: false,
+            disorder,
             selection,
             cell_inputs,
             coordinate_inputs,
@@ -429,6 +471,14 @@ impl StructureWorkspace {
             })
             .collect();
         view = view.with_planes(planes);
+        let groups = self
+            .shown_groups
+            .choices()
+            .map(|(assembly, group)| {
+                SavedDisorderGroup::new(assembly.map(str::to_string), group.to_string())
+            })
+            .collect();
+        view = view.with_disorder_groups(groups);
         if self.display_range == DisplayRange::default() {
             return view;
         }
@@ -481,6 +531,12 @@ impl StructureWorkspace {
             Some((plane, saved.color as usize))
         });
         self.restore_planes(planes, cx);
+        let mut groups = ShownGroups::default();
+        for saved in &view.disorder_groups {
+            groups.set(saved.assembly.as_deref(), Some(&saved.group));
+        }
+        self.disorder_open = false;
+        self.set_shown_groups(groups, cx);
         if let Some(panel) = view.panel {
             self.panel = match panel {
                 SavedPanelTab::Properties => PanelTab::Properties,
@@ -579,6 +635,7 @@ impl StructureWorkspace {
                 state.set_value(format::coordinate(value), window, cx)
             });
         }
+        self.sync_disorder_fields(window, cx);
         let same_occupants =
             self.editing_site == Some(site.id) && self.occupants.len() == site.occupants.len();
         self.editing_site = Some(site.id);
@@ -694,6 +751,7 @@ impl StructureWorkspace {
             model: self.display_model,
             probability: self.ellipsoid_probability,
             planes: self.planes.clone(),
+            pickable_planes: self.adding,
             range: self.display_range,
         }
     }
@@ -722,6 +780,9 @@ impl StructureWorkspace {
         let measuring = !self.measuring;
         if measuring && self.moving {
             self.set_moving(false, cx);
+        }
+        if measuring && self.adding {
+            self.set_adding_mode(false, cx);
         }
         self.measuring = measuring;
         self.measure_picks.clear();
@@ -1066,6 +1127,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::reset_view))
             .on_action(cx.listener(Self::toggle_measure))
             .on_action(cx.listener(Self::toggle_move_atoms))
+            .on_action(cx.listener(Self::toggle_add_on_planes))
             .on_action(cx.listener(Self::clear_selection))
             .on_action(cx.listener(Self::delete_selection))
             .on_action(cx.listener(Self::add_site))
@@ -1086,6 +1148,7 @@ impl Render for StructureWorkspace {
             .on_action(cx.listener(Self::edit_ellipsoids))
             .on_action(cx.listener(Self::edit_planes))
             .on_action(cx.listener(Self::edit_display_range))
+            .on_action(cx.listener(Self::edit_disorder_groups))
             .on_action(cx.listener(Self::show_properties))
             .on_action(cx.listener(Self::show_sites))
             .on_action(cx.listener(Self::show_measurements))

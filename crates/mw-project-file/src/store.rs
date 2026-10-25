@@ -22,9 +22,9 @@ const WRITER: &str = concat!("Materials Workbench ", env!("CARGO_PKG_VERSION"));
 const VIEW: &str = "view.json";
 /// 2 since a structure's view has a display range, 3 since it has the
 /// centers of its polyhedra, 4 since it has the ellipsoids model, their
-/// probability and lattice planes (design §8); older files are read as
-/// they are, with the defaults.
-const VIEW_VERSION: u32 = 4;
+/// probability and lattice planes, 5 since it has the disorder groups shown
+/// (design §8); older files are read as they are, with the defaults.
+const VIEW_VERSION: u32 = 5;
 const STRUCTURES: &str = "structures";
 const SOURCES: &str = "sources";
 

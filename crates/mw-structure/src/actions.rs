@@ -9,6 +9,7 @@ gpui_kit::actions!(
         ResetView,
         ToggleMeasure,
         ToggleMoveAtoms,
+        ToggleAddOnPlanes,
         ClearSelection,
         DeleteSelection,
         AddSite,
@@ -29,6 +30,7 @@ gpui_kit::actions!(
         EditEllipsoids,
         EditPlanes,
         EditDisplayRange,
+        EditDisorderGroups,
         ShowPropertiesPanel,
         ShowSitesPanel,
         ShowMeasurementsPanel,
@@ -56,6 +58,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("m", ToggleMeasure, context),
         // V for the move tool, as in drawing and design applications.
         KeyBinding::new("v", ToggleMoveAtoms, context),
+        // A for adding sites on lattice planes.
+        KeyBinding::new("a", ToggleAddOnPlanes, context),
         KeyBinding::new("escape", ClearSelection, context),
         KeyBinding::new("backspace", DeleteSelection, context),
         KeyBinding::new("delete", DeleteSelection, context),
@@ -190,6 +194,19 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             Box::new(ToggleMoveAtoms),
         ),
         command(
+            tr!("command.toggle_add_on_planes"),
+            &[
+                "add mode",
+                "add site on plane",
+                "click to add atom",
+                "tianjia moshi",
+                "jingmian tianjia weidian",
+                "dianji tianjia",
+            ],
+            Lucide::MapPinPlus,
+            Box::new(ToggleAddOnPlanes),
+        ),
+        command(
             tr!("command.clear_selection"),
             &[
                 "clear selection",
@@ -277,6 +294,20 @@ pub fn palette_commands() -> Vec<PaletteCommand> {
             ],
             Lucide::Boxes,
             Box::new(EditDisplayRange),
+        ),
+        command(
+            tr!("command.disorder_groups"),
+            &[
+                "disorder",
+                "disorder groups",
+                "split sites",
+                "show group",
+                "wuxu",
+                "wuxu zu",
+                "wuxu zuhe",
+            ],
+            Lucide::Blend,
+            Box::new(EditDisorderGroups),
         ),
         command(
             tr!("command.reset_view"),

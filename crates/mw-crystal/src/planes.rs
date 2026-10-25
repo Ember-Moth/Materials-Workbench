@@ -10,6 +10,10 @@ use crate::{CellParams, DisplayRange, Lattice, Orbit};
 
 /// Corners of the polygon that stands for a plane's disc in a sphere.
 const DISC_CORNERS: usize = 72;
+/// A point clicked on a plane keeps its free coordinates to this many
+/// decimals: under 0.001 Å in a 20 Å cell, far within the position
+/// tolerance, and finer than a click.
+const PLACE_SCALE: f64 = 1e4;
 
 /// One plane of the family (hkl) (design §5.7): the points whose
 /// fractional coordinates x satisfy `h·x + k·y + l·z = position`. It lies
@@ -83,6 +87,26 @@ impl LatticePlane {
     pub fn normal(&self, lattice: &Lattice) -> [f64; 3] {
         let n = reciprocal_vector(lattice, self.miller).normalize();
         [n.x, n.y, n.z]
+    }
+
+    /// A point clicked on the plane, in fractional coordinates, tidied for
+    /// a new site (design §7.6): the coordinate with the largest index, the
+    /// first of equal ones, is solved from the plane's equation and the
+    /// other two are rounded to four decimals. The point lies on the plane
+    /// exactly, so on (001) at ½ its z is ½, and it reads plainly.
+    pub fn place(&self, x: [f64; 3]) -> [f64; 3] {
+        let mut axis = 0;
+        for i in 1..3 {
+            if self.miller[i].unsigned_abs() > self.miller[axis].unsigned_abs() {
+                axis = i;
+            }
+        }
+        // `+ 0.0` turns a rounded −0 into 0.
+        let mut point = x.map(|v| (v * PLACE_SCALE).round() / PLACE_SCALE + 0.0);
+        let h = self.miller.map(f64::from);
+        let rest: f64 = (0..3).filter(|&i| i != axis).map(|i| h[i] * point[i]).sum();
+        point[axis] = (self.position - rest) / h[axis] + 0.0;
+        point
     }
 
     /// The polygon where the plane cuts the display range, in Cartesian Å,
@@ -419,5 +443,39 @@ mod tests {
             radius: 3.0,
         };
         assert_eq!(p.section(&lattice, &around, &[]), None);
+    }
+
+    /// A point clicked on a plane lies on it exactly, with its other
+    /// coordinates to four decimals: on (001) and its Laue multiple (002) at
+    /// ½ the height is ½ itself, not a float near it.
+    #[test]
+    fn points_clicked_on_a_plane_lie_on_it() {
+        let clicked = [0.312_349, 0.250_01, 0.499_999_7];
+        assert_eq!(plane([0, 0, 1], 0.5).place(clicked), [0.3123, 0.25, 0.5]);
+        assert_eq!(plane([0, 0, 2], 1.0).place(clicked), [0.3123, 0.25, 0.5]);
+        // Rounding never leaves −0.
+        assert_eq!(
+            plane([1, 0, 0], 0.0).place([-1e-7, -2e-5, 0.3]),
+            [0.0, 0.0, 0.3]
+        );
+        // (111) and (1 −2 0): the coordinate with the largest index, the
+        // first of equals, follows from the others.
+        for (miller, position) in [([1, 1, 1], 1.0), ([1, -2, 0], 0.75), ([3, 1, -3], -2.0)] {
+            let p = plane(miller, position);
+            let point = p.place([0.20004, 0.29996, 0.5]);
+            let h = miller.map(f64::from);
+            assert!(
+                (dot(h, point) - position).abs() < 1e-12,
+                "{miller:?}: {point:?}"
+            );
+            let solved = if miller == [1, -2, 0] { 1 } else { 0 };
+            for i in (0..3).filter(|&i| i != solved) {
+                let scaled = point[i] * PLACE_SCALE;
+                assert!(
+                    (scaled - scaled.round()).abs() < 1e-9,
+                    "{miller:?}: {point:?}"
+                );
+            }
+        }
     }
 }

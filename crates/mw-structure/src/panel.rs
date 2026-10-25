@@ -20,7 +20,9 @@ use mw_project_file::{Operation, Provenance};
 use crate::actions::{
     AddMixedOccupant, AddSite, AlignCell, ConvertToP1, Symmetrize, TransformCell,
 };
+use crate::disorder::disorder_code;
 use crate::format;
+use crate::selection::Selection;
 use crate::workspace::{PanelTab, StructureWorkspace};
 
 /// What the cell section says about an explicit orientation (crystallography
@@ -645,6 +647,53 @@ impl StructureWorkspace {
                     })),
             ),
         )
+        .child(self.render_disorder_fields(cx))
+    }
+
+    /// The disorder of the selected sites: assembly and group, and the
+    /// button that takes them out of disorder (crystallography design
+    /// §7.2), with notes on what the fields need and change.
+    fn render_disorder_fields(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let notes = self.disorder_notes(cx);
+        v_flex()
+            .gap_1()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_end()
+                    .child(field(
+                        tr!("panel.site.disorder_assembly"),
+                        FieldNote::None,
+                        Input::new(&self.disorder.assembly).id("disorder-assembly"),
+                        cx,
+                    ))
+                    .child(field(
+                        tr!("panel.site.disorder_group"),
+                        FieldNote::None,
+                        Input::new(&self.disorder.group).id("disorder-group"),
+                        cx,
+                    ))
+                    .when(self.selection_has_disorder(), |row| {
+                        row.child(
+                            Button::new("clear-disorder")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Close)
+                                .tooltip(tr!("panel.site.clear_disorder"))
+                                .accessibility_label(tr!("panel.site.clear_disorder"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.clear_disorder(window, cx)
+                                })),
+                        )
+                    }),
+            )
+            .children(notes.into_iter().map(|note| {
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(note)
+            }))
     }
 
     fn render_sites(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -664,9 +713,40 @@ impl StructureWorkspace {
                 .unwrap_or_default();
             let occupancy = occupant.map_or(1.0, |o| o.occupancy.value());
             let coordinates = site.position.map(format::coordinate).join(", ");
+            let row = match wyckoff {
+                Some(wyckoff) => tr!(
+                    "panel.sites.row",
+                    element = element.clone(),
+                    wyckoff = wyckoff,
+                    count = count
+                ),
+                None => tr!(
+                    "panel.sites.row_without_wyckoff",
+                    element = element.clone(),
+                    count = count
+                ),
+            };
+            let row = match &site.disorder {
+                Some(disorder) => tr!(
+                    "panel.sites.row_disorder",
+                    row = row,
+                    code = disorder_code(disorder)
+                ),
+                None => row,
+            };
             ListItem::new(("site", id.0 as usize))
                 .selected(self.selection.touches_site(id))
-                .on_click(cx.listener(move |this, _, window, cx| this.select_site(id, window, cx)))
+                // ⇧- or ⌘-click adds or removes the site, as in the viewport.
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    let modifiers = event.modifiers();
+                    if modifiers.shift || modifiers.secondary() {
+                        let mut selection = this.selection.clone();
+                        selection.toggle_site(id);
+                        this.set_selection(selection, window, cx);
+                    } else {
+                        this.set_selection(Selection::site(id), window, cx);
+                    }
+                }))
                 .child(
                     v_flex()
                         .w_full()
@@ -675,21 +755,12 @@ impl StructureWorkspace {
                             h_flex()
                                 .gap_2()
                                 .child(div().font_medium().child(site.label().to_string()))
-                                .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                    match wyckoff {
-                                        Some(wyckoff) => tr!(
-                                            "panel.sites.row",
-                                            element = element.clone(),
-                                            wyckoff = wyckoff,
-                                            count = count
-                                        ),
-                                        None => tr!(
-                                            "panel.sites.row_without_wyckoff",
-                                            element = element.clone(),
-                                            count = count
-                                        ),
-                                    },
-                                )),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(row),
+                                ),
                         )
                         .child(
                             h_flex()

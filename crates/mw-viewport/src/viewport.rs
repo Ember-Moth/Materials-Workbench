@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use glam::Vec3;
+use glam::{DVec3, DVec4, Vec3};
 use gpui_kit::component::{ActiveTheme, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -151,17 +151,78 @@ enum PickPurpose {
     Press,
 }
 
+/// A line of sight through one point of the viewport, in the centered
+/// scene's coordinates (Å): orthographic, so every one points the same way.
+#[derive(Clone, Copy, Debug)]
+struct Ray {
+    origin: DVec3,
+    direction: DVec3,
+}
+
+impl Ray {
+    /// The line of sight through `at`, relative to the viewport's top-left
+    /// corner, for a viewport of `size` seen with `camera`.
+    fn through(at: Point<Pixels>, size: Size<Pixels>, camera: CameraMatrices) -> Option<Self> {
+        let width = f64::from(f32::from(size.width));
+        let height = f64::from(f32::from(size.height));
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let x = 2.0 * f64::from(f32::from(at.x)) / width - 1.0;
+        let y = 1.0 - 2.0 * f64::from(f32::from(at.y)) / height;
+        let inverse = (camera.proj * camera.view).as_dmat4().inverse();
+        // Depths 0 and 1 are the near and far planes.
+        let point = |depth: f64| {
+            let p = inverse * DVec4::new(x, y, depth, 1.0);
+            p.truncate() / p.w
+        };
+        let (near, far) = (point(0.0), point(1.0));
+        let direction = far - near;
+        (direction.length_squared() > 0.0).then_some(Self {
+            origin: near,
+            direction,
+        })
+    }
+
+    /// Where it meets the plane of `polygon`'s first triangle.
+    fn meet(&self, polygon: &mw_crystal_render::Polyhedron) -> Option<DVec3> {
+        let triangle = polygon.triangles.first()?;
+        let corner = |i: u32| {
+            let [x, y, z] = *polygon.vertices.get(i as usize)?;
+            Some(DVec3::new(f64::from(x), f64::from(y), f64::from(z)))
+        };
+        let [a, b, c] = [
+            corner(triangle[0])?,
+            corner(triangle[1])?,
+            corner(triangle[2])?,
+        ];
+        let normal = (b - a).cross(c - a);
+        let along = normal.dot(self.direction);
+        if along.abs() <= f64::EPSILON * normal.length() * self.direction.length() {
+            return None;
+        }
+        let t = normal.dot(a - self.origin) / along;
+        Some(self.origin + self.direction * t)
+    }
+}
+
 /// What the viewport reports to its host.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ViewportEvent {
     /// A press and release without dragging; `pick` is what was under the
-    /// pointer, indexing the host's scene.
+    /// pointer, indexing the host's scene. On a polygon, `point` is where
+    /// the pointer meets it, in the scene's coordinates (Å).
     Clicked {
         pick: Option<Pick>,
+        point: Option<[f64; 3]>,
         modifiers: Modifiers,
     },
-    /// The object under the pointer changed.
-    Hovered(Option<Pick>),
+    /// The object under the pointer changed, or the pointer moved over a
+    /// polygon; `point` as for [`ViewportEvent::Clicked`].
+    Hovered {
+        pick: Option<Pick>,
+        point: Option<[f64; 3]>,
+    },
     /// A sphere is being dragged, while spheres can be dragged
     /// ([`Viewport::set_sphere_dragging`]): `offset` is the pointer's
     /// travel since the press, in Å in the scene's coordinates, in the
@@ -229,6 +290,8 @@ pub struct Viewport {
     /// The pointer relative to the viewport, while it is over the 3D view.
     pointer: Option<Point<Pixels>>,
     hovered: Option<Pick>,
+    /// Where the pointer meets the hovered polygon.
+    hovered_point: Option<[f64; 3]>,
     selected: Vec<usize>,
     pick_in_flight: bool,
     /// Clicks waiting for the pick in flight to finish, in order.
@@ -268,6 +331,7 @@ impl Viewport {
             press_pick: None,
             pointer: None,
             hovered: None,
+            hovered_point: None,
             selected: Vec::new(),
             pick_in_flight: false,
             queued_clicks: VecDeque::new(),
@@ -315,6 +379,7 @@ impl Viewport {
         self.scene = scene;
         self.selected.clear();
         self.hovered = None;
+        self.hovered_point = None;
         self.hover_stale = true;
         if self.framed {
             self.camera.set_scene_radius(self.scene_radius);
@@ -598,13 +663,29 @@ impl Viewport {
         }
     }
 
-    fn set_hovered(&mut self, pick: Option<Pick>, cx: &mut Context<Self>) {
-        if self.hovered != pick {
+    /// The pointer is over `pick`, at `point` on a polygon. Every move over
+    /// a polygon is news: the host follows the point.
+    fn set_hovered(&mut self, pick: Option<Pick>, point: Option<[f64; 3]>, cx: &mut Context<Self>) {
+        if self.hovered != pick || self.hovered_point != point {
+            let changed = self.hovered != pick;
             self.hovered = pick;
-            cx.emit(ViewportEvent::Hovered(pick));
-            // Repaints the ring and the cursor; the 3D image stays.
-            cx.notify();
+            self.hovered_point = point;
+            cx.emit(ViewportEvent::Hovered { pick, point });
+            if changed {
+                // Repaints the ring and the cursor; the 3D image stays.
+                cx.notify();
+            }
         }
+    }
+
+    /// Where the line of sight through `at` meets the picked polygon, in
+    /// the host's coordinates; `None` for other picks.
+    fn polygon_point(&self, pick: Option<Pick>, ray: Option<Ray>) -> Option<[f64; 3]> {
+        let Some(Pick::Polygon(index)) = pick else {
+            return None;
+        };
+        let point = ray?.meet(self.scene.polyhedra.get(index)?)?;
+        Some((point + self.scene_center.as_dvec3()).to_array())
     }
 
     // MARK: Pointer
@@ -656,7 +737,7 @@ impl Viewport {
             }
             press.dragging = true;
             self.pointer = None;
-            self.set_hovered(None, cx);
+            self.set_hovered(None, None, cx);
         }
         let Some(press) = &mut self.press else {
             return;
@@ -794,7 +875,7 @@ impl Viewport {
 
     fn leave(&mut self, cx: &mut Context<Self>) {
         self.pointer = None;
-        self.set_hovered(None, cx);
+        self.set_hovered(None, None, cx);
     }
 
     fn zoom_by_scroll(
@@ -859,13 +940,16 @@ impl Viewport {
         let to_px = |v: Pixels, limit: u32| {
             ((f32::from(v) * geometry.scale_factor).max(0.0) as u32).min(limit.saturating_sub(1))
         };
+        let camera = self.camera.matrices(geometry.aspect());
         let request = PickRequest {
             width,
             height,
-            camera: self.camera.matrices(geometry.aspect()),
+            camera,
             x: to_px(position.x, width),
             y: to_px(position.y, height),
         };
+        // Polygons are picked where the line of sight meets them.
+        let ray = Ray::through(position, geometry.bounds.size, camera);
         let Ok(renderer) = &mut self.renderer else {
             return;
         };
@@ -874,8 +958,10 @@ impl Viewport {
                 self.pick_in_flight = true;
                 cx.spawn(async move |this, cx| {
                     let pick = cx.background_spawn(async move { pending.wait() }).await;
-                    this.update(cx, |viewport, cx| viewport.finish_pick(purpose, pick, cx))
-                        .ok();
+                    this.update(cx, |viewport, cx| {
+                        viewport.finish_pick(purpose, ray, pick, cx)
+                    })
+                    .ok();
                 })
                 .detach();
             }
@@ -886,6 +972,7 @@ impl Viewport {
                 match purpose {
                     PickPurpose::Click(modifiers) => cx.emit(ViewportEvent::Clicked {
                         pick: None,
+                        point: None,
                         modifiers,
                     }),
                     PickPurpose::Press => self.decide_press(None, cx),
@@ -898,6 +985,7 @@ impl Viewport {
     fn finish_pick(
         &mut self,
         purpose: PickPurpose,
+        ray: Option<Ray>,
         pick: Result<Option<Pick>, RenderError>,
         cx: &mut Context<Self>,
     ) {
@@ -906,12 +994,17 @@ impl Viewport {
             log::error!("viewport pick failed: {e}");
             None
         });
+        let point = self.polygon_point(pick, ray);
         match purpose {
-            PickPurpose::Click(modifiers) => cx.emit(ViewportEvent::Clicked { pick, modifiers }),
+            PickPurpose::Click(modifiers) => cx.emit(ViewportEvent::Clicked {
+                pick,
+                point,
+                modifiers,
+            }),
             PickPurpose::Press => self.decide_press(pick, cx),
             // The pointer may have left or started a drag meanwhile.
             PickPurpose::Hover if self.pointer.is_some() && self.press.is_none() => {
-                self.set_hovered(pick, cx)
+                self.set_hovered(pick, point, cx)
             }
             PickPurpose::Hover => {}
         }
@@ -1112,6 +1205,9 @@ impl Render for Viewport {
                     this.cursor_grab()
                 } else if over_sphere {
                     this.cursor_pointer()
+                } else if matches!(self.hovered, Some(Pick::Polygon(_))) {
+                    // Pickable polygons take a point.
+                    this.cursor_crosshair()
                 } else {
                     this
                 }
@@ -1150,5 +1246,54 @@ impl Render for Viewport {
                         )),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI's glob would shadow the `test` attribute.
+    use glam::{DVec3, Vec3};
+    use gpui_kit::{px, size};
+    use mw_crystal_render::{OrbitCamera, Polyhedron};
+
+    use super::{FrameView, Ray};
+
+    /// The line of sight through where a point on a plane appears meets the
+    /// plane at that point, from any angle.
+    #[test]
+    fn lines_of_sight_meet_polygons_where_they_appear() {
+        let polygon = Polyhedron {
+            vertices: vec![[0.0, 0.0, 1.0], [4.0, 0.0, 3.0], [0.0, 4.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+            ..Polyhedron::default()
+        };
+        let on_it = Vec3::new(1.0, 1.5, 1.5);
+        let size = size(px(640.), px(480.));
+        for (yaw, pitch) in [(0.0, 0.0), (0.6, 0.35), (-2.0, -1.1)] {
+            let mut camera = OrbitCamera::framing(5.0);
+            camera.rotate(yaw, pitch);
+            let view = FrameView {
+                camera: camera.matrices(640.0 / 480.0),
+                center: Vec3::ZERO,
+            };
+            let at = view.project(on_it, size);
+            let ray = Ray::through(at, size, view.camera).unwrap();
+            let met = ray.meet(&polygon).unwrap();
+            assert!(
+                met.distance(on_it.as_dvec3()) < 1e-3,
+                "{yaw}, {pitch}: {met}"
+            );
+        }
+        // Seen edge on, a plane is not met.
+        let flat = Polyhedron {
+            vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+            ..Polyhedron::default()
+        };
+        let ray = Ray {
+            origin: DVec3::new(0.0, 5.0, 0.5),
+            direction: DVec3::new(1.0, 0.0, 0.0),
+        };
+        assert!(ray.meet(&flat).is_none());
     }
 }

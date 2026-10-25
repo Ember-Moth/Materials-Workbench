@@ -2217,3 +2217,256 @@ fn lattice_planes_are_added_moved_and_removed(cx: &mut TestAppContext) {
     draw(&mut cx);
     assert_eq!(panel.read_with(&cx, |panel, _| panel.positions.len()), 2);
 }
+
+/// Milestone M17: in add mode the lattice planes take clicks. The pointer
+/// over a plane tells where a site would go; a click adds one of the chosen
+/// element there, exactly on the plane, as one step, and stays in add
+/// mode. Measuring turns add mode off, and clicks go through the planes
+/// again.
+#[gpui_kit::test]
+fn add_mode_adds_sites_on_lattice_planes(cx: &mut TestAppContext) {
+    use mw_crystal::LatticePlane;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    // z = c/2, the mirror through the Ti at the body center.
+    rutile.update_in(&mut cx, |workspace, window, cx| {
+        workspace.add_plane(LatticePlane::new([0, 0, 1], 0.5).unwrap(), window, cx)
+    });
+    draw(&mut cx);
+    assert!(!drawn(&rutile, &mut cx).polyhedra[0].pickable);
+    cx.simulate_keystrokes("a");
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |w, _| w.is_adding()));
+    assert!(drawn(&rutile, &mut cx).polyhedra[0].pickable);
+    // The element of the selected site, O1.
+    assert_eq!(rutile.read_with(&cx, |w, cx| w.add_element(cx)), Some("O"));
+
+    // The first of these points that no atom hides.
+    let candidates = [
+        [0.3, 0.1, 0.5],
+        [0.35, 0.65, 0.5],
+        [0.65, 0.35, 0.5],
+        [0.15, 0.4, 0.5],
+    ];
+    let (wanted, at, hover) = candidates
+        .into_iter()
+        .find_map(|wanted| {
+            let at = rutile.read_with(&cx, |w, cx| w.fractional_point_position(wanted, cx))?;
+            cx.simulate_mouse_move(at, None, Modifiers::none());
+            draw(&mut cx);
+            let hover = rutile.read_with(&cx, |w, _| w.plane_hover_summary())?;
+            Some((wanted, at, hover))
+        })
+        .expect("a point of the plane in sight");
+    // On the mirror: x, y, 1/2, eight atoms in the cell.
+    assert!(hover.contains("x, y, 1/2"), "{hover}");
+    assert!(hover.contains('8'), "{hover}");
+
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    let added = SiteId(3);
+    assert_eq!(sites(&rutile, &mut cx), [SiteId(1), SiteId(2), added]);
+    let [x, y, z] = position(&rutile, added, &mut cx);
+    assert_eq!(z, 0.5);
+    assert!(
+        (x - wanted[0]).abs() < 0.02 && (y - wanted[1]).abs() < 0.02,
+        "{:?}",
+        [x, y, z]
+    );
+    assert_eq!(multiplicity(&rutile, added, &mut cx), 8);
+    assert_eq!(labels(&rutile, added, &mut cx), ["O2"]);
+    let selected = rutile.read_with(&cx, |workspace, _| workspace.selected_site());
+    assert_eq!(selected, Some(added));
+    assert!(rutile.read_with(&cx, |w, _| w.is_adding()));
+
+    // Another element, as the prompt bar's picker chooses it.
+    rutile.update_in(&mut cx, |workspace, window, cx| {
+        workspace.set_add_element("F", window, cx)
+    });
+    assert_eq!(rutile.read_with(&cx, |w, cx| w.add_element(cx)), Some("F"));
+
+    // Measuring ends add mode: the planes let clicks through.
+    focus_workspace(&rutile, &mut cx);
+    cx.simulate_keystrokes("m");
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |w, _| !w.is_adding() && w.measuring));
+    assert!(!drawn(&rutile, &mut cx).polyhedra[0].pickable);
+    // V too, from add mode.
+    cx.simulate_keystrokes("a");
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |w, _| w.is_adding() && !w.measuring));
+    cx.simulate_keystrokes("v");
+    draw(&mut cx);
+    assert!(rutile.read_with(&cx, |w, _| !w.is_adding() && w.moving));
+
+    cx.simulate_keystrokes("secondary-z");
+    draw(&mut cx);
+    assert_eq!(sites(&rutile, &mut cx), [SiteId(1), SiteId(2)]);
+}
+
+fn site_disorder(
+    workspace: &Entity<StructureWorkspace>,
+    site: SiteId,
+    cx: &mut VisualTestContext,
+) -> Option<mw_crystal::Disorder> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .document
+            .structure()
+            .site(site)
+            .unwrap()
+            .disorder
+            .clone()
+    })
+}
+
+/// Milestone M17: the disorder fields put the selected sites in a group,
+/// within an assembly or not, or take them out of disorder, one step each.
+/// With several sites selected they change all of them and show a value
+/// only when the sites share it; passing through them changes nothing.
+#[gpui_kit::test]
+fn disorder_is_set_from_the_properties_panel(cx: &mut TestAppContext) {
+    use mw_crystal::Disorder;
+    let (rutile, mut cx) = open(cx, SampleKey::Rutile);
+    let (ti1, o1) = (SiteId(1), SiteId(2));
+    let (assembly, group) = rutile.read_with(&cx, |w, _| {
+        (w.disorder.assembly.clone(), w.disorder.group.clone())
+    });
+    let notes = |cx: &mut VisualTestContext| rutile.read_with(cx, |w, cx| w.disorder_notes(cx));
+    // Nothing is disordered yet: no groups to show, as the command says.
+    let before = notifications(&mut cx);
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditDisorderGroups), cx));
+    draw(&mut cx);
+    assert!(!rutile.read_with(&cx, |w, _| w.disorder_open));
+    assert_eq!(notifications(&mut cx), before + 1);
+
+    // Rutile opens on O1.
+    type_into(&mut cx, &group, "1");
+    assert_eq!(
+        site_disorder(&rutile, o1, &mut cx),
+        Some(Disorder::new(None, "1".into()))
+    );
+    assert_eq!(steps(&rutile, &mut cx), 1);
+    type_into(&mut cx, &assembly, "A");
+    assert_eq!(
+        site_disorder(&rutile, o1, &mut cx),
+        Some(Disorder::new(Some("A".into()), "1".into()))
+    );
+    assert_eq!(steps(&rutile, &mut cx), 2);
+    // An assembly without a group waits for one, and says so.
+    type_into(&mut cx, &group, "");
+    assert_eq!(steps(&rutile, &mut cx), 2);
+    assert_eq!(notes(&mut cx).len(), 1);
+
+    // Ti1 and O1 differ: the fields are empty, and leaving them so
+    // changes nothing.
+    select(
+        &rutile,
+        Selection::of(&[Target::Site(ti1), Target::Site(o1)]),
+        &mut cx,
+    );
+    assert_eq!(
+        (text(&assembly, &mut cx), text(&group, &mut cx)),
+        (String::new(), String::new())
+    );
+    // One note: which sites the fields change.
+    assert_eq!(notes(&mut cx).len(), 1);
+    type_into(&mut cx, &group, "");
+    assert_eq!(steps(&rutile, &mut cx), 2);
+    // Group 2 for both, in one step; now they share it.
+    type_into(&mut cx, &group, "2");
+    assert_eq!(steps(&rutile, &mut cx), 3);
+    for site in [ti1, o1] {
+        assert_eq!(
+            site_disorder(&rutile, site, &mut cx),
+            Some(Disorder::new(None, "2".into()))
+        );
+    }
+    assert_eq!(text(&group, &mut cx), "2");
+    // A code CIF cannot hold is refused: the field shows the value again.
+    let before = notifications(&mut cx);
+    type_into(&mut cx, &group, "_x");
+    assert_eq!(steps(&rutile, &mut cx), 3);
+    assert!(notifications(&mut cx) > before);
+    assert_eq!(text(&group, &mut cx), "2");
+    // Out of disorder, both at once.
+    rutile.update_in(&mut cx, |workspace, window, cx| {
+        workspace.clear_disorder(window, cx)
+    });
+    draw(&mut cx);
+    assert_eq!(steps(&rutile, &mut cx), 4);
+    assert_eq!(site_disorder(&rutile, ti1, &mut cx), None);
+    assert_eq!(site_disorder(&rutile, o1, &mut cx), None);
+    assert_eq!(text(&group, &mut cx), "");
+
+    focus_workspace(&rutile, &mut cx);
+    cx.simulate_keystrokes("secondary-z");
+    draw(&mut cx);
+    assert_eq!(text(&group, &mut cx), "2");
+}
+
+/// Rutile's O1 split over two positions along its mirror: O1 in group 1 and
+/// O1B in group 2 of assembly A, half occupied each.
+fn split_rutile() -> mw_crystal::Structure {
+    use mw_crystal::{Disorder, Measured, Occupant, Site, Species};
+    let mut structure = mw_crystal::sample::load(SampleKey::Rutile).structure;
+    let disorder = |group: &str| Some(Disorder::new(Some("A".into()), group.into()));
+    structure.sites[1].disorder = disorder("1");
+    structure.sites[1].occupants[0].occupancy = Measured::exact(0.5);
+    let occupant = Occupant::new("O1B", Species::element("O"), Measured::exact(0.5));
+    let mut site = Site::new(SiteId(3), [0.29, 0.29, 0.0], vec![occupant]);
+    site.disorder = disorder("2");
+    structure.sites.push(site);
+    structure
+}
+
+/// Milestone M17: the viewport shows one group of an assembly, or all;
+/// the choice is view state, saved with the view, and holds through edits:
+/// a group an edit empties shows the whole assembly until undone.
+#[gpui_kit::test]
+fn one_group_of_each_assembly_can_be_shown(cx: &mut TestAppContext) {
+    use mw_crystal::Disorder;
+    let (split, mut cx) = open_structure(cx, split_rutile());
+    let o1b = SiteId(3);
+    let all = shown_atoms(&split, &mut cx);
+    assert!(all.iter().any(|a| a.site == o1b));
+    assert!(split.read_with(&cx, |w, _| w.has_disorder_groups()));
+    cx.update(|window, cx| window.dispatch_action(Box::new(crate::EditDisorderGroups), cx));
+    draw(&mut cx);
+    assert!(split.read_with(&cx, |w, _| w.disorder_open));
+
+    split.update(&mut cx, |workspace, cx| {
+        workspace.show_disorder_group(Some("A"), Some("1"), cx)
+    });
+    draw(&mut cx);
+    let shown = shown_atoms(&split, &mut cx);
+    assert!(shown.iter().all(|a| a.site != o1b));
+    // O1B's four atoms, two of them at z = 0 also at z = 1.
+    assert_eq!(shown.len(), all.len() - 6);
+    assert_eq!(steps(&split, &mut cx), 0);
+    let view = cx.update(|_, cx| split.read(cx).view(cx));
+    assert_eq!(view.disorder_groups.len(), 1);
+
+    // Group 1 emptied: the assembly shows everything, until undone.
+    split.update_in(&mut cx, |workspace, window, cx| {
+        let disorder = Some(Disorder::new(Some("A".into()), "3".into()));
+        workspace.set_disorder(&[SiteId(2)], disorder, window, cx)
+    });
+    draw(&mut cx);
+    assert_eq!(shown_atoms(&split, &mut cx).len(), all.len());
+    focus_workspace(&split, &mut cx);
+    cx.simulate_keystrokes("secondary-z");
+    draw(&mut cx);
+    assert_eq!(shown_atoms(&split, &mut cx).len(), all.len() - 6);
+
+    // All again, and back to group 1 from the saved view.
+    split.update(&mut cx, |workspace, cx| {
+        workspace.show_disorder_group(Some("A"), None, cx)
+    });
+    draw(&mut cx);
+    assert_eq!(shown_atoms(&split, &mut cx).len(), all.len());
+    split.update(&mut cx, |workspace, cx| workspace.set_view(&view, cx));
+    draw(&mut cx);
+    assert_eq!(shown_atoms(&split, &mut cx).len(), all.len() - 6);
+}
