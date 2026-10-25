@@ -44,6 +44,11 @@ pub struct EntryView {
     /// (crystallography design §5.7). Since `view.json` version 4.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planes: Vec<Plane>,
+    /// The group shown of each disorder assembly a group was chosen for
+    /// (crystallography design §4.5); the others show all their groups.
+    /// Since `view.json` version 5.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disorder_groups: Vec<DisorderGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<PanelTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,6 +69,7 @@ impl EntryView {
             polyhedron_centers: None,
             ellipsoid_probability: None,
             planes: Vec::new(),
+            disorder_groups: Vec::new(),
             panel,
             panel_open,
         }
@@ -76,6 +82,11 @@ impl EntryView {
 
     pub fn with_planes(mut self, planes: Vec<Plane>) -> Self {
         self.planes = planes;
+        self
+    }
+
+    pub fn with_disorder_groups(mut self, groups: Vec<DisorderGroup>) -> Self {
+        self.disorder_groups = groups;
         self
     }
 
@@ -112,6 +123,22 @@ impl Plane {
             position,
             color,
         }
+    }
+}
+
+/// The group of a disorder assembly the view shows; `assembly` is `None` for
+/// the sites that leave it out (crystallography design §4.5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DisorderGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<String>,
+    pub group: String,
+}
+
+impl DisorderGroup {
+    pub fn new(assembly: Option<String>, group: String) -> Self {
+        Self { assembly, group }
     }
 }
 

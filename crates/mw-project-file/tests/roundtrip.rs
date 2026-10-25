@@ -12,10 +12,10 @@ use mw_crystal::{
     Structure,
 };
 use mw_project_file::{
-    Camera, Derived, DisplayModel, DisplayRange, Entry, EntryId, EntryKind, EntryView, Import,
-    Manifest, Operation, PanelTab, Provenance, ReadError, Save, SaveError, Sha256, Source,
-    SourceFormat, SphereCenter, StructureFile, Timestamp, VERSION, ViewState, read_manifest, save,
-    structure_sha256, write_view,
+    Camera, Derived, DisorderGroup, DisplayModel, DisplayRange, Entry, EntryId, EntryKind,
+    EntryView, Import, Manifest, Operation, PanelTab, Provenance, ReadError, Save, SaveError,
+    Sha256, Source, SourceFormat, SphereCenter, StructureFile, Timestamp, VERSION, ViewState,
+    read_manifest, save, structure_sha256, write_view,
 };
 
 /// The import fixtures of `mw-crystal-io`.
@@ -507,7 +507,7 @@ fn unreadable_view_state_is_dropped() {
     assert!(dir.read_view().is_some());
     let view = path.join("view.json");
     let text = fs::read_to_string(&view).unwrap();
-    fs::write(&view, text.replace("\"version\": 4", "\"version\": 5")).unwrap();
+    fs::write(&view, text.replace("\"version\": 5", "\"version\": 6")).unwrap();
     assert_eq!(dir.read_view(), None);
     fs::write(&view, "{").unwrap();
     assert_eq!(dir.read_view(), None);
@@ -547,7 +547,9 @@ fn version_1_view_state_reads_with_the_default_range() {
     assert_eq!(saved.display_range, None);
     assert_eq!(saved.polyhedron_centers, None);
     assert_eq!(saved.ellipsoid_probability, None);
-    // Written back as version 4, ranges, polyhedra and ellipsoids included.
+    assert!(saved.disorder_groups.is_empty());
+    // Written back as version 5, ranges, polyhedra, ellipsoids and disorder
+    // groups included.
     let range = DisplayRange::Sphere {
         center: SphereCenter::Point([0.5, 0.25, 0.0]),
         radius: 4.0,
@@ -556,12 +558,16 @@ fn version_1_view_state_reads_with_the_default_range() {
     let mut saved = saved
         .with_display_range(range)
         .with_polyhedron_centers(vec!["Zn".into(), "Si".into(), "Zn".into()])
-        .with_ellipsoid_probability(0.3);
+        .with_ellipsoid_probability(0.3)
+        .with_disorder_groups(vec![
+            DisorderGroup::new(Some("A".into()), "2".into()),
+            DisorderGroup::new(None, "1".into()),
+        ]);
     saved.display_model = Some(DisplayModel::Ellipsoids);
     view.entries.insert(entry, saved);
     write_view(&path, &view).unwrap();
     let text = fs::read_to_string(path.join("view.json")).unwrap();
-    assert!(text.contains("\"version\": 4"), "{text}");
+    assert!(text.contains("\"version\": 5"), "{text}");
     assert!(
         text.contains(r#""display_model": "ellipsoids""#)
             && text.contains(r#""ellipsoid_probability": 0.3"#),
@@ -575,6 +581,11 @@ fn version_1_view_state_reads_with_the_default_range() {
     );
     assert!(
         text.contains(r#""display_range": {"#) && text.contains(r#""point": ["#),
+        "{text}"
+    );
+    // The unnamed assembly has no `assembly`.
+    assert!(
+        compact.contains(r#""disorder_groups":[{"assembly":"A","group":"2"},{"group":"1"}]"#),
         "{text}"
     );
     assert_eq!(dir.read_view(), Some(view));

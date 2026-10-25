@@ -12,8 +12,9 @@
 //! [`DisplayRange`] chooses the part of the crystal the view shows, a block
 //! of cells or a sphere, and gives its atoms and bonds ([`Displayed`]); in
 //! the polyhedra model also the coordination [`Polyhedron`]s of the centers
-//! [`PolyhedronCenters`] chooses. A [`LatticePlane`] of the family (hkl)
-//! gives its spacing and the polygon where it cuts the display range;
+//! [`PolyhedronCenters`] chooses; [`ShownGroups`] leaves out disorder
+//! groups. A [`LatticePlane`] of the family (hkl) gives its spacing, the
+//! polygon where it cuts the display range and the points clicked on it;
 //! [`Displacements`] give each atom's displacement ellipsoid at a
 //! probability.
 //!
@@ -118,7 +119,8 @@ pub use derived::{
 };
 pub use displacement::{DEFAULT_PROBABILITY, Displacement, Displacements, probability_scale};
 pub use display::{
-    DisplayAtom, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS, SphereCenter,
+    DisorderAssembly, DisplayAtom, DisplayRange, DisplayRangeError, Displayed, MAX_DISPLAY_ATOMS,
+    ShownGroups, SphereCenter, disorder_assemblies,
 };
 pub use document::{Agent, Annotation, Checkpoint, Command, CrystalDocument, Outcome};
 pub use edit::{

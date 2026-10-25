@@ -155,12 +155,21 @@ toolbar:
   move_tooltip:
     en: Drag atoms to move their sites
     zh-CN: 拖动原子来移动位点
+  add:
+    en: Add
+    zh-CN: 添加
+  add_tooltip:
+    en: Click a lattice plane to add a site there
+    zh-CN: 点击晶面，在那里添加位点
   planes:
     en: Planes…
     zh-CN: 晶面…
   display_range:
     en: Display range…
     zh-CN: 显示范围…
+  disorder:
+    en: Disorder…
+    zh-CN: 无序…
   reset_view:
     en: Reset view
     zh-CN: 重置视图
@@ -314,6 +323,30 @@ panel:
     add_occupant:
       en: Add mixed occupant…
       zh-CN: 添加混合占位…
+    disorder_assembly:
+      en: Disorder assembly
+      zh-CN: 无序组合
+    disorder_group:
+      en: Disorder group
+      zh-CN: 无序组
+    disorder_several:
+      en: Several values
+      zh-CN: 多个值
+    disorder_needs_group:
+      en: Enter a group as well; an assembly alone does not count.
+      zh-CN: 填上组才生效。
+    disorder_applies:
+      en: "Applies to the %{count} selected sites: %{labels}."
+      zh-CN: "应用到选中的 %{count} 个位点：%{labels}。"
+    disorder_applies_many:
+      en: "Applies to the %{count} selected sites: %{labels} and %{rest} more."
+      zh-CN: "应用到选中的 %{count} 个位点：%{labels} 等另外 %{rest} 个。"
+    disorder_negative:
+      en: Negative groups are kept but not yet read as SHELX does (an alternative to the site's own images).
+      zh-CN: 负组照常保存，但还不按 SHELX 的意思处理（与自己的对称像互为替代）。
+    clear_disorder:
+      en: Remove disorder
+      zh-CN: 取消无序
   sites:
     title:
       en: Asymmetric unit
@@ -330,6 +363,9 @@ panel:
     row_without_wyckoff:
       en: "%{element} · %{count} atoms"
       zh-CN: "%{element} · %{count} 个原子"
+    row_disorder:
+      en: "%{row} · disorder %{code}"
+      zh-CN: "%{row} · 无序 %{code}"
     symmetric_hint:
       en: In symmetry mode, editing a site changes all of its equivalent atoms.
       zh-CN: 对称模式下，编辑一个位点会同时改变它的全部等效原子。
@@ -628,6 +664,9 @@ command:
   toggle_move_atoms:
     en: Move atoms
     zh-CN: 移动原子
+  toggle_add_on_planes:
+    en: Add sites on lattice planes
+    zh-CN: 在晶面上添加位点
   toggle_measure:
     en: Measure
     zh-CN: 测量
@@ -658,6 +697,9 @@ command:
   display_range:
     en: Display range…
     zh-CN: 显示范围…
+  disorder_groups:
+    en: Disorder groups shown…
+    zh-CN: 无序组的显示…
   reset_view:
     en: Reset view
     zh-CN: 重置视图
@@ -932,6 +974,9 @@ edit:
     short_contact:
       en: "Atoms of %{a} and %{b} are only %{distance} apart."
       zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance}。"
+    coincident:
+      en: "Atoms of %{a} and %{b} are only %{distance} apart: they nearly coincide and belong on one site as mixed occupants. To merge them, delete one site and add its element to the other."
+      zh-CN: "%{a} 与 %{b} 的原子相距仅 %{distance}，几乎重合，应合并成一个位点上的混合占位。要合并，删除其中一个位点，再把它的元素作为占位者加到另一个上。"
     close_images:
       en: "Equivalent atoms of %{label} are only %{distance} apart."
       zh-CN: "%{label} 的等效原子之间相距仅 %{distance}。"
@@ -1285,3 +1330,41 @@ supercell:
   failed:
     en: "Couldn’t make the supercell: %{reason}"
     zh-CN: "无法生成超胞：%{reason}"
+add:
+  element:
+    en: Element
+    zh-CN: 元素
+  prompt:
+    en: Click a point on a lattice plane to add a site there; near a special position it snaps onto it.
+    zh-CN: 点击晶面上的一点添加位点，靠近特殊位置时吸附过去。
+  no_planes:
+    en: Draw a lattice plane first with Planes… in the toolbar.
+    zh-CN: 先用工具条的「晶面…」画一个晶面。
+  no_element:
+    en: Choose an element to add.
+    zh-CN: 请选择要添加的元素。
+  hover:
+    en: "(%{position}) · %{form} · %{count} atoms"
+    zh-CN: "(%{position}) · %{form} · %{count} 个原子"
+  hover_snaps:
+    en: "(%{position}) · snaps onto %{form} · %{count} atoms"
+    zh-CN: "(%{position}) · 吸附到 %{form} · %{count} 个原子"
+disorder:
+  title:
+    en: Disorder
+    zh-CN: 无序
+  all:
+    en: All
+    zh-CN: 全部
+  assembly:
+    en: "Assembly %{name}"
+    zh-CN: "组合 %{name}"
+  unnamed:
+    en: Unnamed assembly
+    zh-CN: 未命名的组合
+  hint:
+    en: Ordered sites and group 0 are always shown.
+    zh-CN: 有序部分和 0 组的位点总是显示。
+  none:
+    en: This structure has no disordered sites.
+    zh-CN: 这个结构没有无序的位点。

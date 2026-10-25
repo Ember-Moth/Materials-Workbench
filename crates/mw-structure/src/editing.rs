@@ -201,6 +201,18 @@ pub(crate) fn warning_text(warning: &EditWarning, structure: &Structure) -> Shar
                 .join(&tr!("dialog.list_separator")),
             sum = format::occupancy(*sum)
         ),
+        // Within the position tolerance, the importer would have made them
+        // one site with mixed occupants (crystallography design §7.2).
+        EditWarning::ShortContact {
+            site,
+            other,
+            distance,
+        } if *distance < structure.tolerances.position => tr!(
+            "edit.warning.coincident",
+            a = site_label(structure, *site),
+            b = site_label(structure, *other),
+            distance = format::distance(*distance)
+        ),
         EditWarning::ShortContact {
             site,
             other,
@@ -399,6 +411,9 @@ impl StructureWorkspace {
         });
         self.selection = self.selection.remap(ids);
         self.display_range = self.display_range.remap(ids, center);
+        // The disorder popover has nothing to offer once no site is
+        // disordered.
+        self.disorder_open &= self.has_disorder_groups();
         self.sync_cell_inputs(window, cx);
         self.sync_site_inputs(window, cx);
         self.refresh_scene(cx);
@@ -800,5 +815,50 @@ impl StructureWorkspace {
             label: None,
         };
         self.edit(edit, window, cx).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mw_crystal::EditWarning;
+    use mw_crystal::sample::{self, SampleKey};
+
+    use super::warning_text;
+
+    /// Atoms within the position tolerance nearly coincide: the warning
+    /// says they belong on one site and how to merge them (design §7.2).
+    #[test]
+    fn nearly_coincident_sites_are_told_to_merge() {
+        let rutile = sample::load(SampleKey::Rutile).structure;
+        let [ti, o] = [0, 1].map(|i| rutile.sites[i].id);
+        let warning = |distance| {
+            warning_text(
+                &EditWarning::ShortContact {
+                    site: ti,
+                    other: o,
+                    distance,
+                },
+                &rutile,
+            )
+        };
+        let near = warning(0.004);
+        assert_eq!(
+            near,
+            tr!(
+                "edit.warning.coincident",
+                a = "Ti1",
+                b = "O1",
+                distance = "0.004 Å"
+            )
+        );
+        assert_eq!(
+            warning(0.3),
+            tr!(
+                "edit.warning.short_contact",
+                a = "Ti1",
+                b = "O1",
+                distance = "0.300 Å"
+            )
+        );
     }
 }

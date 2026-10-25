@@ -72,8 +72,8 @@ pub struct HighlightRing {
 
 /// A translucent convex polyhedron in one color, such as a coordination
 /// polyhedron, or a flat polygon. Drawn after the opaque scene, sorted back
-/// to front, seen through and seen through again; it hides nothing and is
-/// not pickable, so clicks reach the atoms behind and inside it.
+/// to front, seen through and seen through again; it hides nothing, and
+/// unless it is `pickable` clicks reach the atoms behind and inside it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Polyhedron {
     /// Corners in Å.
@@ -84,6 +84,10 @@ pub struct Polyhedron {
     pub triangles: Vec<[u32; 3]>,
     /// Linear RGB and opacity.
     pub color: [f32; 4],
+    /// Whether picks land on it, as `Pick::Polygon` with its index in
+    /// [`Scene::polyhedra`]: it is drawn into the ID pass like the opaque
+    /// scene, hiding what is behind it from picks.
+    pub pickable: bool,
 }
 
 /// Everything drawn in one frame, apart from highlights.
@@ -265,6 +269,7 @@ pub fn synthetic_polyhedra(spheres: &[SphereInstance], every: usize) -> Vec<Poly
                 vertices,
                 triangles: TRIANGLES.to_vec(),
                 color: [r, g, b, 0.5],
+                pickable: false,
             }
         })
         .collect()
@@ -359,6 +364,7 @@ mod tests {
                 vertices: vec![[0.0; 3], [6.0, 0.0, 8.0], [6.0, 0.0, 0.0]],
                 triangles: vec![[0, 1, 2]],
                 color: [1.0, 0.0, 0.0, 0.5],
+                pickable: false,
             }],
             ..Scene::default()
         };

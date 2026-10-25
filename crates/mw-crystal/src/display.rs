@@ -1,11 +1,14 @@
 //! The display range (design §5.5): which part of the infinite crystal the
 //! view shows, a block of unit cells or the atoms within a distance of a
 //! center, and the atoms and bonds it shows. It is view state: it changes no
-//! structure and is not undone.
+//! structure and is not undone. So is the choice of which group of each
+//! disorder assembly it shows (design §4.5).
 
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
-use crate::{AtomFate, AtomRef, Bond, Derived, IdMap, Orbit, Polyhedron, Structure, bonds};
+use crate::{AtomFate, AtomRef, Bond, Derived, IdMap, Orbit, Polyhedron, SiteId, Structure, bonds};
 
 /// Atoms beyond which a range is refused: the viewport draws 100 000 atoms
 /// with their bonds at about 30 frames a second (viewport design §8.2).
@@ -100,17 +103,19 @@ pub struct Displayed {
 }
 
 impl Displayed {
-    /// The atoms of the structure that `range` shows, and the bonds of the
-    /// crystal (once per unit cell, design §5.3) between them. A sphere
-    /// around an atom the structure does not have shows nothing; ranges are
-    /// checked with [`DisplayRange::check`] first.
+    /// The atoms of the structure that `range` shows, without the sites of
+    /// the disorder groups `groups` leaves out, and the bonds of the crystal
+    /// (once per unit cell, design §5.3) between them. A sphere around an
+    /// atom the structure does not have shows nothing; ranges are checked
+    /// with [`DisplayRange::check`] first.
     pub fn new(
         structure: &Structure,
         orbits: &[Orbit],
         bonds: &[Bond],
         range: &DisplayRange,
+        groups: &ShownGroups,
     ) -> Self {
-        let atoms = atoms(structure, orbits, range);
+        let atoms = atoms(structure, orbits, range, &groups.hidden_sites(structure));
         let bonds = bonds::display_bonds(&atoms, bonds);
         Self {
             atoms,
@@ -121,9 +126,140 @@ impl Displayed {
 }
 
 impl Derived {
-    /// What `range` shows of the structure these data were derived from.
+    /// What `range` shows of the structure these data were derived from,
+    /// every disorder group included.
     pub fn display(&self, structure: &Structure, range: &DisplayRange) -> Displayed {
-        Displayed::new(structure, &self.orbits, &self.bonds, range)
+        Displayed::new(
+            structure,
+            &self.orbits,
+            &self.bonds,
+            range,
+            &ShownGroups::default(),
+        )
+    }
+}
+
+/// Which group of each disorder assembly the view shows (design §4.5): an
+/// assembly it names shows only that group, besides group 0, the ordered
+/// part; the others show all their groups. View state, like the display
+/// range. The unnamed assembly is `None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShownGroups(BTreeMap<Option<String>, String>);
+
+impl ShownGroups {
+    /// Shows only `group` of `assembly`, or all its groups for `None`.
+    pub fn set(&mut self, assembly: Option<&str>, group: Option<&str>) {
+        let assembly = assembly.map(str::to_string);
+        match group {
+            Some(group) => {
+                self.0.insert(assembly, group.to_string());
+            }
+            None => {
+                self.0.remove(&assembly);
+            }
+        }
+    }
+
+    /// The group chosen for `assembly`, whether or not the structure still
+    /// has it.
+    pub fn chosen(&self, assembly: Option<&str>) -> Option<&str> {
+        self.0
+            .get(&assembly.map(str::to_string))
+            .map(String::as_str)
+    }
+
+    /// The group `assembly` shows of `structure`: the one chosen while the
+    /// structure has a site in it; `None` for all, as when an edit moved
+    /// the chosen group's sites elsewhere.
+    pub fn shown(&self, structure: &Structure, assembly: Option<&str>) -> Option<&str> {
+        let group = self.chosen(assembly)?;
+        structure
+            .sites
+            .iter()
+            .filter_map(|site| site.disorder.as_ref())
+            .any(|d| d.assembly.as_deref() == assembly && d.group == group)
+            .then_some(group)
+    }
+
+    /// The choices made, assembly by assembly.
+    pub fn choices(&self) -> impl Iterator<Item = (Option<&str>, &str)> {
+        self.0
+            .iter()
+            .map(|(assembly, group)| (assembly.as_deref(), group.as_str()))
+    }
+
+    /// Whether no group was chosen: every site is shown.
+    pub fn is_all(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The sites of `structure` the view leaves out: in an assembly that
+    /// [shows](Self::shown) one group, those of its other groups but 0.
+    pub fn hidden_sites(&self, structure: &Structure) -> HashSet<SiteId> {
+        if self.is_all() {
+            return HashSet::new();
+        }
+        let shown: BTreeMap<Option<&str>, &str> = self
+            .choices()
+            .filter_map(|(assembly, _)| Some((assembly, self.shown(structure, assembly)?)))
+            .collect();
+        structure
+            .sites
+            .iter()
+            .filter(|site| {
+                site.disorder.as_ref().is_some_and(|d| {
+                    d.group != "0"
+                        && shown
+                            .get(&d.assembly.as_deref())
+                            .is_some_and(|group| *group != d.group)
+                })
+            })
+            .map(|site| site.id)
+            .collect()
+    }
+}
+
+/// A disorder assembly of a structure and its groups, for choosing which
+/// one the view shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DisorderAssembly {
+    /// `None` for the sites that leave the assembly out.
+    pub assembly: Option<String>,
+    /// The groups other than 0, numbers by value first, then the others by
+    /// their text.
+    pub groups: Vec<String>,
+}
+
+/// The disorder assemblies of `structure` with a group other than 0, the
+/// unnamed one first, then by name.
+pub fn disorder_assemblies(structure: &Structure) -> Vec<DisorderAssembly> {
+    let mut assemblies: BTreeMap<Option<String>, Vec<String>> = BTreeMap::new();
+    for disorder in structure.sites.iter().filter_map(|s| s.disorder.as_ref()) {
+        if disorder.group == "0" {
+            continue;
+        }
+        let groups = assemblies.entry(disorder.assembly.clone()).or_default();
+        if !groups.contains(&disorder.group) {
+            groups.push(disorder.group.clone());
+        }
+    }
+    assemblies
+        .into_iter()
+        .map(|(assembly, mut groups)| {
+            groups.sort_by(|a, b| group_order(a, b));
+            DisorderAssembly { assembly, groups }
+        })
+        .collect()
+}
+
+/// Group codes in reading order: whole numbers by value, before other text.
+fn group_order(a: &str, b: &str) -> Ordering {
+    match (a.parse::<i64>(), b.parse::<i64>()) {
+        (Ok(x), Ok(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => a.cmp(b),
     }
 }
 
@@ -276,18 +412,20 @@ impl DisplayRange {
 
 /// The atoms `range` shows: for a block of cells, each orbit member once
 /// per cell plus its boundary images; for a sphere, every copy of a member
-/// within the radius (and the position tolerance) of the center.
+/// within the radius (and the position tolerance) of the center. None of
+/// the `hidden` sites.
 pub(crate) fn atoms(
     structure: &Structure,
     orbits: &[Orbit],
     range: &DisplayRange,
+    hidden: &HashSet<SiteId>,
 ) -> Vec<DisplayAtom> {
     let lattice = &structure.lattice;
     let tolerance = fractional_tolerance(structure);
     let reciprocal = lattice.params().reciprocal_lengths();
     let center = range.center(orbits);
     let mut atoms = Vec::new();
-    for orbit in orbits {
+    for orbit in orbits.iter().filter(|orbit| !hidden.contains(&orbit.site)) {
         let Some(site) = structure.site(orbit.site) else {
             continue;
         };
@@ -580,5 +718,159 @@ mod tests {
         let block = cells([2, 2, 2], true);
         assert_eq!(block.remap(&applied.ids, None), block);
         assert_eq!(block.fixed(&sample.derived.orbits), block);
+    }
+
+    /// A Si with three O in each of two groups of assembly A and an ordered
+    /// C in its group 0; an unnamed assembly of two H; assembly B with
+    /// groups 10, 2 and a, of He far from the rest; and an ordered N.
+    fn disordered() -> Structure {
+        let site = |id, label: &str, element: &str, position, disorder: Option<(&str, &str)>| {
+            let site = crate::Site::single(id, label, element, position);
+            match disorder {
+                Some((assembly, group)) => site.with_disorder(crate::Disorder::new(
+                    (!assembly.is_empty()).then(|| assembly.to_string()),
+                    group.to_string(),
+                )),
+                None => site,
+            }
+        };
+        let a = Some(("A", "1"));
+        let b = Some(("A", "2"));
+        Structure::new(
+            Lattice::new(CellParams::new(5.0, 5.0, 5.0, 90.0, 90.0, 90.0)),
+            Symmetry::p1(),
+            vec![
+                site(1, "Si1", "Si", [0.5, 0.5, 0.5], None),
+                site(2, "O1A", "O", [0.5, 0.5, 0.82], a),
+                site(3, "O2A", "O", [0.82, 0.5, 0.5], a),
+                site(4, "O3A", "O", [0.5, 0.82, 0.5], a),
+                site(5, "O1B", "O", [0.5, 0.5, 0.18], b),
+                site(6, "O2B", "O", [0.18, 0.5, 0.5], b),
+                site(7, "O3B", "O", [0.5, 0.18, 0.5], b),
+                site(8, "C1", "C", [0.1, 0.1, 0.1], Some(("A", "0"))),
+                site(9, "H1", "H", [0.9, 0.9, 0.9], Some(("", "1"))),
+                site(10, "H2", "H", [0.9, 0.9, 0.7], Some(("", "2"))),
+                site(11, "He1", "He", [0.2, 0.8, 0.2], Some(("B", "10"))),
+                site(12, "He2", "He", [0.2, 0.8, 0.35], Some(("B", "a"))),
+                site(13, "He3", "He", [0.2, 0.65, 0.2], Some(("B", "2"))),
+                site(14, "N1", "N", [0.25, 0.25, 0.95], None),
+            ],
+        )
+    }
+
+    fn sites(ids: &[u32]) -> HashSet<SiteId> {
+        ids.iter().map(|&id| SiteId(id)).collect()
+    }
+
+    /// The assemblies list their groups but 0, numbers by value first; the
+    /// unnamed assembly comes first.
+    #[test]
+    fn assemblies_list_their_groups() {
+        let listed: Vec<(Option<String>, Vec<String>)> = disorder_assemblies(&disordered())
+            .into_iter()
+            .map(|a| (a.assembly, a.groups))
+            .collect();
+        let names = |groups: &[&str]| groups.iter().map(|g| g.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            listed,
+            [
+                (None, names(&["1", "2"])),
+                (Some("A".to_string()), names(&["1", "2"])),
+                (Some("B".to_string()), names(&["2", "10", "a"])),
+            ]
+        );
+        let ordered = sample::load(SampleKey::Rutile).structure;
+        assert!(disorder_assemblies(&ordered).is_empty());
+    }
+
+    /// Choosing a group leaves out the other groups of its assembly but
+    /// not group 0, other assemblies or ordered sites; a group the
+    /// structure no longer has shows the whole assembly.
+    #[test]
+    fn chosen_groups_hide_the_others() {
+        let structure = disordered();
+        let mut groups = ShownGroups::default();
+        assert!(groups.is_all());
+        assert!(groups.hidden_sites(&structure).is_empty());
+
+        groups.set(Some("A"), Some("1"));
+        assert_eq!(groups.hidden_sites(&structure), sites(&[5, 6, 7]));
+        groups.set(None, Some("2"));
+        assert_eq!(groups.hidden_sites(&structure), sites(&[5, 6, 7, 9]));
+        assert_eq!(groups.chosen(None), Some("2"));
+        assert_eq!(
+            groups.choices().collect::<Vec<_>>(),
+            [(None, "2"), (Some("A"), "1")]
+        );
+        groups.set(Some("B"), Some("a"));
+        assert_eq!(
+            groups.hidden_sites(&structure),
+            sites(&[5, 6, 7, 9, 11, 13])
+        );
+        groups.set(Some("B"), None);
+        groups.set(None, None);
+        assert_eq!(groups.hidden_sites(&structure), sites(&[5, 6, 7]));
+
+        // Group 1 of A moved to group 3: A shows everything until it comes
+        // back.
+        let mut edited = structure.clone();
+        for site in edited
+            .sites
+            .iter_mut()
+            .filter(|s| (2..=4).contains(&s.id.0))
+        {
+            site.disorder = Some(crate::Disorder::new(Some("A".into()), "3".into()));
+        }
+        assert_eq!(groups.shown(&edited, Some("A")), None);
+        assert!(groups.hidden_sites(&edited).is_empty());
+        assert_eq!(groups.chosen(Some("A")), Some("1"));
+        assert_eq!(groups.shown(&structure, Some("A")), Some("1"));
+    }
+
+    /// Hidden sites have no atoms, so no bonds; in the polyhedra model the
+    /// center loses the ligands of the hidden group.
+    #[test]
+    fn hidden_groups_are_not_drawn() {
+        let structure = disordered();
+        let derived = Derived::compute(&structure);
+        let mut groups = ShownGroups::default();
+        groups.set(Some("A"), Some("2"));
+        let si_bonds = |shown: &Displayed| {
+            let si = shown.atoms.iter().position(|a| a.element == "Si").unwrap();
+            shown.bonds.iter().filter(|b| b.contains(&si)).count()
+        };
+        let range = DisplayRange::default();
+        let all = derived.display(&structure, &range);
+        let some = Displayed::new(&structure, &derived.orbits, &derived.bonds, &range, &groups);
+        assert_eq!(all.atoms.len(), 14);
+        assert_eq!(some.atoms.len(), 11);
+        assert!(some.atoms.iter().all(|a| !(2..=4).contains(&a.atom.site.0)));
+        assert_eq!((si_bonds(&all), si_bonds(&some)), (6, 3));
+
+        let centers = crate::PolyhedronCenters::Default;
+        let polyhedra = |groups: &ShownGroups| {
+            let shown = Displayed::with_polyhedra(
+                &structure,
+                &derived.orbits,
+                &derived.bonds,
+                &range,
+                &centers,
+                groups,
+            );
+            assert!(
+                shown
+                    .atoms
+                    .iter()
+                    .all(|a| { !groups.hidden_sites(&structure).contains(&a.atom.site) })
+            );
+            shown
+                .polyhedra
+                .iter()
+                .map(|p| p.ligands.len())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(polyhedra(&ShownGroups::default()), [6]);
+        // A flat triangle of the three O of group 2.
+        assert_eq!(polyhedra(&groups), [3]);
     }
 }

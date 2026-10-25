@@ -40,3 +40,34 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(shade(in.color.rgb, normal), in.color.a);
 }
+
+// Pickable polygons in the ID pass: one triangle per instance with the ID
+// of its polygon, depth-tested and writing depth like the opaque scene, so
+// that it hides what is behind it from picks and what is in front hides it.
+
+struct IdInstance {
+    @location(0) a: vec4<f32>,
+    @location(1) b: vec4<f32>,
+    @location(2) c: vec4<f32>,
+    // The ID in x.
+    @location(3) id: vec4<u32>,
+};
+
+struct IdVsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) id: u32,
+};
+
+@vertex
+fn vs_id(@builtin(vertex_index) vertex_index: u32, instance: IdInstance) -> IdVsOut {
+    var corners = array<vec3<f32>, 3>(instance.a.xyz, instance.b.xyz, instance.c.xyz);
+    var out: IdVsOut;
+    out.position = camera.proj * camera.view * vec4<f32>(corners[vertex_index], 1.0);
+    out.id = instance.id.x;
+    return out;
+}
+
+@fragment
+fn fs_id(in: IdVsOut) -> @location(0) u32 {
+    return in.id;
+}

@@ -32,10 +32,11 @@ const TARGET_SIZES_KEPT: usize = 2;
 const PICK_RADIUS: u32 = 4;
 
 // Must match the constants in common.wgsl.
-const SPHERE_ID: u32 = 1 << 30;
-const BOND_ID: u32 = 2 << 30;
-const ELLIPSOID_ID: u32 = 3 << 30;
-const ID_INDEX_MASK: u32 = (1 << 30) - 1;
+const SPHERE_ID: u32 = 1 << 29;
+const BOND_ID: u32 = 2 << 29;
+const ELLIPSOID_ID: u32 = 3 << 29;
+const POLYGON_ID: u32 = 4 << 29;
+const ID_INDEX_MASK: u32 = (1 << 29) - 1;
 
 const SPHERE_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
@@ -48,6 +49,8 @@ const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 const TRIANGLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+const ID_TRIANGLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x4];
 
 /// One face of a polyhedron as uploaded: its corners in Å (xyz) and its
 /// polyhedron's linear RGB and opacity.
@@ -58,6 +61,17 @@ struct TriangleInstance {
     b: [f32; 4],
     c: [f32; 4],
     color: [f32; 4],
+}
+
+/// One triangle of a pickable polygon as uploaded for the ID pass: its
+/// corners in Å (xyz) and its polygon's pick ID (x of `id`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct IdTriangle {
+    a: [f32; 4],
+    b: [f32; 4],
+    c: [f32; 4],
+    id: [u32; 4],
 }
 
 #[derive(Debug)]
@@ -112,6 +126,8 @@ pub enum Pick {
     /// ([`Scene::atom`]).
     Sphere(usize),
     Bond(usize),
+    /// The index in [`Scene::polyhedra`] of a pickable polygon.
+    Polygon(usize),
 }
 
 impl Pick {
@@ -122,6 +138,7 @@ impl Pick {
             SPHERE_ID => Some(Self::Sphere(index)),
             ELLIPSOID_ID => Some(Self::Sphere(spheres + index)),
             BOND_ID => Some(Self::Bond(index)),
+            POLYGON_ID => Some(Self::Polygon(index)),
             _ => None,
         }
     }
@@ -358,11 +375,21 @@ impl Instances {
         })
     }
 
+    /// Draws quads: six vertices per instance.
     fn draw(this: &Option<Self>, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
+        Self::draw_vertices(this, pass, pipeline, 6);
+    }
+
+    fn draw_vertices(
+        this: &Option<Self>,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &wgpu::RenderPipeline,
+        vertices: u32,
+    ) {
         if let Some(instances) = this {
             pass.set_pipeline(pipeline);
             pass.set_vertex_buffer(0, instances.buffer.slice(..));
-            pass.draw(0..6, 0..instances.count);
+            pass.draw(0..vertices, 0..instances.count);
         }
     }
 }
@@ -501,6 +528,33 @@ impl Polyhedra {
     }
 }
 
+/// The triangles of the pickable polygons with their pick IDs. Not cut into
+/// tiles nor sorted: the ID pass tests depth.
+fn id_triangles(scene: &Scene) -> Vec<IdTriangle> {
+    let mut triangles = Vec::new();
+    for (index, polyhedron) in scene.polyhedra.iter().enumerate() {
+        if !polyhedron.pickable || index > ID_INDEX_MASK as usize {
+            continue;
+        }
+        let id = POLYGON_ID | index as u32;
+        let corner = |i: u32| {
+            let [x, y, z] = *polyhedron.vertices.get(i as usize)?;
+            Some([x, y, z, 0.0])
+        };
+        for t in &polyhedron.triangles {
+            if let (Some(a), Some(b), Some(c)) = (corner(t[0]), corner(t[1]), corner(t[2])) {
+                triangles.push(IdTriangle {
+                    a,
+                    b,
+                    c,
+                    id: [id, 0, 0, 0],
+                });
+            }
+        }
+    }
+    triangles
+}
+
 /// Whether every corner of a polyhedron lies in the plane of its first
 /// face, within a millionth of its size.
 fn is_flat(corners: &[Vec3], triangles: &[[Vec3; 3]]) -> bool {
@@ -552,6 +606,7 @@ struct Pipelines {
     sphere_ids: wgpu::RenderPipeline,
     ellipsoid_ids: wgpu::RenderPipeline,
     bond_ids: wgpu::RenderPipeline,
+    polygon_ids: wgpu::RenderPipeline,
 }
 
 /// How one pipeline differs from the others.
@@ -695,6 +750,17 @@ impl Pipelines {
                 depth_write: false,
                 blend: true,
             }),
+            polygon_ids: pipeline(PipelineSpec {
+                label: "polygon ids",
+                module: &polyhedron,
+                vertex: "vs_id",
+                fragment: "fs_id",
+                stride: std::mem::size_of::<IdTriangle>(),
+                attributes: &ID_TRIANGLE_ATTRIBUTES,
+                ids: true,
+                depth_write: true,
+                blend: false,
+            }),
             rings: pipeline(PipelineSpec {
                 label: "highlight rings",
                 vertex: "vs_ring",
@@ -721,6 +787,8 @@ pub struct Renderer {
     bonds: Option<Instances>,
     lines: Option<Instances>,
     polyhedra: Option<Polyhedra>,
+    /// The triangles of the scene's pickable polygons, for the ID pass.
+    polygon_ids: Option<Instances>,
     /// The scene's spheres, which come before its ellipsoids in picks.
     sphere_count: usize,
     rings: Option<Instances>,
@@ -837,6 +905,7 @@ impl Renderer {
             bonds: None,
             lines: None,
             polyhedra: None,
+            polygon_ids: None,
             rings: None,
             scene_generation: 0,
             targets: Vec::new(),
@@ -860,6 +929,7 @@ impl Renderer {
         self.bonds = Instances::upload(&self.device, "bonds", &scene.bonds);
         self.lines = Instances::upload(&self.device, "lines", &scene.lines);
         self.polyhedra = Polyhedra::new(&self.device, scene);
+        self.polygon_ids = Instances::upload(&self.device, "polygon ids", &id_triangles(scene));
         self.rings = None;
         self.scene_generation += 1;
         scene.bounding_radius()
@@ -1035,6 +1105,7 @@ impl Renderer {
             Instances::draw(&self.spheres, &mut pass, &self.pipelines.sphere_ids);
             Instances::draw(&self.ellipsoids, &mut pass, &self.pipelines.ellipsoid_ids);
             Instances::draw(&self.bonds, &mut pass, &self.pipelines.bond_ids);
+            Instances::draw_vertices(&self.polygon_ids, &mut pass, &self.pipelines.polygon_ids, 3);
             targets.drawn = Some(drawn);
         }
 
@@ -1266,6 +1337,7 @@ mod tests {
         assert_eq!(Pick::decode(BOND_ID, 3), Some(Pick::Bond(0)));
         // Ellipsoids follow the spheres.
         assert_eq!(Pick::decode(ELLIPSOID_ID | 2, 3), Some(Pick::Sphere(5)));
+        assert_eq!(Pick::decode(POLYGON_ID | 4, 3), Some(Pick::Polygon(4)));
     }
 
     const SIZE: u32 = 65;
@@ -1526,6 +1598,7 @@ mod tests {
             ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
             color,
+            pickable: false,
         }
     }
 
@@ -1579,6 +1652,40 @@ mod tests {
 
         assert_eq!(pick(&mut renderer, camera, 32, 32), Some(Pick::Sphere(0)));
         assert_eq!(pick(&mut renderer, camera, 12, 32), None);
+    }
+
+    /// A pickable polygon is picked where it shows, by its index among the
+    /// polyhedra: over the background and over the sphere behind it, but
+    /// not where the sphere in front of it is.
+    #[test]
+    fn pickable_polygons_are_picked_where_they_show() {
+        let Some(mut renderer) = renderer() else {
+            return;
+        };
+        let behind = SphereInstance {
+            center_radius: [0.0, 0.0, -1.0, 0.8],
+            color: BLUE,
+        };
+        let in_front = SphereInstance {
+            center_radius: [1.5, 0.0, 2.0, 0.5],
+            color: [0.0, 1.0, 0.0, 1.0],
+        };
+        let clicked_through = square(-3.0, 3.0, [0.0, 0.0, 1.0, 0.5]);
+        let pickable = crate::Polyhedron {
+            pickable: true,
+            ..square(1.0, 2.0, [1.0, 0.0, 0.0, 0.5])
+        };
+        renderer.set_scene(&Scene {
+            spheres: vec![behind, in_front],
+            polyhedra: vec![clicked_through, pickable],
+            ..Scene::default()
+        });
+        let camera = from_front();
+        assert_eq!(pick(&mut renderer, camera, 12, 32), Some(Pick::Polygon(1)));
+        assert_eq!(pick(&mut renderer, camera, 32, 32), Some(Pick::Polygon(1)));
+        assert_eq!(pick(&mut renderer, camera, 52, 32), Some(Pick::Sphere(1)));
+        // Beyond it, nothing: the other square is not pickable.
+        assert_eq!(pick(&mut renderer, camera, 1, 1), None);
     }
 
     /// Faces are blended from the farthest to the nearest whatever their
@@ -1651,6 +1758,7 @@ mod tests {
             ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
             color: [1.0, 0.0, 0.0, 0.5],
+            pickable: false,
         };
         // A blue octahedron around (1.5, 0, 1), where the plane is at
         // z = 1.5: wholly behind it. The plane's triangle there has its

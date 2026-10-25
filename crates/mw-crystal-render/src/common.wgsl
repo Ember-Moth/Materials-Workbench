@@ -11,11 +11,12 @@ struct Camera {
 
 @group(0) @binding(0) var<uniform> camera: Camera;
 
-// Pick IDs: kind in the top two bits, instance index below; 0 is nothing.
-// Must match `PickId` in renderer.rs.
-const SPHERE_ID: u32 = 0x40000000u;
-const BOND_ID: u32 = 0x80000000u;
-const ELLIPSOID_ID: u32 = 0xC0000000u;
+// Pick IDs: kind in the top three bits, instance index below; 0 is
+// nothing. Must match the constants in renderer.rs. Pickable polygons carry
+// their whole ID in the instance.
+const SPHERE_ID: u32 = 0x20000000u;
+const BOND_ID: u32 = 0x40000000u;
+const ELLIPSOID_ID: u32 = 0x60000000u;
 
 struct FsOut {
     @location(0) color: vec4<f32>,
