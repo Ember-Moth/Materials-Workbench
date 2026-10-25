@@ -1,0 +1,200 @@
+# The installers of a release, built on macOS, Windows and Linux by the
+# scripts in packaging/, smoke-tested, and put in a draft GitHub release
+# with their checksums (docs/design/release.md §8). Pushing a tag v<version>
+# starts it; run by hand (workflow_dispatch) it builds and keeps the packages
+# as artifacts only, to try the packaging. Nothing is signed yet (§10).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # As in ci.yml: aws-lc-sys uses the objects it ships with on Windows.
+  AWS_LC_SYS_PREBUILT_NASM: 1
+  # The third-party licenses in every package (release design §7.2).
+  CARGO_ABOUT_VERSION: "0.9.2"
+
+jobs:
+  check:
+    name: Version and changelog
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag, the application and the packages share one version (§2.2).
+      - name: Version
+        id: version
+        run: |
+          version=$(cargo pkgid -p workbench)
+          version=${version##*[#@]}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME, the workspace's version $version."
+            exit 1
+          fi
+
+      - name: Changelog
+        if: github.ref_type == 'tag'
+        run: packaging/release-notes.sh "${{ steps.version.outputs.version }}"
+
+  build:
+    name: Packages (${{ matrix.name }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows
+            os: windows-2025
+            targets: x86_64-pc-windows-msvc
+          # The oldest Ubuntu supported: the executables run on distributions
+          # with its glibc (2.35) or newer.
+          - name: Linux
+            os: ubuntu-22.04
+            targets: x86_64-unknown-linux-gnu
+    env:
+      MW_BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.97 --profile minimal --target ${{ matrix.targets }}
+          rustup default 1.97
+
+      # GPUI's build dependencies as in ci.yml, and dpkg-shlibdeps for the
+      # .deb's dependencies.
+      - name: Install system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev dpkg-dev
+
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Install cargo-about
+        shell: bash
+        run: cargo install cargo-about --locked --features cli --version "$CARGO_ABOUT_VERSION"
+
+      - name: Package
+        if: runner.os != 'Windows'
+        run: packaging/${{ runner.os == 'macOS' && 'macos' || 'linux' }}/package.sh dist
+
+      - name: Package
+        if: runner.os == 'Windows'
+        run: pwsh packaging/windows/package.ps1 -Out dist
+
+      # Each package as a user gets it: unpacked or installed, then run.
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" dist/*.dmg
+          app="$RUNNER_TEMP/dmg/Materials Workbench.app"
+          codesign --verify --strict --deep "$app"
+          packaging/smoke-test.sh "$app/Contents/MacOS/materials-workbench" "$app/Contents/MacOS/mw"
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          tar -xzf dist/mw-*.tar.gz -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP"/mw-*/mw --version
+
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./dist/materials-workbench_*_amd64.deb
+          packaging/smoke-test.sh materials-workbench mw
+          sudo apt-get remove -y materials-workbench
+          tar -xzf dist/materials-workbench-*-linux-x86_64.tar.gz -C "$RUNNER_TEMP"
+          portable=$(echo "$RUNNER_TEMP"/materials-workbench-*-linux-x86_64)
+          packaging/smoke-test.sh "$portable/bin/materials-workbench" "$portable/bin/mw"
+          sh "$portable/install.sh"
+          test -x "$HOME/.local/bin/materials-workbench"
+          grep '^Exec=' "$HOME/.local/share/applications/io.github.ember_moth.MaterialsWorkbench.desktop"
+          sh "$portable/install.sh" --uninstall
+          test ! -e "$HOME/.local/bin/materials-workbench"
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        # `//` keeps Git Bash from taking the installer's switches for paths.
+        run: |
+          pwsh -NoProfile -Command "Expand-Archive -Path (Get-Item dist/Materials-Workbench-*-windows-x64.zip) -DestinationPath '$RUNNER_TEMP\portable'"
+          portable=$(echo "$(cygpath -u "$RUNNER_TEMP")"/portable/Materials-Workbench-*)
+          packaging/smoke-test.sh "$portable/materials-workbench.exe" "$portable/mw.exe"
+          ./dist/Materials-Workbench-*-windows-x64-setup.exe //VERYSILENT //CURRENTUSER //SUPPRESSMSGBOXES //NORESTART
+          installed="$(cygpath -u "$LOCALAPPDATA")/Programs/Materials Workbench"
+          packaging/smoke-test.sh "$installed/materials-workbench.exe" "$installed/mw.exe"
+          # The uninstaller hands over to a copy of itself and returns at once.
+          "$installed/unins000.exe" //VERYSILENT //SUPPRESSMSGBOXES
+          for _ in $(seq 30); do
+            [ -e "$installed/materials-workbench.exe" ] || break
+            sleep 1
+          done
+          test ! -e "$installed/materials-workbench.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: [check, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    # The only job that may write: it creates the release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      # A draft: checked by hand before it is published (§8).
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          packaging/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Materials Workbench $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/*

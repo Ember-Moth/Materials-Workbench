@@ -8950,7 +8950,9 @@ name = "workbench"
 version = "0.0.0"
 dependencies = [
  "dirs 6.0.0",
+ "embed-resource",
  "env_logger",
+ "futures",
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-macos",
@@ -8963,12 +8965,14 @@ dependencies = [
  "mw-project",
  "mw-project-file",
  "mw-structure",
+ "resvg 0.46.0",
  "rmcp",
  "rust-i18n",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

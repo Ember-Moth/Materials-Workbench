@@ -102,8 +102,19 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.opening_projects(paths, activate, window, cx).detach();
+    }
+
+    /// [`Self::open_projects`], done when the projects are in the sidebar.
+    pub(crate) fn opening_projects(
+        &mut self,
+        paths: Vec<PathBuf>,
+        activate: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
         if paths.is_empty() {
-            return;
+            return Task::ready(());
         }
         let read =
             cx.background_spawn(
@@ -116,7 +127,6 @@ impl Workbench {
             })
             .ok();
         })
-        .detach();
     }
 
     fn add_projects(
@@ -276,6 +286,15 @@ impl Workbench {
     /// Installs the sample projects, unless they are there already, and
     /// opens them.
     pub(crate) fn open_samples(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.installing_samples(window, cx).detach();
+    }
+
+    /// [`Self::open_samples`], done when the projects are in the sidebar.
+    pub(crate) fn installing_samples(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
         let dir = cx.global::<AppPaths>().samples_dir();
         let install = cx.background_spawn(async move {
             std::fs::create_dir_all(&dir)?;
@@ -283,19 +302,23 @@ impl Workbench {
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = install.await;
-            this.update_in(cx, |this, window, cx| match result {
+            let opening = this.update_in(cx, |this, window, cx| match result {
                 Ok(paths) => {
                     let first = paths.first().cloned();
-                    this.open_projects(paths, first, window, cx);
+                    Some(this.opening_projects(paths, first, window, cx))
                 }
-                Err(error) => window.push_notification(
-                    Notification::error(tr!("open.samples_failed", reason = error.to_string())),
-                    cx,
-                ),
-            })
-            .ok();
+                Err(error) => {
+                    window.push_notification(
+                        Notification::error(tr!("open.samples_failed", reason = error.to_string())),
+                        cx,
+                    );
+                    None
+                }
+            });
+            if let Ok(Some(opening)) = opening {
+                opening.await;
+            }
         })
-        .detach();
     }
 
     /// Adds an empty, untitled project and returns it.

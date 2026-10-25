@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Materials Workbench application icon (placeholder): a unit cell seen
+       along its body diagonal. Source of every icon in this folder; after
+       changing it, regenerate them (docs/development.md §2). -->
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3D72E3"/>
+      <stop offset="1" stop-color="#1A2C7A"/>
+    </linearGradient>
+    <radialGradient id="corner" cx="0.36" cy="0.32" r="0.72">
+      <stop offset="0" stop-color="#FFE6C7"/>
+      <stop offset="0.45" stop-color="#FF9B4E"/>
+      <stop offset="1" stop-color="#C9501A"/>
+    </radialGradient>
+    <radialGradient id="center" cx="0.36" cy="0.32" r="0.72">
+      <stop offset="0" stop-color="#E3FFF7"/>
+      <stop offset="0.45" stop-color="#3FD9B4"/>
+      <stop offset="1" stop-color="#0E8A72"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#background)"/>
+  <path d="M512 212 L771.8 362 L512 512 L252.2 362 Z" fill="#FFFFFF" fill-opacity="0.24"/>
+  <path d="M252.2 362 L512 512 L512 812 L252.2 662 Z" fill="#FFFFFF" fill-opacity="0.13"/>
+  <path d="M512 512 L771.8 362 L771.8 662 L512 812 Z" fill="#FFFFFF" fill-opacity="0.06"/>
+  <path d="M512 212 L771.8 362 L771.8 662 L512 812 L252.2 662 L252.2 362 Z M252.2 362 L512 512 L771.8 362 M512 512 L512 812"
+        fill="none" stroke="#FFFFFF" stroke-width="26" stroke-linejoin="round" stroke-linecap="round"/>
+  <g fill="url(#corner)">
+    <circle cx="512" cy="212" r="62"/>
+    <circle cx="771.8" cy="362" r="62"/>
+    <circle cx="771.8" cy="662" r="62"/>
+    <circle cx="512" cy="812" r="62"/>
+    <circle cx="252.2" cy="662" r="62"/>
+    <circle cx="252.2" cy="362" r="62"/>
+  </g>
+  <circle cx="512" cy="512" r="92" fill="url(#center)"/>
+</svg>

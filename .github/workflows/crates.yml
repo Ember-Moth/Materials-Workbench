@@ -1,0 +1,40 @@
+# Publishes mw-crystal and mw-crystal-io to crates.io (docs/design/release.md
+# §6, §8), by hand, from a release tag, after the GitHub release is out.
+# Authenticates with crates.io's Trusted Publishing: a short-lived token for
+# this workflow, no stored secret. That works only once both crates exist
+# and name this repository's workflow as a trusted publisher; the first
+# release is published from a computer with an API token.
+
+name: Publish crates
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: mw-crystal and mw-crystal-io
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    # Protected: the environment's rules decide who may run this.
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.97 --profile minimal
+          rustup default 1.97
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      # In dependency order: mw-crystal, then mw-crystal-io.
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked -p mw-crystal -p mw-crystal-io

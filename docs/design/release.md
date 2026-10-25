@@ -1,6 +1,6 @@
 # 发布与打包
 
-> 状态：设计稿（2026-10-24，M20）。已实现：`mw-crystal`、`mw-crystal-io` 的 crates.io 元数据和文档（`cargo publish --dry-run` 通过，第 6 节），依赖许可的检查（`deny.toml`，第 7.1 节）。未实现：许可清单的生成（等你同意安装 cargo-about，第 7.2 节）、安装包、Release 工作流、应用侧的打开文件和更新检查。要你决定的事项在第 10 节，实施顺序在第 11 节。
+> 状态：设计稿（2026-10-24，M20）。已实现：`mw-crystal`、`mw-crystal-io` 的 crates.io 元数据和文档（`cargo publish --dry-run` 通过，第 6 节），依赖许可的检查（`deny.toml`，第 7.1 节）；第二阶段（同日）：应用侧的打开文件、Windows 的子系统与图标资源、Linux 的 app_id 和 `--version`（第 3.3、4、5 节），占位的应用图标（第 2.3 节），三个平台的打包脚本（`packaging/`），许可清单的生成（cargo-about，第 7.2 节），Release 工作流和发布 crate 的工作流（第 8 节）。macOS 的 `.dmg` 在本机打出并验证过；Windows 和 Linux 的包和两个工作流要推送后在 CI 上才知道结果。未实现：签名与公证、更新检查（等你决定，第 10 节）。实施顺序在第 11 节。
 > 依据：路线图第 7 节（v0.3 的发布与验收）和第 16 节（许可）；GPUI Kit 的[打包与分发](https://gpui-kit.com/zh-CN/docs/packaging)和[自动更新](https://gpui-kit.com/zh-CN/docs/auto-update)指南（2026-10-24 读）。
 > 相关：[项目文件](project-format.md)第 11 节（示例项目）· [命令行与 Python](scripting.md)第 4.1、5.7 节 · [开发指南](../development.md)第 2.1 节（CI）
 
@@ -30,7 +30,7 @@ v0.3 是首个公开发布，要交付：
 | Windows x64 | `Materials-Workbench-0.3.0-windows-x64.zip` | 便携版，解压即用 |
 | Linux x86_64 | `materials-workbench_0.3.0_amd64.deb` | Debian / Ubuntu 包 |
 | Linux x86_64 | `materials-workbench-0.3.0-linux-x86_64.tar.gz` | 便携版，带装进当前用户目录的 `install.sh` |
-| 三个平台 | `mw-0.3.0-<目标>.tar.gz`（Windows 为 `.zip`） | 只有命令行 `mw` 和许可文件，给不装应用的服务器和 CI |
+| 三个平台 | `mw-0.3.0-<平台>.tar.gz`（`macos-universal`、`linux-x86_64`；Windows 为 `mw-0.3.0-windows-x64.zip`） | 只有命令行 `mw` 和许可文件，给不装应用的服务器和 CI |
 | 全部 | `SHA256SUMS` | 上面每个文件的 SHA-256 |
 
 每个安装包里都有：应用 `materials-workbench`、命令行 `mw`（命令行与 Python 设计稿 4.1 节说过安装包要多带这个文件）、`LICENSE-MIT`、`LICENSE-APACHE` 和 `THIRD-PARTY-LICENSES.html`（第 7 节）。
@@ -43,15 +43,28 @@ v0.3 是首个公开发布，要交付：
 |---|---|---|
 | 显示名 | Materials Workbench | |
 | 可执行文件 | `materials-workbench`、`mw` | 已有 |
-| macOS bundle identifier | `io.github.ember-moth.MaterialsWorkbench`（建议，第 10 节） | Apple 的标识只允许字母、数字、`-` 和 `.` |
+| macOS bundle identifier | `io.github.ember-moth.MaterialsWorkbench` | 2026-10-24 定下；Apple 的标识只允许字母、数字、`-` 和 `.` |
+| Windows 的 AppUserModelID | 同上 | 应用启动时设置（`App::set_app_identity`），安装程序的快捷方式带同一个值，任务栏才把窗口和固定的图标归到一起 |
 | 项目的类型标识（UTI） | `io.github.ember-moth.MaterialsWorkbench.project` | 第 3.2 节 |
-| Linux 应用 ID（`.desktop` 文件名、Wayland 的 app_id） | `io.github.ember_moth.MaterialsWorkbench`（建议） | freedesktop 和 Flathub 要求 `-` 换成 `_` |
+| Linux 应用 ID（`.desktop` 文件名、Wayland 的 app_id、X11 的 WM_CLASS） | `io.github.ember_moth.MaterialsWorkbench` | freedesktop 和 Flathub 要求 `-` 换成 `_` |
 | Debian 包名 | `materials-workbench` | |
-| Windows 安装程序的 `AppId` | 写 `.iss` 时生成一个固定的 GUID，以后不再改 | 升级和卸载靠它认出同一个应用 |
+| Windows 安装程序的 `AppId` | `{F1BB9C74-A6D3-4098-8533-050A889A1539}` | 2026-10-24 生成，以后不再改；升级和卸载靠它认出同一个应用 |
 
-标识定下后就不改：macOS 和 Windows 靠它们把新版认作旧版的升级。设置、最近项目和示例的位置不受影响：配置目录和数据目录用的是固定的名字 `materials-workbench`（`apps/workbench/src/config.rs`），与标识无关。
+标识定下后就不改：macOS 和 Windows 靠它们把新版认作旧版的升级。代码里的两个标识是 `apps/workbench/src/launch.rs` 的 `APP_ID`、`LINUX_APP_ID`，打包文件里各写一份（`Info.plist`、`.iss`、`.desktop` 的文件名和 `StartupWMClass`、`install.sh`、`package.sh`）。设置、最近项目和示例的位置不受影响：配置目录和数据目录用的是固定的名字 `materials-workbench`（`apps/workbench/src/config.rs`），与标识无关。
 
-**版本号**：标签 `v0.3.0`、应用的版本和全部 crate 的版本一致。现在各 crate 的版本还是 `0.0.0`（`mw-crystal`、`mw-crystal-io` 已是 `0.3.0`，第 6 节）。发布时根 `Cargo.toml` 设 `[workspace.package] version`，各 crate 改为 `version.workspace = true`；项目文件里的 `writer`（`mw-project-file` 的 `WRITER`，取它自己的版本）随之变化，要重新生成示例项目；Python wheel 的版本取自 `mw-python` 的 Cargo 版本（`pyproject.toml` 里是 `dynamic`），自动跟着变。这一步放在发布前做（第 11 节），因为其他里程碑还在改示例项目。
+**版本号**：标签 `v0.3.0`、应用的版本和全部 crate 的版本一致。现在各 crate 的版本还是 `0.0.0`（`mw-crystal`、`mw-crystal-io` 已是 `0.3.0`，第 6 节）。发布时根 `Cargo.toml` 设 `[workspace.package] version`，各 crate 改为 `version.workspace = true`；项目文件里的 `writer`（`mw-project-file` 的 `WRITER`，取它自己的版本）随之变化，要重新生成示例项目；Python wheel 的版本取自 `mw-python` 的 Cargo 版本（`pyproject.toml` 里是 `dynamic`），自动跟着变。这一步放在发布前做（第 11 节），因为其他里程碑还在改示例项目。在那之前本机和 `workflow_dispatch` 打出的包是 `0.0.0`（打包脚本取 `workbench` crate 的版本，`cargo pkgid -p workbench`）。
+
+### 2.3 应用图标
+
+现在是占位图标（2026-10-24 你同意先用它）：蓝色圆角方块上沿体对角线看的晶胞，橙色的顶点原子、青色的中心原子。源文件是 `packaging/icons/materials-workbench.svg`（1024 × 1024，铺满），其余文件都由它生成：
+
+| 文件 | 用途 | 内容 |
+|---|---|---|
+| `materials-workbench.icns` | macOS 的 `AppIcon.icns` | 按 Apple 的网格缩到 824 像素居中、下方加阴影；16–1024 像素十种（1× 和 2×） |
+| `materials-workbench.ico` | Windows：可执行文件的资源 1（窗口和任务栏的图标）、安装程序 | 16、20、24、32、40、48、64、256 像素，PNG 压缩 |
+| `linux/<n>x<n>.png` | Linux 的 hicolor 主题，16–512 像素八种；另把 SVG 装成 `scalable` | 铺满 |
+
+生成用 GPUI 自己的 SVG 渲染器 resvg（`apps/workbench/tests/icons.rs`，被忽略的测试 `write_the_icons`，`.icns` 和 `.ico` 直接写文件格式，不用 `iconutil`，所以哪个平台都能生成）；`the_icons_are_up_to_date` 每次测试都重新渲染并和提交的文件比较（逐像素允许 4 的差，其他处理器上的渲染可能差一点），改了 SVG 忘了重新生成会失败。换成正式图标时只换 SVG 再生成；`.mwproj` 在访达里的文档图标（`Project.icns`）还没做。
 
 ## 3. macOS
 
@@ -92,6 +105,8 @@ MCP 客户端的配置写完整路径：`/Applications/Materials Workbench.app/C
 
 `.mwproj` 登记为文档包后，访达里显示成一个文件、双击打开（项目文件设计稿第 3 节）。只叫 `POSCAR`、`CONTCAR` 的文件没有扩展名，不能按类型登记，拖进窗口或用"打开文件…"照常可以。
 
+已写成 `packaging/macos/Info.plist`（2026-10-24），打包时填入版本和构建号。补充的几项：CIF 和 POSCAR 没有系统定义的类型标识，导入声明用 `org.iucr.cif` 和 `org.vasp.poscar`；`CFBundleLocalizations` 列出 `zh_CN` 和 `en`，系统自己的打开、保存面板才会用中文（应用没有 `.lproj` 目录，`CFBundleDevelopmentRegion` 为 `en`，与界面文字的回退语言一致）；`CFBundleInfoDictionaryVersion` 和 `NSHumanReadableCopyright`。
+
 ### 3.3 应用要补的代码
 
 登记了文档类型，系统才会把文件交给应用，应用还得接住：
@@ -100,16 +115,40 @@ MCP 客户端的配置写完整路径：`/Applications/Materials Workbench.app/C
 - **Windows 和 Linux**：文件以命令行参数传入（`materials-workbench 文件…`）。`main.rs` 现在只认第一个参数 `mcp`；其他参数改为要打开的路径，与上面同一个入口。
 - 测试：界面集成测试直接调用这个入口（URL 列表、参数列表），检查项目进了边栏、文件导入了当前项目、无效路径给出通知。
 
+已实现（2026-10-24）：
+
+- **参数**（`apps/workbench/src/launch.rs`）：`mcp` 只认第一个参数；`-h` / `--help`、`-V` / `--version` 打印后退出，不初始化 GPUI（Release 工作流的冒烟测试用 `--version`）；`--` 之后都是路径；`-psn_…`（旧版 macOS 从访达启动时带的进程号）忽略；其他以 `-` 开头的报错退出（退出码 2）。参数按 `OsString` 读，非 UTF-8 的路径也能打开；相对路径按工作目录变成绝对路径，去掉 `.` 和末尾的分隔符（访达给的 `…/tio2.mwproj/` 和最近项目里的 `…/tio2.mwproj` 是同一个）。
+- **系统送来的 URL**：`main.rs` 在 `run` 之前注册 `on_open_urls`，回调里只把 `file:` URL 换成路径（`url` crate，解开百分号编码）发进一个通道；窗口建好后，一个前台任务从通道里取出，交给 `Workbench::open_paths`。应用为打开文件而启动时，macOS 在窗口建好之前就送来，通道先存着。在本机核对过：从终端带参数运行可执行文件时，AppKit 不会把参数再当作要打开的文件送一遍。
+- **顺序**：`Workbench::open_paths` 在上次会话的项目（第一次启动时是示例项目）打开完之前，只把路径记下，打开完再处理，所以显示的是用户要打开的东西，而不是恢复的项目；之后直接处理。处理就是拖放用的 `import_paths`：`.mwproj` 按项目打开（不存在的 `.mwproj` 也按项目处理，提示"项目打不开"而不是"不支持的格式"），其他文件导入当前项目；同时有项目和文件时，文件等项目打开后导入这个项目。顺带修了一个竞争：正在从磁盘读一个结构时又显示了一个还没保存的导入结构，读完的那个会把它顶掉（`begin_showing` 显示未保存的结构时没有清掉 `opening`）。
+- **测试**：`launch.rs` 的单元测试（参数、`file:` URL）；界面集成测试 `files_asked_for_at_start_open_after_the_last_session`（启动时要打开的项目和文件排在恢复的项目之后，文件导入那个项目并显示；之后再送来的文件进当前项目，不存在的文件和项目各给一条通知）和 `a_file_asked_for_at_the_first_start_opens_after_the_samples`。打出的 `.app` 上的双击和拖到程序坞见第 3.5 节。
+- **限制**：Windows 和 Linux 上，应用开着时再双击一个关联的文件会启动第二个进程（第二个窗口），它恢复同样的会话、拿不到项目锁，项目以只读方式打开。macOS 没有这个问题（系统把文件交给已经运行的应用）。转交给已运行实例（可以复用 MCP 的本地通道）以后再做。
+
 ### 3.4 签名与公证
 
 两条路，**由你决定**（第 10 节）：
 
 - **Developer ID 签名并公证**（要加入 Apple Developer Program，个人按年付费）：先签嵌套的 `mw`，再签 `.app`，都用 `--options runtime`（强化运行时）和时间戳；应用不需要特殊的 entitlement（不用 JIT，不在沙盒里）。DMG 签名后用 `notarytool` 提交公证、`stapler` 附上票据。CI 里要的机密：证书（p12 的 base64 和密码）、App Store Connect API 密钥（ID、issuer、私钥）。用户下载后直接打开，没有警告；以后的应用内更新也能用签名核对发布者（第 9 节）。
-- **不签名**：整个包做 ad-hoc 签名（`codesign --force --deep --sign -`）。不做的话，Apple 芯片的 Mac 会说应用"已损坏"；做了以后第一次打开仍被拦下，用户要到"系统设置 → 隐私与安全性"里点"仍要打开"（macOS 15 起按住 Control 点"打开"不再能绕过）。用户文档要写明这一步。
+- **不签名**：整个包做 ad-hoc 签名（`codesign --force --sign -`，由内向外：先 `mw` 再 `.app`，第 3.5 节的脚本这样做）。不做的话，Apple 芯片的 Mac 会说应用"已损坏"；做了以后第一次打开仍被拦下，用户要到"系统设置 → 隐私与安全性"里点"仍要打开"（macOS 15 起按住 Control 点"打开"不再能绕过）。用户文档要写明这一步。
 
 ### 3.5 磁盘映像
 
 `hdiutil create -format UDZO`，内容是 `.app` 和指向 `/Applications` 的替身，v0.3 不做自定义背景。签名的话 DMG 也签名并公证（第 3.4 节）。最后在没装过开发工具的 Mac 上：挂载、拖进"应用程序"、第一次打开、打开示例项目、双击一个 `.mwproj`。
+
+**打包脚本** `packaging/macos/package.sh [输出目录]`（2026-10-24）：`MACOSX_DEPLOYMENT_TARGET=11.0` 下用一次 `cargo build --release` 构建两个目标（`aarch64-apple-darwin`、`x86_64-apple-darwin`）的 `materials-workbench` 和 `mw`，`lipo` 合并成通用二进制，生成许可清单（第 7.2 节），组装 `.app`（第 3.1 节的布局，`Info.plist` 填入版本和构建号 `MW_BUILD_NUMBER`，CI 上是运行号），由内向外 ad-hoc 签名（先 `mw` 再 `.app`）并核对，用 `ditto` 放进映像的目录、加 `/Applications` 替身，`hdiutil` 打成 `Materials-Workbench-<版本>-macos-universal.dmg`；另打 `mw-<版本>-macos-universal.tar.gz`。Developer ID 签名和公证的位置在脚本里用注释标出（命令也写在注释里），定下以后在那里换掉 ad-hoc 签名。和 `packaging/linux/package.sh` 共用 `packaging/common.sh`（仓库根目录、版本、构建号、生成许可清单）。
+
+本机的结果（2026-10-24，Apple 芯片的 Mac，macOS 27）：映像 39 MB；应用的可执行文件每种架构约 46 MB，通用二进制 93 MB，`mw` 每种约 4.4 MB。两种架构的最低系统都是 11.0（`LC_BUILD_VERSION`）。release 配置没有改：去掉符号表（`strip`）能小约 25%，但 panic 的回溯就没有函数名了，要不要做以后再定。
+
+**本机验证**（2026-10-24，同一台 Mac，用单独的配置目录 `MW_CONFIG_DIR`，打开设置里的"允许 MCP 客户端连接"，再用 `materials-workbench mcp` 问运行中的应用开着什么、截视口的图）：
+
+- 挂载 `.dmg`，里面是应用和"应用程序"的替身；把应用复制出来后签名核对通过，`Resources` 里有图标和三个许可文件；`packaging/smoke-test.sh` 通过（release 构建经管道回答 MCP 的 `initialize`）。
+- 第一次启动（`open --env MW_CONFIG_DIR=… 应用`）：装好并打开两个示例项目（退出时保存的会话里两个都开着）。
+- 应用没在运行时，`open -a 应用 perovskite.mwproj`：应用启动并打开这个项目、显示 SrTiO₃，截图正常（应用为打开文件而启动的那条路）。
+- 应用运行时，`open -a 应用 rutile.cif`：导入当前项目并显示。
+- `mdls` 显示项目文件夹的类型是 `io.github.ember-moth.materialsworkbench.project`，遵从 `com.apple.package`（访达里是一个文件）；`open tio2.mwproj`（不指定应用，等于双击）由这个应用打开。
+- 直接运行包里的可执行文件并带一个 CIF 参数：只导入一次。
+- 验证完用 `lsregister -u` 撤销了测试副本在 LaunchServices 里的登记。
+
+没验证的：干净的、没装过开发工具的 Mac，Intel 的 Mac，macOS 11；第一次打开时"隐私与安全性"里放行的步骤（本机打开自己构建的应用不会被拦）。这些要在发布前做（第 8 节的人工把关）。本机的测试配置目录的路径太长时，应用监听不了 MCP（Unix 域套接字的路径最多 103 字节，应用照常运行，日志里说明原因），用户默认的运行目录不会这样。macOS 27 上 `hdiutil attach` 提示已弃用、建议改用 `diskutil image attach`，只在冒烟测试里用，CI 的 macOS 15 不受影响。
 
 ## 4. Windows
 
@@ -126,6 +165,13 @@ MCP 客户端的配置写完整路径：`/Applications/Materials Workbench.app/C
 - **签名**：**由你决定**（第 10 节）。不签名时 SmartScreen 在下载和第一次运行时警告"Windows 已保护你的电脑"，用户点"更多信息 → 仍要运行"；签了名、积累下载量后警告消失。签名要先签两个 `.exe`，再签安装程序和它内嵌的卸载程序（Inno Setup 的 `SignTool` 设置）。
 - 构建机上没有 Inno Setup 时用 Chocolatey 装（`choco install innosetup`）；运行器镜像里有没有自带，写工作流时核对。
 
+已实现（2026-10-24），都还没在 Windows 上运行过，Release 工作流（第 8 节）推送后第一次运行：
+
+- **子系统**：`main.rs` 开头 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`。debug 构建照旧是控制台程序，`apps/workbench/tests/mcp.rs` 测的是它；release 构建经管道服务 MCP 客户端，由 Release 工作流的冒烟测试检查（`packaging/smoke-test.sh` 发一个 `initialize` 请求，要求收到回答）。release 构建在终端里的日志：`materials-workbench 2> log.txt` 重定向后能看到。
+- **资源**：`apps/workbench/build.rs` 在目标是 Windows 时把一个 `.rc` 写进 `OUT_DIR`（图标 `packaging/icons/materials-workbench.ico` 为资源 1，版本信息取 crate 的版本），用 `embed-resource`（GPUI 编清单用的同一个，MIT，`[target.'cfg(windows)'.build-dependencies]`）编译，只链接进 `materials-workbench`。GPUI 自己的资源是清单（`RT_MANIFEST` 1），和图标、版本信息的类型不同，不冲突。从别的系统交叉编译时不编资源（构建脚本只在 Windows 主机上调用它）。
+- **安装程序** `packaging/windows/materials-workbench.iss`：上面列的各项；任务"把 mw 加进 PATH"写当前用户的 `Path`（`[Code]` 里加入和卸载时去掉，不重复加），"关联"在 `HKA\Software\Classes` 下登记 ProgID 并加进 `.cif`、`.vasp` 的 `OpenWithProgids`（出现在"打开方式"里，不改默认程序）；开始菜单和桌面快捷方式带 AppUserModelID（第 2.2 节）。界面语言英文，Inno Setup 自带简体中文的语言文件时加上中文（`#if FileExists(...)`，没有也能编译）；文件存成带 BOM 的 UTF-8，否则 Inno Setup 按 ANSI 读中文。签名的位置（`SignTool`、`SignedUninstaller`）写在注释里。
+- **打包脚本** `packaging/windows/package.ps1 [-Out 目录]`（PowerShell 7）：release 构建两个可执行文件，生成许可清单，组成 `Materials-Workbench-<版本>-windows-x64/` 目录，压成便携版 ZIP（解压出这个目录），用 ISCC 编安装程序，另打 `mw` 的 ZIP。签名的位置写在注释里。
+
 ## 5. Linux
 
 - **构建机**：发布用的二进制在 `ubuntu-22.04` 上构建（glibc 2.35），能在更多发行版上运行；CI 的检查继续用 24.04。发布前在 22.04 上跑一遍测试，确认 GPUI 的依赖在那里也够新。
@@ -135,6 +181,13 @@ MCP 客户端的配置写完整路径：`/Applications/Materials Workbench.app/C
 - **`.tar.gz`**：`bin/`、`share/` 同样的布局加 `install.sh`，按 GPUI Kit 打包指南的做法装进 `~/.local`（核对发布方给的 SHA-256、只提取预期的文件、`.desktop` 里写绝对路径）。
 - **`.mwproj`**：目录不能按扩展名关联，同 Windows。
 - 开发指南第 1 节的 `-dev` 包是构建依赖，不是用户要装的；用户只需要图形会话和 Vulkan 驱动。
+
+已实现（2026-10-24），都还没在 Linux 上运行过，Release 工作流推送后第一次运行：
+
+- **app_id**：主窗口的 `WindowOptions::app_id` 是 `LINUX_APP_ID`；GPUI 建窗口时据此设置 Wayland 的 app_id 和 X11 的 `WM_CLASS`（实例名和类名都是它），`.desktop` 里的 `StartupWMClass` 写同一个值。`App::set_app_identity` 在 Linux 上只设通知里显示的应用名。
+- **`.desktop`**（`packaging/linux/io.github.ember_moth.MaterialsWorkbench.desktop`）：上面列的各项，加上中文的 `GenericName` 和 `Comment`、`Keywords`。
+- **打包脚本** `packaging/linux/package.sh [输出目录]`：release 构建，生成许可清单；`.deb` 按上面的布局放文件，`copyright` 用 Debian 的机器可读格式（项目许可、MIT 全文、Apache-2.0 指向 `/usr/share/common-licenses`，第三方许可指向清单），`Depends` 由 `dpkg-shlibdeps` 推出再加 `libvulkan1`，`Installed-Size` 按实际大小；`dpkg-deb --root-owner-group --build`。`Maintainer` 要写名字和邮箱，会公开在包里，你还没定（第 10 节），现在是占位的 `Materials Workbench <仓库 issues 的链接>`，环境变量 `MW_DEB_MAINTAINER` 可以换掉。
+- **便携版**：`materials-workbench-<版本>-linux-x86_64/` 下是 `bin/`、`share/`（同样的 `.desktop`、图标，`share/doc/materials-workbench/` 里是三个许可文件）和 `install.sh`。和 GPUI Kit 打包指南的脚本不同，`install.sh` 在压缩包里、从解压出的目录安装，所以不核对压缩包本身：解压前由用户用发布页的 `SHA256SUMS` 核对（`sha256sum --check --ignore-missing SHA256SUMS`，写在脚本开头和发布说明里）。脚本只复制已知的文件，每个文件先写成临时名再改名，`.desktop` 的 `Exec` 写可执行文件的绝对路径（按 Desktop Entry 规范转义两层），尊重 `XDG_DATA_HOME`（必须是绝对路径），装完刷新桌面数据库和图标缓存（没有这些工具就跳过）；`--uninstall` 删掉这些文件，设置和项目不动。只用 POSIX shell，不要 Python。
 
 ## 6. crates.io
 
@@ -178,11 +231,18 @@ MCP 客户端的配置写完整路径：`/Applications/Materials Workbench.app/C
 - crate 之外的内容在模板里手写一段：GPUI Kit 资源里的 Lucide 图标（ISC，`gpui-kit-assets` 的 `LICENSE-LUCIDE`，要确认 cargo-about 是否已收进来）；元素数据（IUPAC 标准原子量等，是科学事实，注明来源）；
 - Release 工作流在每个平台上运行 `cargo about generate`，结果放进安装包（第 3.1、4、5 节的位置）。以后在"关于"对话框里加一个打开它的入口。
 
-**状态**：cargo-about 本机没有装，要从 crates.io 下载（`cargo install cargo-about --locked`），**等你同意**后再写这两个文件并在本机生成、核对。
+**状态**：已实现（2026-10-24，你同意安装 cargo-about 0.9.2）。0.9 起命令行在 `cli` 特性后面，安装要 `cargo install cargo-about --locked --features cli --version 0.9.2`。
+
+- `about.toml`：接受的许可与 `deny.toml` 相同，按偏好排序（同时可选 MIT 和 Apache-2.0 时列 MIT 的文本）；四个目标；忽略只用于构建和测试的依赖；工作区里不发布的 crate 不列（它们就是本项目）。打包脚本用 `--target` 只传自己平台的目标。
+- 范围：cargo-about 只能扫整个工作区，所以清单是工作区所有 crate 在这个平台上的依赖，比两个可执行文件实际包含的略多（例如 `mw-llm` 的 `reqwest`，`mw-llm` 还没有使用者）。多列不违反任何许可，页面开头写明了这一点。
+- Lucide 图标：cargo-about 只拿到 `gpui-kit-assets` 的 Apache-2.0（用的是标准文本，包里没有这个文件），没有收进 `LICENSE-LUCIDE`。`about.toml` 用 `clarify` 把它声明为 `Apache-2.0 AND ISC`，ISC 取 `LICENSE-LUCIDE` 的原文（带 SHA-256，文件变了 clarify 就失效、`--fail` 让生成失败）。
+- `about.hbs` 生成一页 HTML：开头说明项目的许可（中英文各一段），按许可的概览，"数据"一节注明元素数据的来源（IUPAC 标准原子量、Cordero 等的共价半径、Allred 的 Pauling 电负性、Jmol 的元素颜色、moyo 的空间群表、Lucide 图标），然后是每份许可的全文和用它的 crate（同一许可的第一份带锚点）。跟随系统的浅色和深色。
+- 结果（`aarch64-apple-darwin` 加 `x86_64-apple-darwin`）：460 个 crate、217 份许可文本、10 种许可（MIT、Apache-2.0、Unicode-3.0、BSD-3-Clause、ISC、0BSD、CC0-1.0、Zlib、BSD-2-Clause、MPL-2.0）；5 份是 crate 没带许可文件、用 SPDX 标准文本的（没有版权行）。生成约 2.5 分钟，HTML 约 420 KB。
+- GPUI 没有把字体编进可执行文件（`svg_renderer.rs` 里的字体只在它自己的测试里用），清单里不需要字体的许可。
 
 ## 8. GitHub Releases
 
-新的工作流 `.github/workflows/release.yml`（还没写）：
+新的工作流 `.github/workflows/release.yml`（2026-10-24 写好，还没运行过）：
 
 - **触发**：推送 `v*` 标签；`workflow_dispatch` 只构建、不建 Release，用来试打包。
 - **任务**：
@@ -193,6 +253,13 @@ MCP 客户端的配置写完整路径：`/Applications/Materials Workbench.app/C
 - **人工把关**：草稿由你检查后发布；发布前按 GPUI Kit 打包指南的清单在干净的机器上验证每种格式：安装、启动、打开示例项目、双击 `.mwproj`（macOS）、从上一版升级（v0.3 是第一版，从 v0.4 起）、卸载。
 - **机密**：只有选了签名才需要（第 3.4、4 节）；放在 `release` 环境里，构建 PR 的工作流拿不到。
 - 推送前问你；工作流的结果要推送后才知道。
+
+实现的细节（2026-10-24）：
+
+- `check` 用 `cargo pkgid -p workbench` 取版本；`CHANGELOG.md` 的一节由 `packaging/release-notes.sh <版本>` 取出（`## [0.3.0]` 或 `## 0.3.0` 到下一个 `## `），`release` 任务用它做发布说明。`CHANGELOG.md` 还没有（第 11 节第 6 阶段），所以现在推标签会在这一步失败；`workflow_dispatch` 不检查。
+- `build` 在每个平台上装 Rust 1.97 和目标、构建依赖（Linux 另装 `dpkg-dev`）、Inno Setup（Windows，没有才用 Chocolatey 装）、cargo-about（版本钉在工作流的 `CARGO_ABOUT_VERSION`），运行 `packaging/<平台>/package.sh`（Windows 是 `package.ps1`），然后按用户拿到的样子冒烟测试：macOS 挂载 `.dmg`、核对签名、运行里面的两个可执行文件；Linux 用 `apt-get install` 装 `.deb`（顺带核对推出的依赖在 22.04 上都装得上）再运行、卸载，解压便携版运行，跑 `install.sh` 和 `--uninstall`；Windows 解压便携版运行，静默安装（`/VERYSILENT /CURRENTUSER`）后运行、静默卸载并确认文件已删。运行就是 `packaging/smoke-test.sh`：`materials-workbench --version`、`mw info` 一个测试文件、`materials-workbench mcp` 回答一个 `initialize`。产物按平台上传（`packages-<平台>`）。
+- `release` 只在标签上运行：下载全部产物，`sha256sum` 写 `SHA256SUMS`，`gh release create --draft --verify-tag`。
+- 发布到 crates.io 单独放在 `.github/workflows/crates.yml`：只能手动触发、只在 `v*` 标签上运行，在 `release` 环境里用 `rust-lang/crates-io-auth-action` 换短期令牌，`cargo publish --locked -p mw-crystal -p mw-crystal-io`。和打包分开，是因为它在草稿发布之后、由你决定何时运行，第一次又必须在本机用 API 令牌发布（第 6 节），放在同一个工作流里只会让打包的运行多一个总是跳过的任务。`release` 环境要在仓库设置里建好（限定谁能批准）。
 
 ## 9. 自动更新
 
@@ -222,19 +289,20 @@ GPUI Kit 没有统一的更新服务，更新方式按安装来源不同（自�
 
    建议 v0.3 先 (a)，正式发布后申请 (b)（它要求先发布过）；(c) 在你所在地区可用的话也可以，发布者显示的是你自己。
 3. **自动更新**：第 9 节的 A、B、C、D。建议 v0.3 只做 A，并决定检查默认开还是关（建议默认开、在设置里可关，第一次检查前不另外询问；或者默认关、第一次启动时问一次）。
-4. **小项**（有建议，你不提就按建议做）：
-   - 标识：macOS `io.github.ember-moth.MaterialsWorkbench`，Linux `io.github.ember_moth.MaterialsWorkbench`（第 2.2 节）。有自己的域名的话可以换成它，发布后就不能再换；
-   - 应用图标：要设计一个（`.icns`、`.ico`、各尺寸 PNG 和 SVG）。你可以提供，或者我先做一个简单的，你再定；
-   - Linux 先只做 `.deb` 和 `.tar.gz`（第 1 节）。
+4. **小项**：
+   - 标识：已定（2026-10-24，按建议）：macOS 和 Windows `io.github.ember-moth.MaterialsWorkbench`，Linux `io.github.ember_moth.MaterialsWorkbench`（第 2.2 节）；
+   - 应用图标：已定先用占位图标（2026-10-24，第 2.3 节），你以后给出正式的 SVG 时重新生成；
+   - Linux 先只做 `.deb` 和 `.tar.gz`（第 1 节）；
+   - `.deb` 的 `Maintainer`（名字和邮箱，公开在包里）：你选了先留占位、发布前再定（第 5 节）。
 
 ## 11. 实施顺序
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 本设计稿；crates.io 元数据、README 与文档、dry run；`deny.toml` 和 CI 里的许可检查、打包检查 | 已做（2026-10-24），CI 的新任务要推送后才知道结果 |
-| 2 | cargo-about 的配置和模板，本机生成并核对许可清单 | 等你同意安装 cargo-about |
-| 3 | 应用侧：打开文件的入口（第 3.3 节）、Windows 的子系统与图标资源（第 4 节）、Linux 的 app_id（第 5 节）、`--version`；选了 A 的话加更新检查 | 不需要决定，可以开始；图标先用占位 |
-| 4 | 打包脚本 `packaging/{macos,windows,linux}/`，先在本机打出 macOS 的 `.app` 和 `.dmg`（ad-hoc 签名） | 不需要决定 |
-| 5 | `release.yml`，用 `workflow_dispatch` 试打包 | 要推送，推送前问你 |
+| 2 | cargo-about 的配置和模板，本机生成并核对许可清单 | 已做（2026-10-24，第 7.2 节） |
+| 3 | 应用侧：打开文件的入口（第 3.3 节）、Windows 的子系统与图标资源（第 4 节）、Linux 的 app_id（第 5 节）、`--version`；选了 A 的话加更新检查 | 已做（2026-10-24），图标是占位的（第 2.3 节）；Windows 和 Linux 上的部分要 CI 运行才知道；更新检查等第 10 节的决定 |
+| 4 | 打包脚本 `packaging/{macos,windows,linux}/`，先在本机打出 macOS 的 `.app` 和 `.dmg`（ad-hoc 签名） | 已做（2026-10-24），macOS 在本机打出并验证（第 3.5 节）；Windows 和 Linux 的脚本没运行过 |
+| 5 | `release.yml`，用 `workflow_dispatch` 试打包 | 已写好（另有 `crates.yml`，第 8 节）；要推送后手动运行一次，推送前问你 |
 | 6 | 签名和公证接进工作流；干净机器上的验证；`CHANGELOG.md`、用户文档、演示视频（你来录） | 等第 10 节的决定 |
 | 7 | 发布：统一版本号、重新生成示例项目、打标签、检查草稿后发布、第一次手动发布到 crates.io | 验收之后（路线图第 7 节） |

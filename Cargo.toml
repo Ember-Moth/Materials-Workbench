@@ -57,6 +57,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
 dirs = "6"
 tempfile = "3"
+# The `file:` URLs macOS sends the application to open (release design §3.3).
+url = "2"
 
 # The experimental MCP server (mw-mcp), see docs/design/ai-integration.md §5.
 # The official Rust SDK; each crate turns on the features it needs.

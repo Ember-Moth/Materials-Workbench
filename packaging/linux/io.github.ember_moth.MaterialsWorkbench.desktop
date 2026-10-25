@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Materials Workbench
+GenericName=Materials Science Workbench
+GenericName[zh_CN]=材料科学工作台
+Comment=View, edit and convert crystal structures
+Comment[zh_CN]=查看、编辑和转换晶体结构
+Exec=materials-workbench %F
+Icon=io.github.ember_moth.MaterialsWorkbench
+Terminal=false
+Categories=Science;Chemistry;Physics;
+Keywords=crystal;crystallography;CIF;POSCAR;VASP;structure;materials;晶体;
+MimeType=chemical/x-cif;
+StartupWMClass=io.github.ember_moth.MaterialsWorkbench

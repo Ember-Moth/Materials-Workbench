@@ -9,3 +9,8 @@
 # (docs/design/project-format.md §7.1): no line-ending conversion.
 crates/mw-project-file/samples/** -text
 crates/mw-project-file/tests/fixtures/projects/** -text
+
+# The application icons (packaging/icons/, generated from the SVG there).
+*.png binary
+*.ico binary
+*.icns binary
